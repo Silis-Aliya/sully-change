@@ -12,13 +12,21 @@ export interface PushSubscriptionInfo {
 
 export interface InstantPushPayload {
   contactName: string;
-  completePrompt: string;
   apiUrl: string;
   apiKey: string;
   primaryModel: string;
   pushSubscription: PushSubscriptionInfo;
+  // completePrompt 与 messages 二选一：worker 端 amsg-instant 0.5.0 同时认这两路。
+  // - completePrompt：测试推送 / 简单 one-shot 路径继续用
+  // - messages：与本地 chat completions 完全等价的 system/user/assistant 数组
+  completePrompt?: string;
+  messages?: Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string | unknown[];
+  }>;
   avatarUrl?: string;
   maxTokens?: number;
+  temperature?: number;
   messageSubtype?: string;
   metadata?: Record<string, unknown>;
 }
@@ -203,6 +211,79 @@ export async function sendInstantPush(
   } catch (e) {
     const err = e as { message?: string } | null;
     return { ok: false, error: err?.message ?? String(e) };
+  }
+}
+
+// ── 高阶：发 + 等 push 落库 ───────────────────────────────────────────────
+//
+// 与 safeFetchJson 对称的"发起 + 等回复"单一入口：
+// - 内部拿 push subscription、注册 'active-msg-received' 监听、超时兜底
+// - 调用方只关心业务 payload (不含 pushSubscription)
+// - outcome 区分不同失败成因，方便上层做 toast / 重试策略
+//
+// 用法：与本地路径 `await safeFetchJson(url, opts)` 完全对称。
+
+export type InstantBusinessPayload = Omit<InstantPushPayload, 'pushSubscription'>;
+
+export type InstantOutcome =
+  | 'received'
+  | 'timeout'
+  | 'config-missing'
+  | 'subscription-failed'
+  | 'send-failed';
+
+export interface InstantAwaitResult {
+  ok: boolean;
+  error?: string;
+  outcome: InstantOutcome;
+}
+
+const DEFAULT_INSTANT_TIMEOUT_MS = 90_000;
+
+export async function sendInstantPushAndAwaitReply(
+  business: InstantBusinessPayload,
+  charId: string,
+  timeoutMs: number = DEFAULT_INSTANT_TIMEOUT_MS,
+): Promise<InstantAwaitResult> {
+  const cfg = loadInstantConfig();
+  if (!isInstantConfigReady(cfg)) {
+    return { ok: false, outcome: 'config-missing', error: '请先在 Settings → Instant Push 里配置并保存' };
+  }
+
+  const { sub, reason } = await getOrCreateInstantSubscription(cfg.vapidPublicKey);
+  if (!sub) {
+    return { ok: false, outcome: 'subscription-failed', error: reason || '无法获取推送订阅' };
+  }
+
+  // 必须先挂监听再 send，否则极快的 push 可能漏掉
+  let pushResolver: () => void = () => {};
+  const pushArrived = new Promise<void>((resolve) => { pushResolver = resolve; });
+  const pushHandler = (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    if (detail?.charId === charId) pushResolver();
+  };
+  window.addEventListener('active-msg-received', pushHandler);
+
+  try {
+    const sendResult = await sendInstantPush({ ...business, pushSubscription: sub });
+    if (!sendResult.ok) {
+      return { ok: false, outcome: 'send-failed', error: sendResult.error };
+    }
+
+    const timedOut = await Promise.race([
+      pushArrived.then(() => false as const),
+      new Promise<true>((r) => setTimeout(() => r(true), timeoutMs)),
+    ]);
+    if (timedOut) {
+      return {
+        ok: false,
+        outcome: 'timeout',
+        error: `AI 回复超时（${Math.round(timeoutMs / 1000)}s 未收到推送，检查 worker 或通知通道）`,
+      };
+    }
+    return { ok: true, outcome: 'received' };
+  } finally {
+    window.removeEventListener('active-msg-received', pushHandler);
   }
 }
 

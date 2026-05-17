@@ -20,6 +20,7 @@ import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import { useChatAI } from '../hooks/useChatAI';
 import { synthesizeSpeechDetailed, cleanTextForTts } from '../utils/minimaxTts';
+import { isInstantConfigReady } from '../utils/instantPushClient';
 
 const VOICE_LANG_LABELS: Record<string, string> = { en: 'English', ja: '日本語', ko: '한국어', fr: 'Français', es: 'Español' };
 
@@ -800,7 +801,13 @@ const Chat: React.FC = () => {
         await reloadMessages(visibleCountRef.current);
         setShowPanel('none');
 
-        // Manual trigger only: Removed auto triggerAI call
+        // Instant Push 模式：发完文本自动触发 AI（响应在 worker 端跑、后台 push 回写聊天页）。
+        // 本地模式仍维持手动触发以保留现有 UX。triggerAI 内部会从 DB 拉完整历史，
+        // 闭包里的 messages 还没包含刚写入的 user msg 也没关系。
+        // 仅文本消息触发；image / xhs_card 等卡片消息不触发，与本地手动行为对齐。
+        if (type === 'text' && isInstantConfigReady()) {
+            triggerAI(messages);
+        }
     };
 
     const handleReroll = async () => {

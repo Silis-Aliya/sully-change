@@ -10,6 +10,33 @@ function isValidUrl(s) {
     return false;
   }
 }
+var VALID_MESSAGE_ROLES = /* @__PURE__ */ new Set(["system", "user", "assistant", "tool"]);
+function validateMessagesArray(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "messages \u5FC5\u987B\u662F\u957F\u5EA6 \u2265 1 \u7684\u6570\u7EC4";
+  }
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (!m || typeof m !== "object" || Array.isArray(m)) {
+      return `messages[${i}] \u5FC5\u987B\u662F\u5BF9\u8C61`;
+    }
+    if (!VALID_MESSAGE_ROLES.has(m.role)) {
+      return `messages[${i}].role \u5FC5\u987B\u662F system / user / assistant / tool \u4E4B\u4E00`;
+    }
+    if (typeof m.content === "string") {
+      if (!m.content) {
+        return `messages[${i}].content \u4E0D\u80FD\u662F\u7A7A\u5B57\u7B26\u4E32`;
+      }
+    } else if (Array.isArray(m.content)) {
+      if (m.content.length === 0) {
+        return `messages[${i}].content \u6570\u7EC4\u4E0D\u80FD\u4E3A\u7A7A`;
+      }
+    } else {
+      return `messages[${i}].content \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u6216\u957F\u5EA6 \u2265 1 \u7684\u6570\u7EC4`;
+    }
+  }
+  return null;
+}
 function validateInstantPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return {
@@ -50,12 +77,50 @@ function validateInstantPayload(payload) {
       details: { missingFields: ["contactName"] }
     };
   }
-  if (typeof payload.completePrompt !== "string" || !payload.completePrompt.trim()) {
+  const hasCompletePrompt = payload.completePrompt !== void 0;
+  const hasMessages = payload.messages !== void 0;
+  if (hasCompletePrompt && hasMessages) {
     return {
       valid: false,
       errorCode: "INVALID_PAYLOAD_FORMAT",
-      errorMessage: "completePrompt \u5FC5\u586B\uFF08amsg-instant \u4E0D\u652F\u6301 fixed/auto \u6A21\u5F0F\uFF09",
-      details: { missingFields: ["completePrompt"] }
+      errorMessage: "exactly one of `completePrompt` or `messages` must be provided\uFF08\u4E24\u8005\u4E0D\u80FD\u540C\u65F6\u51FA\u73B0\uFF09",
+      details: { invalidFields: ["completePrompt", "messages"] }
+    };
+  }
+  if (!hasCompletePrompt && !hasMessages) {
+    return {
+      valid: false,
+      errorCode: "INVALID_PAYLOAD_FORMAT",
+      errorMessage: "exactly one of `completePrompt` or `messages` must be provided",
+      details: { missingFields: ["completePrompt", "messages"] }
+    };
+  }
+  if (hasCompletePrompt) {
+    if (typeof payload.completePrompt !== "string" || !payload.completePrompt.trim()) {
+      return {
+        valid: false,
+        errorCode: "INVALID_PAYLOAD_FORMAT",
+        errorMessage: "completePrompt \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32",
+        details: { invalidFields: ["completePrompt"] }
+      };
+    }
+  } else {
+    const messagesError = validateMessagesArray(payload.messages);
+    if (messagesError) {
+      return {
+        valid: false,
+        errorCode: "INVALID_PAYLOAD_FORMAT",
+        errorMessage: messagesError,
+        details: { invalidFields: ["messages"] }
+      };
+    }
+  }
+  if (payload.temperature !== void 0 && payload.temperature !== null && (typeof payload.temperature !== "number" || !Number.isFinite(payload.temperature))) {
+    return {
+      valid: false,
+      errorCode: "INVALID_PAYLOAD_FORMAT",
+      errorMessage: "temperature \u5FC5\u987B\u662F\u6709\u9650\u6570\u5B57",
+      details: { invalidFields: ["temperature"] }
     };
   }
   if (typeof payload.apiUrl !== "string" || !payload.apiUrl.trim()) {
@@ -438,11 +503,18 @@ function normalizeAiApiUrl(apiUrl) {
   return parsed.toString();
 }
 function buildAiRequestBody(payload) {
+  const llmMessages = payload.messages ? payload.messages : [{ role: "user", content: payload.completePrompt }];
   const body = {
     model: payload.primaryModel,
-    messages: [{ role: "user", content: payload.completePrompt }],
-    temperature: 0.8
+    messages: llmMessages,
+    // Instant path is one-shot, non-streaming by contract.
+    stream: false
   };
+  if (payload.temperature !== void 0 && payload.temperature !== null) {
+    body.temperature = payload.temperature;
+  } else if (!payload.messages) {
+    body.temperature = 0.8;
+  }
   if (payload.maxTokens === void 0 || payload.maxTokens === null) {
     return body;
   }
