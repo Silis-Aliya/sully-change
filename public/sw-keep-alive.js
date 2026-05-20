@@ -302,7 +302,7 @@ async function removeQueuedRequest(id) {
 }
 
 // worker/sw-keep-alive.ts
-var SW_VERSION = "1.5.2";
+var SW_VERSION = "1.6.0";
 var PING_INTERVAL = 15e3;
 var MAX_MANUAL_ALIVE_MS = 5 * 6e4;
 var ACTIVE_MSG_DB_NAME = "ActiveMsg";
@@ -486,17 +486,39 @@ async function saveReasoningToBuffer(payload) {
   const charId = payload?.metadata?.charId;
   const reasoningContent = String(payload?.reasoningContent ?? "");
   if (!sessionId || !charId || !reasoningContent) return;
+  const messageIndex = Number.isFinite(payload?.messageIndex) ? Number(payload.messageIndex) : 1;
+  const chunkIndex = Number.isFinite(payload?.chunkIndex) ? Number(payload.chunkIndex) : 1;
   const db = await openInboxDb();
   await new Promise((resolve, reject) => {
     const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite");
-    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).put({
-      sessionId,
-      charId,
-      reasoningContent,
-      receivedAt: Date.now()
-    });
+    const store = tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE);
+    const getReq = store.get(sessionId);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      const chunks = existing?.chunks ? [...existing.chunks] : [];
+      chunks.push({ messageIndex, chunkIndex, reasoningContent });
+      store.put({
+        sessionId,
+        charId,
+        chunks,
+        receivedAt: Date.now()
+      });
+    };
+    getReq.onerror = () => reject(getReq.error);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("reasoning buffer write aborted"));
+  });
+}
+async function clearReasoningBuffer(sessionId) {
+  if (!sessionId) return;
+  const db = await openInboxDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, "readwrite");
+    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).delete(sessionId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("reasoning buffer clear aborted"));
   });
 }
 async function savePendingToolCall(payload) {
@@ -504,6 +526,9 @@ async function savePendingToolCall(payload) {
   const charId = payload?.metadata?.charId;
   const toolCalls = Array.isArray(payload?.toolCalls) ? payload.toolCalls : [];
   if (!sessionId || !charId || toolCalls.length === 0) return;
+  await clearReasoningBuffer(sessionId).catch((e) => {
+    console.warn("[amsg] clearReasoningBuffer before tool_request failed", e);
+  });
   const iteration = Number.isFinite(payload?.metadata?.iteration) ? Number(payload.metadata.iteration) : 0;
   const db = await openInboxDb();
   await new Promise((resolve, reject) => {

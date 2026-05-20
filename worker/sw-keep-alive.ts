@@ -22,8 +22,14 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *           非空, e.g. LLM 只输出 [[ACTION:POKE]] 时), 不再 early-return 漏掉副作用.
  *  - 1.5.2: saveContentToInbox gate 化简到只看 charId — directive-only / 空 payload
  *           都信任 worker 契约, 不在 SW 二次验证, 行为更可预测.
+ *  - 1.6.0: amsg-instant 升 0.8.0-next.2, ReasoningPush 自动按字节切多 push.
+ *           saveReasoningToBuffer 改累积式 (chunks[] 数组, read-modify-write),
+ *           按 (messageIndex, chunkIndex) 保留每个分片, 主线程 claimReasoning
+ *           取出时排序拼接. savePendingToolCall 之前清空同 sessionId 的 reasoning
+ *           buffer — 镜像主应用 `data = newResponse` 的"只保留最后一轮 reasoning"
+ *           行为, 避免 agentic loop 跨轮污染.
  */
-const SW_VERSION = '1.5.2';
+const SW_VERSION = '1.6.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -261,19 +267,53 @@ async function saveReasoningToBuffer(payload: any) {
   const reasoningContent: string = String(payload?.reasoningContent ?? '');
   if (!sessionId || !charId || !reasoningContent) return;
 
+  // 0.8.0-next.2 ReasoningPush 自带 (messageIndex, totalMessages, chunkIndex, totalChunks);
+  // 老 worker 没这些字段, 兜底 (1, 1) 让单 chunk 也能走累积路径而不需要双分支.
+  const messageIndex = Number.isFinite(payload?.messageIndex) ? Number(payload.messageIndex) : 1;
+  const chunkIndex = Number.isFinite(payload?.chunkIndex) ? Number(payload.chunkIndex) : 1;
+
+  // read-modify-write: 取出已有 chunks → push 新条目 → put 回去. 单事务保证原子.
   const db = await openInboxDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite');
-    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).put({
-      sessionId,
-      charId,
-      reasoningContent,
-      receivedAt: Date.now(),
-    });
+    const store = tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE);
+    const getReq = store.get(sessionId);
+    getReq.onsuccess = () => {
+      const existing = getReq.result as
+        | { sessionId: string; charId: string; chunks?: Array<{ messageIndex: number; chunkIndex: number; reasoningContent: string }>; receivedAt: number }
+        | undefined;
+      const chunks = existing?.chunks ? [...existing.chunks] : [];
+      chunks.push({ messageIndex, chunkIndex, reasoningContent });
+      store.put({
+        sessionId,
+        charId,
+        chunks,
+        receivedAt: Date.now(),
+      });
+    };
+    getReq.onerror = () => reject(getReq.error);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('reasoning buffer write aborted'));
   });
   // reasoning push 不通知客户端 — 主线程在处理同 sessionId 的 content 时会主动 claim.
+}
+
+/**
+ * 清空同 sessionId 的 reasoning_buffer.
+ * 镜像主应用 `applyAssistantPostProcessing` 跨 LLM round 的 `data = newResponse` 覆盖语义:
+ * 早期 round 的 reasoning (工具规划阶段的内心戏) 不应混入最终一轮的 thinking chain.
+ */
+async function clearReasoningBuffer(sessionId: string) {
+  if (!sessionId) return;
+  const db = await openInboxDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite');
+    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).delete(sessionId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('reasoning buffer clear aborted'));
+  });
 }
 
 // ─── pending_tool_calls (kind=tool_request, 主线程 runner 跑) ────────────────
@@ -283,6 +323,12 @@ async function savePendingToolCall(payload: any) {
   const charId: string | undefined = payload?.metadata?.charId;
   const toolCalls = Array.isArray(payload?.toolCalls) ? payload.toolCalls : [];
   if (!sessionId || !charId || toolCalls.length === 0) return;
+
+  // 进入新 LLM round 前清空老 reasoning — 这一轮的 reasoning 是"工具规划"性质,
+  // 不属于最终给用户看的 thinking chain. claimReasoning 永远只读到最后一轮的 chunks.
+  await clearReasoningBuffer(sessionId).catch((e) => {
+    console.warn('[amsg] clearReasoningBuffer before tool_request failed', e);
+  });
 
   // iteration 来自 worker hook metadata.iteration (Round 2 worker 一定带), 兜底 0 防老 worker.
   // 客户端 /continue 时取它 + 1; 多轮 tool 链路里 iteration 单调递增, worker 也按它做 fail-fast 400.

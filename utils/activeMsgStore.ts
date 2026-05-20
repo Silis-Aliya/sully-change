@@ -270,7 +270,20 @@ export const ActiveMsgStore = {
       request.onsuccess = () => {
         const r = request.result as InstantPushReasoningBufferEntry | undefined;
         if (r) {
-          entry = r;
+          // 0.8.0-next.2 起 SW 用 chunks[] 累积. 老格式 (顶层 reasoningContent, 无 chunks)
+          // 走 fallback 路径, 让 Round 1 buffered 数据也能消费.
+          const chunks = r.chunks ?? [];
+          const joined = chunks.length > 0
+            ? [...chunks]
+                .sort((a, b) =>
+                  a.messageIndex !== b.messageIndex
+                    ? a.messageIndex - b.messageIndex
+                    : a.chunkIndex - b.chunkIndex,
+                )
+                .map((c) => c.reasoningContent)
+                .join('')
+            : (r.reasoningContent ?? '');
+          entry = { ...r, reasoningContent: joined };
           store.delete(sessionId);
         }
       };
@@ -278,6 +291,23 @@ export const ActiveMsgStore = {
       tx.oncomplete = () => resolve(entry);
       tx.onabort = () => reject(tx.error || new Error('reasoning claim aborted'));
       tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  /**
+   * 客户端镜像 SW 的 clearReasoningBuffer — 启动续跑 / 异常恢复路径主动调,
+   * 避免 reasoning_buffer 里残留早期 round 的内心戏污染最终 thinking chain.
+   * 跟 SW 的 clearReasoningBuffer 字节等价.
+   */
+  async clearReasoning(sessionId: string): Promise<void> {
+    if (!sessionId) return;
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_REASONING_BUFFER, 'readwrite');
+      tx.objectStore(STORE_REASONING_BUFFER).delete(sessionId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('reasoning clear aborted'));
     });
   },
 };

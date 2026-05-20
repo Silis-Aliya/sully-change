@@ -248,10 +248,27 @@ export interface InstantPushPendingToolCall {
   createdAt: number;
 }
 
+/**
+ * SW writes reasoning_buffer when amsg-instant emits ReasoningPush.
+ * 0.8.0-next.2 起, ReasoningPush 自带 (messageIndex, totalMessages, chunkIndex,
+ * totalChunks) 四个字段 — long reasoning_content 会被 amsg-instant 按 UTF-8
+ * 字节自动切多 push (默认 reasoningChunkBytes=2000), 多 push 通过 chunks[]
+ * 累积, claimReasoning 按 (messageIndex, chunkIndex) 排序后拼接成完整 reasoning.
+ *
+ * `reasoningContent` 字段是 claimReasoning 输出 (向后兼容老 Round 1 buffer 形态).
+ * `chunks` 字段是 SW 累积形态 (新 push 进来 read-modify-write 追加一条).
+ */
 export interface InstantPushReasoningBufferEntry {
   sessionId: string;
   charId: string;
-  reasoningContent: string;
+  /** 拼接后的完整 reasoning. claimReasoning 输出时填这个字段; SW 写入时可省略. */
+  reasoningContent?: string;
+  /** SW 累积式 buffer — 每条 ReasoningPush 进来追加一条. */
+  chunks?: Array<{
+    messageIndex: number;
+    chunkIndex: number;
+    reasoningContent: string;
+  }>;
   receivedAt: number;
 }
 
