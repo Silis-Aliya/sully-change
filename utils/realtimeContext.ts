@@ -35,7 +35,8 @@ export interface RealtimeConfig {
 
     // 新闻配置
     newsEnabled: boolean;
-    newsApiKey?: string;    // 可选，用于更多新闻源
+    newsApiKey?: string;    // 可选，Brave Search 回落源用
+    newsPlatforms?: string[]; // hot_news 热榜平台 key（默认主源，免鉴权），留空用内置默认
 
     // Notion 配置
     notionEnabled: boolean;
@@ -71,6 +72,7 @@ export const defaultRealtimeConfig: RealtimeConfig = {
     weatherCity: 'Beijing',
     newsEnabled: false,
     newsApiKey: '',
+    newsPlatforms: ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin'],
     notionEnabled: false,
     notionApiKey: '',
     notionDatabaseId: '',
@@ -150,6 +152,57 @@ export const RealtimeContextManager = {
         }
     },
 
+    // hot_news（orz.ai）平台 key → 中文展示名。用于 source 标注，让提示词读起来自然。
+    HOTNEWS_PLATFORM_LABELS: {
+        baidu: '百度', sspai: '少数派', weibo: '微博', zhihu: '知乎', tskr: '36氪',
+        ftpojie: '吾爱破解', bilibili: 'B站', douban: '豆瓣', hupu: '虎扑', tieba: '贴吧',
+        juejin: '掘金', douyin: '抖音', vtex: 'V2EX', jinritoutiao: '今日头条',
+        stackoverflow: 'Stack Overflow', github: 'GitHub', hackernews: 'Hacker News',
+        sina_finance: '新浪财经', eastmoney: '东方财富', xueqiu: '雪球', cls: '财联社',
+        tenxunwang: '腾讯网',
+    } as Record<string, string>,
+
+    DEFAULT_HOTNEWS_PLATFORMS: ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin'],
+
+    /**
+     * 使用 hot_news（orz.ai）获取中文多平台热榜。
+     * 免鉴权、半小时刷新。浏览器端优先直连；若被 CORS 拦截则本调用返回 []，
+     * 由 fetchNews 自然回落到 Brave / Hacker News。
+     * 多平台并发拉取，每平台取前几条后 round-robin 交错合并，避免单一平台霸屏。
+     */
+    fetchHotNews: async (platforms?: string[], perPlatform = 3, total = 12): Promise<NewsItem[]> => {
+        const list = (platforms && platforms.length > 0)
+            ? platforms
+            : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
+
+        const perPlatformResults = await Promise.all(list.map(async (p): Promise<NewsItem[]> => {
+            try {
+                const res = await fetch(`https://orz.ai/api/v1/dailynews/?platform=${encodeURIComponent(p)}`, {
+                    headers: { 'Accept': 'application/json' },
+                });
+                if (!res.ok) return [];
+                const data = await safeResponseJson(res);
+                const items: any[] = Array.isArray(data?.data) ? data.data : [];
+                const label = RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[p] || p;
+                return items
+                    .filter(it => it && it.title)
+                    .slice(0, perPlatform)
+                    .map(it => ({ title: String(it.title), source: label, url: it.url }));
+            } catch {
+                return [];
+            }
+        }));
+
+        // round-robin 交错：第1名各平台轮一遍，再第2名……保证各平台都有露出
+        const merged: NewsItem[] = [];
+        for (let rank = 0; rank < perPlatform; rank++) {
+            for (const arr of perPlatformResults) {
+                if (arr[rank]) merged.push(arr[rank]);
+            }
+        }
+        return merged.slice(0, total);
+    },
+
     /**
      * 使用 Brave Search API 获取新闻（通过自建 Cloudflare Worker 代理）
      */
@@ -190,7 +243,7 @@ export const RealtimeContextManager = {
 
     /**
      * 获取热点新闻
-     * 优先级: Brave Search API > Hacker News
+     * 优先级: hot_news 中文热榜（默认主源，免鉴权）> Brave Search API > Hacker News
      */
     fetchNews: async (config: RealtimeConfig): Promise<NewsItem[]> => {
         if (!config.newsEnabled) {
@@ -207,7 +260,14 @@ export const RealtimeContextManager = {
 
         let news: NewsItem[] = [];
 
-        // 1. 优先使用 Brave Search API（如果配置了）
+        // 1. 默认主源：hot_news 中文多平台热榜（免鉴权，直连）
+        news = await RealtimeContextManager.fetchHotNews(config.newsPlatforms);
+        if (news.length > 0) {
+            newsCache = { data: news, timestamp: now };
+            return news;
+        }
+
+        // 2. 回落：Brave Search API（需 key，走 Worker 代理）
         if (config.newsApiKey) {
             news = await RealtimeContextManager.fetchBraveNews(config.newsApiKey);
             if (news.length > 0) {
@@ -216,7 +276,7 @@ export const RealtimeContextManager = {
             }
         }
 
-        // 2. 备用：Hacker News（英文但稳定，无CORS限制）
+        // 3. 兜底：Hacker News（英文但稳定，无CORS限制）
         news = await RealtimeContextManager.fetchBackupNews();
         if (news.length > 0) {
             newsCache = { data: news, timestamp: now };

@@ -244,6 +244,7 @@ export interface RealtimeConfig {
   // 新闻配置
   newsEnabled: boolean;
   newsApiKey?: string;
+  newsPlatforms?: string[];  // hot_news 热榜平台 key 列表（默认主源，免鉴权），留空用内置默认
 
   // Notion 配置
   notionEnabled: boolean;
