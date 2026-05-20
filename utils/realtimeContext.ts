@@ -195,7 +195,8 @@ export const RealtimeContextManager = {
                         const desc = typeof it.desc === 'string' ? it.desc.replace(/\s+/g, ' ').trim() : '';
                         return { title: String(it.title), source: label, url: it.url, desc: desc || undefined };
                     });
-                console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条`);
+                const withDesc = picked.filter(x => x.desc).length;
+                console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条（含简介 ${withDesc} 条）`);
                 return picked;
             } catch (e: any) {
                 console.warn(`[hot_news] ${label}(${p}) ✗ 拉取失败（多半是 CORS / 网络）:`, e?.message || e);
@@ -571,9 +572,11 @@ export const RealtimeContextManager = {
                 // ── F12 探针：本轮真正注入 prompt 的热点 + 文本量（评估 token 用）──
                 try {
                     const block = newsLines.join('\n');
-                    console.groupCollapsed(`%c[hot_news] 本轮注入 prompt：${picks.length} 条热点 · ${block.length} 字（池子共 ${news.length} 条）`, 'color:#7c3aed;font-weight:bold');
+                    const pickDesc = picks.filter(n => n.desc).length;
+                    const poolDesc = news.filter(n => n.desc).length;
+                    console.groupCollapsed(`%c[hot_news] 本轮注入 prompt：${picks.length} 条热点（带简介 ${pickDesc}）· ${block.length} 字（池子共 ${news.length} 条，带简介 ${poolDesc}）`, 'color:#7c3aed;font-weight:bold');
                     if (typeof console.table === 'function') {
-                        console.table(picks.map((n, i) => ({ '#': i + 1, 平台: n.source || '', 标题: n.title })));
+                        console.table(picks.map((n, i) => ({ '#': i + 1, 平台: n.source || '', 标题: n.title, 简介: n.desc || '—' })));
                     }
                     console.log(block);
                     console.groupEnd();
