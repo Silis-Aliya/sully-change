@@ -302,7 +302,7 @@ async function removeQueuedRequest(id) {
 }
 
 // worker/sw-keep-alive.ts
-var SW_VERSION = "1.6.0";
+var SW_VERSION = "1.7.0";
 var PING_INTERVAL = 15e3;
 var MAX_MANUAL_ALIVE_MS = 5 * 6e4;
 var ACTIVE_MSG_DB_NAME = "ActiveMsg";
@@ -571,6 +571,26 @@ async function notifyVisibleClientForToolRequest(payload) {
     console.warn("[amsg] tool_request notification failed", e);
   }
 }
+async function notifyClosedClientForContent(payload) {
+  const preview = String(payload?.message || payload?.body || "").replace(/\s+/g, " ").trim();
+  if (!preview) return;
+  const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const visibleClient = clients.find((c) => c.visibilityState === "visible");
+  if (visibleClient) return;
+  const charName = payload?.contactName || payload?.metadata?.charName || "\u4E3B\u52A8\u6D88\u606F";
+  const charId = payload?.metadata?.charId || "";
+  try {
+    await sw.registration.showNotification(charName, {
+      body: preview.slice(0, 120),
+      icon: payload?.avatarUrl || "./icons/icon-192.png",
+      badge: "./icons/icon-192.png",
+      data: { payload, kind: "content" },
+      tag: `active-msg-${charId}`
+    });
+  } catch (e) {
+    console.warn("[amsg] content notification failed", e);
+  }
+}
 async function fetchBlobEnvelope(payload) {
   const url = payload?.url;
   if (typeof url !== "string" || !url) return null;
@@ -596,6 +616,7 @@ async function saveIncomingActiveMessage(payload) {
   switch (messageKind) {
     case "content":
       await saveContentToInbox(payload);
+      await notifyClosedClientForContent(payload);
       return;
     case "reasoning":
       await saveReasoningToBuffer(payload);

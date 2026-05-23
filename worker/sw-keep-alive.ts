@@ -28,8 +28,12 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *           取出时排序拼接. savePendingToolCall 之前清空同 sessionId 的 reasoning
  *           buffer — 镜像主应用 `data = newResponse` 的"只保留最后一轮 reasoning"
  *           行为, 避免 agentic loop 跨轮污染.
+ *  - 1.7.0: content push 在没有可见 client 时补一条系统通知 (notifyClosedClientForContent).
+ *           之前只有 tool_request 弹通知, content (含写日记的 directive 回复) 关浏览器 /
+ *           后台冻结时零通知 — 用户不知道要回前台, inbox 不 flush, 客户端副作用 (写 Notion)
+ *           永远不跑. 与 tool_request 同策略: 有可见 client 交给 in-app UI, 否则系统通知.
  */
-const SW_VERSION = '1.6.0';
+const SW_VERSION = '1.7.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -387,6 +391,40 @@ async function notifyVisibleClientForToolRequest(payload: any) {
   }
 }
 
+// content push: 没有可见 client 时 (后台 / PWA 被关 / 移动端冻结) 补一条系统通知, 否则用户
+// 无从得知回复已到, 不会回前台 → inbox 不 flush → 客户端副作用 (写 Notion / 飞书日记等
+// directive) 永远跑不了. 与 notifyVisibleClientForToolRequest 同策略: 有可见 client 就交给
+// in-app UI (前台 toast), 不弹系统通知 (避开 iOS 前台双弹).
+//
+// 去重: web 端 active-msg 的系统通知唯一来源就是这里 — 主线程 OSContext active-msg handler
+// 只在可见时弹 in-app toast, 它调的 sendProactiveNativeNotification 是 Capacitor-only (web no-op),
+// 所以前台 toast / 后台系统通知互斥不重叠. 见 OSContext 注释 "SW push handler 已经 fire 过系统通知".
+//
+// per-char tag → 同一角色一个 turn 的多条 chunk 通知互相替换, 只露最新一条预览, 不刷屏.
+async function notifyClosedClientForContent(payload: any) {
+  const preview = String(payload?.message || payload?.body || '').replace(/\s+/g, ' ').trim();
+  // directive-only / 空 body push 不弹 (正文 chunk 已经弹过, 别用空预览把它替换掉).
+  if (!preview) return;
+
+  const clients = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const visibleClient = clients.find((c) => (c as WindowClient).visibilityState === 'visible');
+  if (visibleClient) return;
+
+  const charName = payload?.contactName || payload?.metadata?.charName || '主动消息';
+  const charId = payload?.metadata?.charId || '';
+  try {
+    await sw.registration.showNotification(charName, {
+      body: preview.slice(0, 120),
+      icon: payload?.avatarUrl || './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      data: { payload, kind: 'content' },
+      tag: `active-msg-${charId}`,
+    });
+  } catch (e) {
+    console.warn('[amsg] content notification failed', e);
+  }
+}
+
 // ─── _blob envelope (fetch real body, recurse) ───────────────────────────────
 
 async function fetchBlobEnvelope(payload: any): Promise<any | null> {
@@ -422,6 +460,7 @@ async function saveIncomingActiveMessage(payload: any) {
   switch (messageKind) {
     case 'content':
       await saveContentToInbox(payload);
+      await notifyClosedClientForContent(payload);
       return;
 
     case 'reasoning':
