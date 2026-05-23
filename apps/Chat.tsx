@@ -2347,14 +2347,15 @@ const Chat: React.FC = () => {
                 
                 {/* 纯前端「发送准备中」三个点: 不走 MessageItem (那条逐条路径实测渲染不出来), 直接挂在
                     消息列表末尾、靠右(用户侧). 跟 header「发送中」同源 instantSendingActive 一起亮灭:
-                    亮=正在拼接+发送(别杀前端), 灭=已 POST 发出(可安全离开). 用 Tailwind 内置 animate-bounce. */}
+                    亮=正在拼接+发送(别杀前端), 灭=已 POST 发出(可安全离开). 样式跟原版 MessageItem 一致
+                    (w-1 小点 / bg-slate-400/70 / animate-dot-pulse / gap-[3px] / 错峰 delay), 无气泡背景. */}
                 {instantSendingActive && !selectionMode && (
-                    <div className="flex justify-end px-3 mb-4 animate-fade-in">
-                        <div className="bg-primary/10 px-3.5 py-2.5 rounded-2xl flex gap-1 items-center" role="status" aria-label="发送准备中">
-                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
-                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-75"></div>
-                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-150"></div>
-                        </div>
+                    <div className="flex justify-end px-3 mb-4">
+                        <span className="inline-flex items-center gap-[3px] mr-1.5 select-none pointer-events-none" role="status" aria-label="发送准备中">
+                            <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" />
+                            <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" style={{ animationDelay: '0.15s' }} />
+                            <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" style={{ animationDelay: '0.3s' }} />
+                        </span>
                     </div>
                 )}
 
