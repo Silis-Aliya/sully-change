@@ -466,12 +466,15 @@ export const ActiveMsgRuntime = {
       });
     }
 
-    // 回到前台时排空"待写日记"队列 (写 Notion / 飞书). 写日记是客户端网络 fetch, 切后台时会被
-    // 冻结打断而失败; applyAssistantPostProcessing 在发请求前已把内容预写进 pendingDiary 队列,
-    // 这里回前台 (fetch 可靠) 再补打一次, 成功就落"角色写了日记"系统消息. 顺手兜底 pending tool calls.
+    // 回到前台兜底: 后台期间 SW 收到 push 写进 inbox 后会 postMessage 触发 flushInboxToChat,
+    // 但页面被冻结 (iOS PWA / 移动端后台) 时那条 postMessage 可能丢失, 导致回前台后消息卡在 inbox
+    // 里不刷新 ("离开后台消息不返回"). 这里 visibilitychange→visible 主动 flush 一次兜底.
+    // 同时排空"待写日记"队列 (写 Notion/飞书的网络 fetch 后台会被冻结打断, 预写进 pendingDiary,
+    // 回前台 fetch 可靠时补打) + pending tool calls.
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible') return;
+        void flushInboxToChat();
         void drainPendingDiaries(loadRealtimeConfigFromLocalStorage(), (charId) => {
           window.dispatchEvent(new CustomEvent('active-msg-progress', { detail: { charId } }));
         });
