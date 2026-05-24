@@ -48,8 +48,8 @@ importers:
         specifier: ^2.3.0-next.0
         version: 2.3.0-next.0
       '@rei-standard/amsg-instant':
-        specifier: ^0.8.0-next.5
-        version: 0.8.0-next.5
+        specifier: ^0.8.0-next.6
+        version: 0.8.0-next.6
       '@rei-standard/amsg-server':
         specifier: ^2.4.0-next.0
         version: 2.4.0-next.0(@neondatabase/serverless@1.1.0)(pg@8.21.0)
@@ -57,8 +57,8 @@ importers:
         specifier: ^0.1.0-next.3
         version: 0.1.0-next.3
       '@rei-standard/amsg-sw':
-        specifier: ^2.1.0-next.0
-        version: 2.1.0-next.0
+        specifier: ^2.1.0-next.3
+        version: 2.1.0-next.3
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -523,8 +523,8 @@ packages:
     resolution: {integrity: sha512-pvk0GzD6lrrl5T78j42ZJz3NB232OGt0DlZHavRDiHjUirHC23clnNie9C7O+DxmGJaNtV0YhR9KbY3fjsZ0Tg==}
     engines: {node: '>=20'}
 
-  '@rei-standard/amsg-instant@0.8.0-next.5':
-    resolution: {integrity: sha512-f6dOBEOsZjcD1+EjC3Vvj/E3DxkXSh0O6yRDdH532iMsjHEidWheXYqlFdm5woUnS24CGhsO366+OSjkmQLw2w==}
+  '@rei-standard/amsg-instant@0.8.0-next.6':
+    resolution: {integrity: sha512-cNLeYUVuWmVrhCQtjgp6b0Jx5f2CWwNt1jjiaVFqLIDmmfb47cUol+HBiCswKT8999E6WK6UD3NGGxOOYBW5vA==}
     engines: {node: '>=18'}
 
   '@rei-standard/amsg-server@2.4.0-next.0':
@@ -547,8 +547,8 @@ packages:
     resolution: {integrity: sha512-w9x2x1ZT9+l/864z+pSlAx6WiujNolpEsVhGYWFGJweW6XVoS4bgYzKfSkTscXzjgFsv/+qmAnywULX0SDKbtw==}
     engines: {node: '>=20'}
 
-  '@rei-standard/amsg-sw@2.1.0-next.0':
-    resolution: {integrity: sha512-f0rLmFxgr5CJuji1kUSgMtgPWEFrK19AV0tBMNOI+K+BX/slZVq3+szyIgmL1SOfr9I8n5ALYOfaBteEQ8sdEw==}
+  '@rei-standard/amsg-sw@2.1.0-next.3':
+    resolution: {integrity: sha512-68P+hEzRoTBHmFaQCL/pYn6JqTP4LHsi7/bGr0pH7fNXToRBCKfmLCMd91bw7V10t2rv9i75sa7/zOJiQkY2Uw==}
     engines: {node: '>=20'}
 
   '@rolldown/pluginutils@1.0.0-beta.27':
@@ -2048,7 +2048,7 @@ snapshots:
     dependencies:
       '@rei-standard/amsg-shared': 0.1.0-next.0
 
-  '@rei-standard/amsg-instant@0.8.0-next.5':
+  '@rei-standard/amsg-instant@0.8.0-next.6':
     dependencies:
       '@rei-standard/amsg-shared': 0.1.0-next.3
 
@@ -2067,7 +2067,7 @@ snapshots:
 
   '@rei-standard/amsg-shared@0.1.0-next.3': {}
 
-  '@rei-standard/amsg-sw@2.1.0-next.0':
+  '@rei-standard/amsg-sw@2.1.0-next.3':
     dependencies:
       '@rei-standard/amsg-shared': 0.1.0-next.0
 
