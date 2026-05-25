@@ -8,6 +8,7 @@ import {
     CHANGELOG_2026_05,
     CHANGELOG_2026_05_10,
     CHANGELOG_2026_05_17,
+    CHANGELOG_2026_05_25,
 } from '../components/UpdateNotificationEvent';
 
 const FAQ_DATA = [
@@ -93,6 +94,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+        id: CHANGELOG_2026_05_25,
+        title: '2026 年 5 月 25 日 · 小更新',
+        subtitle: '情绪 buff 也接入 Instant Push · 发完即走，聊天和情绪都不用守前端（附配置视频）',
+        date: '2026-05-25',
+        src: 'changelogs/2026-5-25.html',
+        accent: 'from-rose-100 to-amber-100 border-rose-200',
+    },
     {
         id: CHANGELOG_2026_05_17,
         title: '2026 年 5 月 17 日 · 小更新',
