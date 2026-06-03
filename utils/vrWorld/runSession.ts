@@ -117,16 +117,11 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
     } catch { /* SSR */ }
 
     try {
-        // 公共材料：人设 + 向量记忆 + 最近上下文
+        // 公共材料
         const emojis = await DB.getEmojis();
         const categories = await DB.getEmojiCategories();
         const contextLimit = char.contextLimit || 500;
         const historyMsgs = await DB.getRecentMessagesByCharId(char.id, contextLimit);
-        const payload = await buildChatRequestPayload({
-            char, userProfile, groups, emojis, categories,
-            historyMsgs, contextLimit, realtimeConfig,
-        });
-        const systemPrompt = payload.systemPrompt + buildVRSystemAddendum(room, char.name);
 
         // 在某房间的在场玩家名（含自己）
         const occupantsOf = (rid: VRRoomId) => {
@@ -135,13 +130,17 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             return ns;
         };
 
-        // 房间现场（user turn）
+        // 先加载房间数据 + 攒"记忆召回提示"（在场玩家名/相关上下文）——
+        // 在 buildChatRequestPayload 之前算好，让向量召回能带上"对面这些人是谁"，
+        // 角色才记得起自己跟他们的关系，而不是只按聊天历史召回。
         let roomTurn: string;
         let novel: VRWorldNovel | null = null;
         let win: ReturnType<typeof getReadingWindow> | null = null;
         let allAnn: Awaited<ReturnType<typeof DB.getVRAnnotations>> = [];
         let pickable: CharPlaylistSong[] = [];
         let guestbook: VRGuestbookState | null = null;
+        const recallNames = new Set<string>();
+        const recallExtra: string[] = [];
 
         if (room.id === 'library') {
             novel = pickNovel(novels, char)!;
@@ -150,6 +149,8 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             allAnn = await DB.getVRAnnotations(novel.id);
             const windowAnn = allAnn.filter(a => a.segIdx >= win!.from && a.segIdx < win!.to);
             roomTurn = buildLibraryRoomTurn(novel, win, windowAnn, char.id);
+            recallExtra.push(`小说《${novel.title}》`);
+            windowAnn.forEach(a => { if (a.authorId !== char.id) recallNames.add(a.authorName); });
         } else if (room.id === 'music') {
             pickable = gatherCharSongs(char);
             let nowLyric: string[] = [];
@@ -158,7 +159,10 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
                 try {
                     nowLyric = await getCharLyricSnippet(loadMusicCfgStandalone(), np.song.id, `${char.id}-${np.song.id}`, 10);
                 } catch { /* 歌词拉取失败不影响 */ }
+                recallNames.add(np.charName);
+                recallExtra.push(`${np.song.name} ${np.song.artists}`);
             }
+            occupantsOf('music').forEach(n => recallNames.add(n));
             roomTurn = buildMusicRoomTurn(musicState, occupantsOf('music'), pickable, char.name, nowLyric);
         } else if (room.id === 'guestbook') {
             guestbook = await DB.getVRGuestbook();
@@ -168,11 +172,26 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
                 const items: any[] = snap?.items || snap?.list || [];
                 hotTopics = items.map(it => it?.title || it?.name || it?.desc).filter(Boolean);
             } catch { /* 热点拉不到就不聊 */ }
+            occupantsOf('guestbook').forEach(n => recallNames.add(n));
+            (guestbook?.messages || []).slice(-50).forEach(m => { if (m.authorId !== char.id) recallNames.add(m.authorName); });
             roomTurn = buildGuestbookRoomTurn(guestbook?.messages || [], occupantsOf('guestbook'), char.name, hotTopics);
         } else {
             // gym
+            occupantsOf('gym').forEach(n => recallNames.add(n));
             roomTurn = buildGymRoomTurn(occupantsOf('gym'), char.name);
         }
+
+        recallNames.delete(char.name);
+        const namesArr = Array.from(recallNames).filter(Boolean);
+        const recallQueryHint = (namesArr.length > 0 || recallExtra.length > 0)
+            ? `${namesArr.length > 0 ? `此刻在《彼方》同场的人：${namesArr.join('、')}。` : ''}${recallExtra.length > 0 ? `相关：${recallExtra.join('、')}。` : ''}`
+            : undefined;
+
+        const payload = await buildChatRequestPayload({
+            char, userProfile, groups, emojis, categories,
+            historyMsgs, contextLimit, realtimeConfig, recallQueryHint,
+        });
+        const systemPrompt = payload.systemPrompt + buildVRSystemAddendum(room, char.name);
 
         // 调 LLM
         const baseUrl = vrApi.baseUrl.replace(/\/+$/, '');

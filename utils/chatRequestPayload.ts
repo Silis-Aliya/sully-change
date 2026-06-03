@@ -43,6 +43,12 @@ export interface BuildChatPayloadInput {
      */
     recentMsgsHint?: Message[];
     contextLimit: number;
+    /**
+     * 额外的记忆召回提示词（拼进向量/BM25 检索的 context query）。
+     * 用途：彼方等场景下，把"此刻在场的其他玩家名字 / 房间上下文"塞进召回 query，
+     * 让角色能回忆起自己跟对面这些人的关系，而不是只按聊天历史召回。
+     */
+    recallQueryHint?: string;
 
     // 实时世界 / 角色情绪
     realtimeConfig?: RealtimeConfig;
@@ -174,7 +180,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 1. Memory Palace 向量召回 ─────────────────────────
-    await injectMemoryPalace(char, recentMsgsHint, undefined, userProfile?.name);
+    await injectMemoryPalace(char, recentMsgsHint, input.recallQueryHint, userProfile?.name);
 
     // ── 2. 解析音乐共听（如果 caller 没显式给，就从 snapshot 推） ──
     let userListeningContext = input.userListeningContext;
