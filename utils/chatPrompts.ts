@@ -742,7 +742,16 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     return '[聊天]';
                 })();
                 
-                if (m.replyTo) content = `[回复 "${m.replyTo.content.substring(0, 50)}..."]: ${content}`;
+                if (m.replyTo) {
+                    // 引用回复：把"被引用的原话"做成独立的上下文框，用户的新回复另起一行突出出来。
+                    // 旧格式 `[回复 "引用前50字..."]: 回复` 会把引用和回复挤在一行，引用往往比回复长得多，
+                    // 模型注意力被引用淹没、只对引用做反应而忽略真正的新消息（即"对方只看到引用看不到回复"）。
+                    const rawQuote = typeof m.replyTo.content === 'string' ? m.replyTo.content : '';
+                    const quoted = rawQuote.length > 60 ? rawQuote.slice(0, 60) + '…' : rawQuote;
+                    // name 记的是被引用消息的说话人：char.name = 用户在回复 char 本人之前的话；'我' = 用户引用自己。
+                    const whose = m.replyTo.name === char.name ? '你之前说的' : `${m.replyTo.name || '对方'}说的`;
+                    content = `[用户引用了${whose}「${quoted}」，并针对这句话回复 ↓]\n${content}`;
+                }
                 
                 if (m.type === 'image') {
                      // 向下兼容：如果图片数据缺失（例如只导入了文字备份），不要把空 URL 发给 API，否则会报错无法回应
