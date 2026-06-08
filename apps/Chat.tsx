@@ -2003,17 +2003,6 @@ const Chat: React.FC = () => {
                     border-radius: 24px !important;
                     box-shadow: 0 4px 10px -5px rgba(150,100,55,0.32) !important;
                 }
-                /* 破局：气泡尾巴是叶子（AI 绿叶 / 用户棕叶），引号包裹 data URI 安全 */
-                .sully-bubble-ai::after {
-                    content: ''; position: absolute; left: -11px; bottom: -7px;
-                    width: 23px; height: 23px; transform: rotate(-22deg);
-                    background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2C19 6 21 14 17 21C16 23 9 23 7 21C3 14 5 6 12 2Z' fill='%237CB85F'/><path d='M12 5V20' stroke='%235a8a3a' stroke-width='1.6' fill='none'/></svg>") no-repeat center/contain;
-                }
-                .sully-bubble-user::after {
-                    content: ''; position: absolute; right: -11px; bottom: -7px;
-                    width: 23px; height: 23px; transform: rotate(22deg) scaleX(-1);
-                    background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2C19 6 21 14 17 21C16 23 9 23 7 21C3 14 5 6 12 2Z' fill='%23c2925a'/><path d='M12 5V20' stroke='%238a6235' stroke-width='1.6' fill='none'/></svg>") no-repeat center/contain;
-                }
              `}</style>}
 
              {/* 记忆整理中 — 顶部浮动胶囊（不阻塞交互，轻量无 backdrop-filter） */}
