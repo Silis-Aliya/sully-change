@@ -10,42 +10,63 @@ import Launcher from '../apps/Launcher';
 // 大体积 App（MemoryPalace / VRWorld / Songwriting 等）不再压在主包里。
 // 默认导出直接 lazy；命名导出（SpecialMomentsApp）用 .then 适配成 { default }。
 // Launcher 保持静态导入：桌面常驻、需要秒开，不走懒加载。
-const Settings = lazy(() => import('../apps/Settings'));
-const Character = lazy(() => import('../apps/Character'));
-const Chat = lazy(() => import('../apps/Chat'));
-const GroupChat = lazy(() => import('../apps/GroupChat'));
-const ThemeMaker = lazy(() => import('../apps/ThemeMaker'));
-const Appearance = lazy(() => import('../apps/Appearance'));
-const Gallery = lazy(() => import('../apps/Gallery'));
-const DateApp = lazy(() => import('../apps/DateApp'));
-const UserApp = lazy(() => import('../apps/UserApp'));
-const JournalApp = lazy(() => import('../apps/JournalApp'));
-const ScheduleApp = lazy(() => import('../apps/ScheduleApp'));
-const RoomApp = lazy(() => import('../apps/RoomApp'));
-const CheckPhone = lazy(() => import('../apps/CheckPhone'));
-const SocialApp = lazy(() => import('../apps/SocialApp'));
-const StudyApp = lazy(() => import('../apps/StudyApp'));
-const FAQApp = lazy(() => import('../apps/FAQApp'));
-const GameApp = lazy(() => import('../apps/GameApp'));
-const WorldbookApp = lazy(() => import('../apps/WorldbookApp'));
-const NovelApp = lazy(() => import('../apps/NovelApp'));
-const BankApp = lazy(() => import('../apps/BankApp'));
-const XhsStockApp = lazy(() => import('../apps/XhsStockApp'));
-const XhsFreeRoamApp = lazy(() => import('../apps/XhsFreeRoamApp'));
-const BrowserApp = lazy(() => import('../apps/BrowserApp'));
-const SongwritingApp = lazy(() => import('../apps/SongwritingApp'));
-const MusicApp = lazy(() => import('../apps/MusicApp'));
-const CallApp = lazy(() => import('../apps/CallApp'));
-const VoiceDesignerApp = lazy(() => import('../apps/VoiceDesignerApp'));
-const GuidebookApp = lazy(() => import('../apps/GuidebookApp'));
-const LifeSimApp = lazy(() => import('../apps/LifeSimApp'));
-const MemoryPalaceApp = lazy(() => import('../apps/MemoryPalaceApp'));
-const HandbookApp = lazy(() => import('../apps/HandbookApp'));
-const QQBridge = lazy(() => import('../apps/QQBridge'));
-const HotNewsApp = lazy(() => import('../apps/HotNewsApp'));
-const VRWorldApp = lazy(() => import('../apps/VRWorldApp'));
-const CharCreatorDevApp = lazy(() => import('../apps/CharCreatorDevApp'));
-const SpecialMomentsApp = lazy(() => import('./ValentineEvent').then(m => ({ default: m.SpecialMomentsApp })));
+//
+// lazyApp：在 lazy 之外把 import 工厂挂到 .preload 上，使各 chunk 可被「预取」。
+// 桌面就绪后空闲时按优先级后台预热（见下方 useEffect），真正打开 App 时代码已在内存，
+// React.lazy 几乎同步解析 —— 过场层几乎不再出现，从根本上消除「每次进 App 都要加载」。
+type PreloadableLazy = React.LazyExoticComponent<React.ComponentType<any>> & { preload: () => Promise<unknown> };
+const lazyApp = (factory: () => Promise<{ default: React.ComponentType<any> }>): PreloadableLazy => {
+  const Comp = lazy(factory) as PreloadableLazy;
+  Comp.preload = factory;
+  return Comp;
+};
+
+const Settings = lazyApp(() => import('../apps/Settings'));
+const Character = lazyApp(() => import('../apps/Character'));
+const Chat = lazyApp(() => import('../apps/Chat'));
+const GroupChat = lazyApp(() => import('../apps/GroupChat'));
+const ThemeMaker = lazyApp(() => import('../apps/ThemeMaker'));
+const Appearance = lazyApp(() => import('../apps/Appearance'));
+const Gallery = lazyApp(() => import('../apps/Gallery'));
+const DateApp = lazyApp(() => import('../apps/DateApp'));
+const UserApp = lazyApp(() => import('../apps/UserApp'));
+const JournalApp = lazyApp(() => import('../apps/JournalApp'));
+const ScheduleApp = lazyApp(() => import('../apps/ScheduleApp'));
+const RoomApp = lazyApp(() => import('../apps/RoomApp'));
+const CheckPhone = lazyApp(() => import('../apps/CheckPhone'));
+const SocialApp = lazyApp(() => import('../apps/SocialApp'));
+const StudyApp = lazyApp(() => import('../apps/StudyApp'));
+const FAQApp = lazyApp(() => import('../apps/FAQApp'));
+const GameApp = lazyApp(() => import('../apps/GameApp'));
+const WorldbookApp = lazyApp(() => import('../apps/WorldbookApp'));
+const NovelApp = lazyApp(() => import('../apps/NovelApp'));
+const BankApp = lazyApp(() => import('../apps/BankApp'));
+const XhsStockApp = lazyApp(() => import('../apps/XhsStockApp'));
+const XhsFreeRoamApp = lazyApp(() => import('../apps/XhsFreeRoamApp'));
+const BrowserApp = lazyApp(() => import('../apps/BrowserApp'));
+const SongwritingApp = lazyApp(() => import('../apps/SongwritingApp'));
+const MusicApp = lazyApp(() => import('../apps/MusicApp'));
+const CallApp = lazyApp(() => import('../apps/CallApp'));
+const VoiceDesignerApp = lazyApp(() => import('../apps/VoiceDesignerApp'));
+const GuidebookApp = lazyApp(() => import('../apps/GuidebookApp'));
+const LifeSimApp = lazyApp(() => import('../apps/LifeSimApp'));
+const MemoryPalaceApp = lazyApp(() => import('../apps/MemoryPalaceApp'));
+const HandbookApp = lazyApp(() => import('../apps/HandbookApp'));
+const QQBridge = lazyApp(() => import('../apps/QQBridge'));
+const HotNewsApp = lazyApp(() => import('../apps/HotNewsApp'));
+const VRWorldApp = lazyApp(() => import('../apps/VRWorldApp'));
+const CharCreatorDevApp = lazyApp(() => import('../apps/CharCreatorDevApp'));
+const SpecialMomentsApp = lazyApp(() => import('./ValentineEvent').then(m => ({ default: m.SpecialMomentsApp })));
+
+// 预取优先级：高频/常驻 App 先预热，其余随后；逐个在空闲时触发，避免与交互抢主线程/带宽。
+const APP_PRELOAD_ORDER: PreloadableLazy[] = [
+  Chat, Character, GroupChat, SocialApp, RoomApp, Settings, Appearance,
+  CheckPhone, JournalApp, ScheduleApp, MusicApp, CallApp, Gallery, DateApp, UserApp,
+  StudyApp, GameApp, NovelApp, BankApp, WorldbookApp, MemoryPalaceApp, HandbookApp,
+  VRWorldApp, LifeSimApp, SongwritingApp, GuidebookApp, FAQApp, HotNewsApp,
+  XhsStockApp, XhsFreeRoamApp, BrowserApp, VoiceDesignerApp, ThemeMaker, QQBridge,
+  SpecialMomentsApp, CharCreatorDevApp,
+];
 import { Like520Controller, shouldShowLike520Popup } from './Like520Event';
 import { UpdateNotificationController, shouldShowUpdateNotification } from './UpdateNotificationEvent';
 import { WorkerUpdateReminderController, shouldShowWorkerUpdateReminder } from './WorkerUpdateReminderEvent';
@@ -376,6 +397,26 @@ const PhoneShell: React.FC = () => {
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
   // 冷启动「世界入场」是否已结束。结束前由 BootSequence 接管整屏（同时取代旧的黑屏 spinner）。
   const [bootDone, setBootDone] = useState(false);
+
+  // 从根本上消除「每次进 App 都要加载」：桌面就绪后，空闲时按优先级在后台逐个预热各 App 的代码块。
+  // 等用户真正点开某 App，chunk 已在内存，React.lazy 几乎同步解析、过场层几乎不出现。
+  // 逐个、空闲触发（requestIdleCallback）+ 起步延迟，确保不与首屏交互抢主线程/带宽。
+  useEffect(() => {
+    if (!bootDone || !isDataLoaded) return;
+    let cancelled = false;
+    let idx = 0;
+    const ric: (cb: () => void) => number = (window as any).requestIdleCallback
+      ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 2000 })
+      : (cb) => window.setTimeout(cb, 300);
+    const step = () => {
+      if (cancelled || idx >= APP_PRELOAD_ORDER.length) return;
+      const comp = APP_PRELOAD_ORDER[idx++];
+      Promise.resolve(comp.preload()).catch(() => { /* 预取失败无所谓，真正打开时再正常加载 */ })
+        .finally(() => { if (!cancelled) ric(step); });
+    };
+    const startId = window.setTimeout(() => ric(step), 400); // 让首屏交互先稳定一拍
+    return () => { cancelled = true; window.clearTimeout(startId); };
+  }, [bootDone, isDataLoaded]);
 
   // Disclaimer popup for first-time users
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
