@@ -1,105 +1,116 @@
 import React from 'react';
 
 // 聊天「白框」自定义 CSS 编辑器（Appearance 全局默认 与 单角色定制 共用）。
-// 选择器钩子见 ChatHeaderShell / ChatInputArea / Chat 根：.sully-chat-header / -back / -avatar /
-// -name / -status / -buffs / -token / -trigger / -inputbar / -root。
+// 设计原则：预设是「完整搭配」，点一下=直接替换成一套立刻见效的样式（不再是点了没反应、代码越堆越多的 +片段）。
+// 文本框里始终是一整段可用 CSS，方便整段复制给别的 AI 改。
+// 选择器钩子：.sully-chat-header 顶栏 / -back 返回 / -avatar 头像 / -name 名字 / -status 状态 /
+//   -buffs 情绪栏(内含 button 即每个情绪胶囊) / -token / -trigger 小闪电 / -inputbar 输入栏 / -root 整屏。
 
-export const CHROME_CSS_FULL_PRESETS: { name: string; code: string }[] = [
-    { name: '彩虹波浪', code: `.sully-chat-header{
-  position:relative;
-  background:repeating-linear-gradient(90deg,#ffd6ea 0 40px,#ffe8a3 40px 80px,#d7f5c5 80px 120px,#cfe7ff 120px 160px,#e6d2ff 160px 200px)!important;
+// 几套写全的完整风格（头像边框、名字色、buff 背景色、token、闪电都配好），点击即替换。
+const PRESETS: { name: string; code: string }[] = [
+    {
+        name: '奶油少女',
+        code: `/* 奶油少女 */
+.sully-chat-header{
+  background:linear-gradient(135deg,#ffe3ef,#fff2e2 55%,#f1e7ff)!important;
   border-bottom:none!important;
-  box-shadow:0 4px 12px rgba(0,0,0,.08),inset 0 -4px rgba(255,255,255,.4);
-  overflow:visible;
+  box-shadow:0 6px 18px rgba(214,160,180,.18);
+  border-radius:0 0 22px 22px;
 }
-.sully-chat-header::after{content:"";position:absolute;left:0;right:0;bottom:-12px;height:24px;background:radial-gradient(circle at 12px 0,transparent 12px,rgba(255,255,255,.9) 13px);background-size:24px 24px;background-repeat:repeat-x;}
-.sully-chat-header::before{content:"";position:absolute;left:0;right:0;top:0;height:6px;background:repeating-linear-gradient(90deg,#c18b5b 0 20px,#b67d4f 20px 40px);}` },
-    { name: '霓虹夜', code: `.sully-chat-header{
+.sully-chat-name{color:#c2587f!important;}
+.sully-chat-avatar{border:2px solid #ffb8d4!important;box-shadow:0 0 0 4px rgba(255,184,212,.25)!important;}
+.sully-chat-buffs button{background:#fff0f6!important;color:#d6478b!important;border-color:#ffc6df!important;}
+.sully-chat-trigger{color:#e86aa6!important;}
+.sully-chat-token{background:#fff0f6!important;color:#c76aa0!important;border-color:#ffd4e6!important;}`,
+    },
+    {
+        name: '霓虹夜',
+        code: `/* 霓虹夜 */
+.sully-chat-header{
   background:#0e0b1e!important;
   border-bottom:1px solid rgba(168,85,247,.45)!important;
-  box-shadow:0 0 26px rgba(168,85,247,.35);
+  box-shadow:0 0 26px rgba(168,85,247,.3);
 }
-.sully-chat-name{color:#e9d5ff!important;text-shadow:0 0 8px rgba(192,132,252,.9);}
+.sully-chat-name{color:#e9d5ff!important;text-shadow:0 0 10px rgba(192,132,252,.9);}
 .sully-chat-status{color:#a78bfa!important;}
-.sully-chat-trigger,.sully-chat-back{color:#67e8f9!important;}` },
-    { name: '奶油渐变', code: `.sully-chat-header{
-  background:linear-gradient(135deg,#fff1f6,#fde7c9 55%,#e7f0ff)!important;
+.sully-chat-back,.sully-chat-trigger{color:#67e8f9!important;}
+.sully-chat-avatar{border:2px solid #67e8f9!important;box-shadow:0 0 12px rgba(103,232,249,.6)!important;}
+.sully-chat-buffs button{background:rgba(103,232,249,.12)!important;color:#a5f3fc!important;border-color:rgba(103,232,249,.4)!important;}
+.sully-chat-token{background:rgba(168,85,247,.15)!important;color:#d8b4fe!important;border-color:rgba(168,85,247,.4)!important;}`,
+    },
+    {
+        name: '薄荷奶绿',
+        code: `/* 薄荷奶绿 */
+.sully-chat-header{
+  background:linear-gradient(135deg,#e3f9ee,#f0fff4 60%,#e0f5ff)!important;
   border-bottom:none!important;
-  box-shadow:0 6px 18px rgba(180,150,120,.14);
-  border-bottom-left-radius:20px;border-bottom-right-radius:20px;
-}` },
-    { name: '像素窗口', code: `.sully-chat-header{
-  position:relative;
-  background:#dfe7ef!important;
-  border:none!important;border-bottom:2px solid #8aa0b6!important;
-  box-shadow:inset 0 2px #fff,inset 0 -2px #b7c4d2;
+  box-shadow:0 6px 16px rgba(120,190,160,.16);
+  border-radius:0 0 20px 20px;
 }
-.sully-chat-header::before{content:"● ● ●";position:absolute;left:14px;top:calc(var(--safe-top) + 6px);letter-spacing:4px;color:#ff6b6b;font-size:9px;}` },
+.sully-chat-name{color:#2f8f6b!important;}
+.sully-chat-avatar{border:2px solid #8fe0bf!important;box-shadow:0 0 0 4px rgba(143,224,191,.25)!important;}
+.sully-chat-buffs button{background:#e7faf0!important;color:#22936a!important;border-color:#abe6cd!important;}
+.sully-chat-trigger{color:#2bb088!important;}
+.sully-chat-token{background:#e7faf0!important;color:#3a9b76!important;border-color:#bdebd6!important;}`,
+    },
+    {
+        name: '暮光紫',
+        code: `/* 暮光紫 */
+.sully-chat-header{
+  background:linear-gradient(135deg,#3b2a63,#5a3f86 55%,#7e5aa6)!important;
+  border-bottom:none!important;
+  box-shadow:0 8px 22px rgba(80,50,130,.3);
+  border-radius:0 0 18px 18px;
+}
+.sully-chat-name{color:#fce7ff!important;}
+.sully-chat-status{color:#d6bcfa!important;}
+.sully-chat-back,.sully-chat-trigger{color:#f5d0fe!important;}
+.sully-chat-avatar{border:2px solid rgba(255,255,255,.7)!important;box-shadow:0 4px 14px rgba(0,0,0,.3)!important;}
+.sully-chat-buffs button{background:rgba(255,255,255,.16)!important;color:#fbe8ff!important;border-color:rgba(255,255,255,.3)!important;}
+.sully-chat-token{background:rgba(255,255,255,.14)!important;color:#f0e0ff!important;border-color:rgba(255,255,255,.25)!important;}`,
+    },
+    {
+        name: '极简白',
+        code: `/* 极简白 */
+.sully-chat-header{background:#ffffff!important;border-bottom:1px solid #eef1f5!important;box-shadow:none!important;}
+.sully-chat-name{color:#1f2937!important;}
+.sully-chat-avatar{border:1.5px solid #e5e7eb!important;}
+.sully-chat-buffs button{background:#f5f6f8!important;color:#6b7280!important;border-color:#e5e7eb!important;}
+.sully-chat-trigger{color:#6366f1!important;}
+.sully-chat-token{background:#f5f6f8!important;color:#9ca3af!important;border-color:#e5e7eb!important;}`,
+    },
 ];
-
-export const CHROME_CSS_SNIPPETS: { name: string; code: string }[] = [
-    { name: '头部贴图', code: '.sully-chat-header{background:url(在此粘贴图片直链) center/cover!important;border-bottom:none!important;}' },
-    { name: '头像放大', code: '.sully-chat-avatar{width:52px!important;height:52px!important;}' },
-    { name: '隐藏情绪栏', code: '.sully-chat-buffs{display:none!important;}' },
-    { name: '隐藏token', code: '.sully-chat-token{display:none!important;}' },
-    { name: '隐藏小闪电', code: '.sully-chat-trigger{display:none!important;}' },
-    { name: '闪电描金', code: '.sully-chat-trigger{color:#d4af37!important;filter:drop-shadow(0 0 4px rgba(212,175,55,.6));}' },
-    { name: '输入栏毛玻璃', code: '.sully-chat-inputbar{background:rgba(255,255,255,.45)!important;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}' },
-];
-
-const Hint: React.FC = () => (
-    <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
-        直接写 CSS，自定义整块顶栏与白框——换色 / 贴图 / 圆角 / 不规则外形（clip-path）/ 挪位 / 显隐。
-        可用选择器：<code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-header</code> 顶栏、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-back</code> 返回、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-avatar</code> 头像、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-name</code> 名字、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-status</code> 状态、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-buffs</code> 情绪栏、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-token</code> token、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-trigger</code> 小闪电、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-inputbar</code> 输入栏、
-        <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-root</code> 整屏。
-        挪位用 <code className="rounded bg-slate-100 px-1 text-slate-500">position:absolute</code>（顶栏已 relative）；覆盖默认样式记得加 <code className="rounded bg-slate-100 px-1 text-slate-500">!important</code>。
-    </p>
-);
 
 const ChromeCssEditor: React.FC<{ value: string; onChange: (css: string) => void }> = ({ value, onChange }) => {
-    const append = (code: string, sep: string) => onChange((value ? value.trimEnd() + sep : '') + code);
     return (
         <div>
-            <Hint />
-            <div className="mb-1.5 mt-3 text-[9px] font-bold uppercase tracking-wider text-slate-400">完整风格（换风格建议先清空）</div>
+            <div className="mb-2 text-[10px] leading-relaxed text-slate-400">
+                点下面任一套「完整风格」即可一键套用（会替换文本框内容、立刻生效）。也可直接改文本框里的 CSS，
+                或整段复制给别的 AI 帮你改。选择器：
+                <code className="mx-0.5 rounded bg-slate-100 px-1 text-slate-500">.sully-chat-header/-avatar/-name/-buffs/-token/-trigger/-back/-inputbar/-root</code>。
+            </div>
             <div className="mb-3 flex flex-wrap gap-1.5">
-                {CHROME_CSS_FULL_PRESETS.map((p) => (
-                    <button key={p.name} onClick={() => append(p.code, '\n\n')}
-                        className="rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-[11px] font-bold text-primary transition-all hover:bg-primary/15 active:scale-95">
+                {PRESETS.map((p) => (
+                    <button key={p.name} onClick={() => onChange(p.code)}
+                        className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-[11px] font-bold text-primary transition-all hover:bg-primary/15 active:scale-95">
                         {p.name}
                     </button>
                 ))}
-            </div>
-            <div className="mb-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-400">可叠加片段</div>
-            <div className="mb-3 flex flex-wrap gap-1.5">
-                {CHROME_CSS_SNIPPETS.map((p) => (
-                    <button key={p.name} onClick={() => append(p.code, '\n')}
-                        className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-200 active:scale-95">
-                        + {p.name}
+                {value && (
+                    <button onClick={() => onChange('')}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-400 transition-all hover:bg-slate-50 active:scale-95">
+                        清空
                     </button>
-                ))}
+                )}
             </div>
             <textarea
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                placeholder={'/* 例如 */\n.sully-chat-header{\n  background: linear-gradient(135deg,#ffd9ec,#d9c7ff) !important;\n  border-bottom: none !important;\n}'}
+                placeholder={'/* 点上面任一套，或在这里直接写 / 粘贴 CSS */\n.sully-chat-header{\n  background: linear-gradient(135deg,#ffe3ef,#f1e7ff) !important;\n  border-bottom: none !important;\n}'}
                 spellCheck={false}
-                rows={6}
+                rows={8}
                 className="w-full resize-y rounded-2xl border border-slate-700 bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-200 outline-none focus:border-primary/50 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             />
-            {value && (
-                <button onClick={() => onChange('')} className="mt-2 text-[11px] font-semibold text-rose-400 hover:text-rose-500">
-                    清空自定义 CSS
-                </button>
-            )}
         </div>
     );
 };
