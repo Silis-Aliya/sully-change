@@ -18,7 +18,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { callLuckinTool, isLuckinConfigured } from '../../utils/luckinMcpClient';
+import { callLuckinTool, isLuckinConfigured, listLuckinTools } from '../../utils/luckinMcpClient';
 import { autoFixProposalCodesByName } from '../../utils/luckinToolBridge';
 import { luckinItemEmoji } from '../../utils/luckinEmoji';
 import PayQr from './PayQr';
@@ -370,15 +370,28 @@ const MenuStep: React.FC<{
     const browseLoad = async () => {
         setLoading(true); setErr(null); setMode('browse');
         try {
-            const results = await Promise.allSettled(
-                BROWSE_KEYWORDS.map(kw => callLuckinTool('searchProductForMcp', { deptId: ctx.deptId, query: kw }))
-            );
-            const lists = results.map(r => (r.status === 'fulfilled' && r.value?.success) ? asList(r.value.data) : []);
-            const merged = mergeUnique(lists);
+            // 文档里只有 8 个工具、无"列菜单"接口; 但线上 tools/list 可能比文档多。
+            // 先探测有没有"菜单/推荐"类真工具, 有就直接用它当真菜单, 没有才回退热门搜索聚合。
+            let merged: any[] = [];
+            try {
+                const tools = await listLuckinTools(false);
+                const menuTool = tools.find(t => /menu|recommend|catalog|推荐|菜单/i.test(t.name) && !/search/i.test(t.name));
+                if (menuTool) {
+                    const r = await callLuckinTool(menuTool.name, { deptId: ctx.deptId });
+                    if (r.success) merged = mergeUnique([asList(r.data)]);
+                }
+            } catch { /* 探测失败就走下面的搜索聚合 */ }
+
+            // 回退: 并发搜热门关键词聚合 (伪菜单)
             if (!merged.length) {
-                // 全失败 (例如门店关了 / 鉴权问题): 把第一个失败原因抛出来
-                const firstErr = results.find(r => r.status === 'fulfilled' && !(r.value as any)?.success) as any;
-                throw new Error(firstErr?.value?.error || '没拉到商品, 换个门店或直接搜关键词试试');
+                const results = await Promise.allSettled(
+                    BROWSE_KEYWORDS.map(kw => callLuckinTool('searchProductForMcp', { deptId: ctx.deptId, query: kw }))
+                );
+                const lists = results.map(r => (r.status === 'fulfilled' && r.value?.success) ? asList(r.value.data) : []);
+                merged = mergeUnique(lists);
+            }
+            if (!merged.length) {
+                throw new Error('没拉到商品, 换个门店或直接搜关键词试试');
             }
             setItems(merged);
             onProductsSeen?.(merged);
