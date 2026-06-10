@@ -261,8 +261,13 @@ const ProductSheet: React.FC<{
                 amount: 1,
             });
             if (!r.success) throw new Error(r.error || '切换规格失败');
-            // data 是切换后的新商品
-            setWorking(r.data || working);
+            // data 是切换后的新商品; switchProduct 有时不返图 (pictureUrl 为空),
+            // 保留切换前的图, 别让规格一切图就没了。
+            const next = r.data || working;
+            if (next && (!next.pictureUrl || !String(next.pictureUrl).trim())) {
+                next.pictureUrl = working?.pictureUrl;
+            }
+            setWorking(next);
         } catch (e: any) {
             setErr(e?.message || String(e));
         } finally {
