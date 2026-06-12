@@ -433,7 +433,7 @@ export const ContextBuilder = {
 
         // 4. 拼接：硬事实 → 意识流（可选）
         const preamble = `此刻你的心中盘旋着这些想法……\n`;
-        const footnote = `\n（不是台词，不用说出口——让它自然地染进语气和情绪里就好。）`;
+        const footnote = `\n（不是台词，不用说出口——让它影响你的语气和情绪就好。）`;
 
         let out = slotHeader;
         if (narrative) {

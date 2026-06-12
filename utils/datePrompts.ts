@@ -74,7 +74,7 @@ export const DATE_STYLE_PRESETS: DateStylePreset[] = [
 走到你身边，坐下来。
 拿起杯子，喝了一口水。
 
-✅ **要这样写**（每行标注情绪 + 有呼吸感的叙述）：
+✅ **要这样写**（每行标注情绪 + 有画面、有停顿的叙述）：
 [normal] 指尖从发梢滑落，垂在身侧。视线转过来的时候并不急，像是刚好、又像是故意。
 [shy] "……你一直在看我吗？"
 [happy] 嘴角的弧度藏不住，像是被戳中了什么小心思。
@@ -236,7 +236,7 @@ export const DIG_FOCUS_HINTS = [
     '这一轮重点回应对方"怎么说"而不是"说了什么"——语气、停顿、视线',
     '写一个你心里闪过但没说出口的念头，让它影响你的下一句话',
     '留意对方没说出口的部分，回应那个空白',
-    '让此刻的环境（光线、声音、温度）染进你的语气里',
+    '让此刻的环境（光线、声音、温度）影响你说话的方式',
 ];
 
 const pickFocusHint = (): string =>
@@ -425,8 +425,8 @@ ${extraBlock ? `\n${extraBlock}` : ''}`;
         // 每轮轮换的聚焦线索：把注意力推向不同的具体方向，相邻回复天然有差异
         const focusLine = isDigDeeperOn(char.dateStyleConfig) ? ` 本轮线索：${pickFocusHint()}。` : '';
         const note = variant === 'send'
-            ? `(System Note: 严格遵守 VN 格式。每一行都要以 [emotion] 开头，根据内容逐行切换情绪标签，不要整段只用同一个。叙述行写出场景的呼吸感，不要罗列动作。${focusLine})`
-            : `(System Note: Reroll. 换一个切入角度重写，不要复用上一版的展开思路。依然严格遵守 VN 格式：每一行以 [emotion] 开头并逐行切换情绪，叙述行保持场景的呼吸感，不要罗列动作。${focusLine})`;
+            ? `(System Note: 严格遵守 VN 格式。每一行都要以 [emotion] 开头，根据内容逐行切换情绪标签，不要整段只用同一个。叙述行写具体的感官细节和停顿，不要罗列动作。${focusLine})`
+            : `(System Note: Reroll. 换一个切入角度重写，不要复用上一版的展开思路。依然严格遵守 VN 格式：每一行以 [emotion] 开头并逐行切换情绪，叙述行写具体的感官细节和停顿，不要罗列动作。${focusLine})`;
 
         return {
             messages: [
