@@ -24,7 +24,7 @@ import { DB } from '../utils/db';
 import { getChibi } from '../utils/vrWorld/chibi';
 import { WorldScheduler } from '../utils/worldHome/scheduler';
 import { isWorldRunning } from '../utils/worldHome/engine';
-import { worldTimeLabel, isNightClock, houseOf, NARRATIVE_STYLES, buildNpcRollPrompt, parseRolledNpcs } from '../utils/worldHome/prompts';
+import { worldTimeLabel, isNightWorld, houseOf, NARRATIVE_STYLES, buildNpcRollPrompt, parseRolledNpcs, realObserveTarget } from '../utils/worldHome/prompts';
 import { SIM_CHAPTER_DAYS, SIM_CHAPTER_CLOCKS } from '../utils/worldHome/chapters';
 import { dmThreadsOf, groupThreadOf } from '../utils/worldHome/threads';
 import { safeFetchJson } from '../utils/safeApi';
@@ -105,8 +105,8 @@ const MODE_INFO: Record<WorldHomeMode, { name: string; short: string; desc: stri
 const TIME_MODE_INFO: Record<WorldTimeMode, { name: string; short: string; desc: string; hint: string; badge: string }> = {
     real: {
         name: '真实时间', short: '真实时间',
-        desc: '演绎写回各角色的聊天与记忆，和你平时的聊天连成一体。',
-        hint: '适合「真实系角色」——你平时会真人聊天，中间穿插，卡片自然不会刷屏。',
+        desc: '早/中/晚跟着现实时钟走，演绎写回各角色的聊天与记忆，和你平时的聊天连成一体。',
+        hint: '适合「真实系角色」——只能补当天错过的段，过了今天就补不回来；卡片自然不会刷屏。',
         badge: 'bg-emerald-400/90 text-emerald-950',
     },
     sim: {
@@ -940,7 +940,7 @@ const WorldView: React.FC<{
     const members = useMemo(() => world.memberIds.map(id => characters.find(c => c.id === id)).filter(Boolean) as CharacterProfile[], [world.memberIds, characters]);
     const latest = episodes[0];
     // 氛围跟随"即将到来的那一段"：早/中=白天，晚=夜晚
-    const isNight = isNightClock(world.storyClock);
+    const isNight = isNightWorld(world);
 
     // sim（模拟时间）：章节进度 + 已结的卷
     const isSim = world.timeMode === 'sim';
@@ -980,9 +980,14 @@ const WorldView: React.FC<{
     const observe = () => {
         if (isWorldRunning(world.id)) { addToast('这一轮还在演绎中', 'error'); return; }
         if (members.length === 0) { addToast('这个世界还没有住进角色', 'error'); return; }
+        // 真实时间：跟着现实早/中/晚走，已追上现实就先等等（过去错过的当天可补、隔天补不了）
+        if (world.timeMode !== 'sim' && !realObserveTarget(world)) {
+            addToast('已经跟上现实时间啦——等过了这一段（早/中/晚）再来观测', 'info');
+            return;
+        }
         setProgress({ done: 0, total: members.length });
         WorldScheduler.triggerNow(world.id);
-        addToast('观测开始——世界推进一段（早/中/晚），可以先去做别的', 'success');
+        addToast(world.timeMode === 'sim' ? '观测开始——世界推进一段（早/中/晚），可以先去做别的' : '观测开始——演绎现实中刚过去的这一段，可以先去做别的', 'success');
     };
 
     // 拜访视图的住房编排：配置的小屋 + 没分配的成员各自独居
@@ -1022,13 +1027,19 @@ const WorldView: React.FC<{
         void mutateWorld({ seeds: (world.seeds || []).filter(s => s.id !== seedId) });
         addToast('伏笔已删除', 'success');
     };
-    // 长按删除：按住 ~550ms 触发
-    const seedPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const startSeedPress = (seedId: string) => {
-        if (seedPressRef.current) clearTimeout(seedPressRef.current);
-        seedPressRef.current = setTimeout(() => deleteSeed(seedId), 550);
+    // 长按删除：按住 ~550ms 触发；手指移动超过 10px（在滚动）就取消，避免误删
+    const seedPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+    const cancelSeedPress = () => { if (seedPressRef.current) { clearTimeout(seedPressRef.current.timer); seedPressRef.current = null; } };
+    const startSeedPress = (e: React.PointerEvent, seedId: string) => {
+        cancelSeedPress();
+        const x = e.clientX, y = e.clientY;
+        const timer = setTimeout(() => { cancelSeedPress(); deleteSeed(seedId); }, 550);
+        seedPressRef.current = { timer, x, y };
     };
-    const cancelSeedPress = () => { if (seedPressRef.current) { clearTimeout(seedPressRef.current); seedPressRef.current = null; } };
+    const moveSeedPress = (e: React.PointerEvent) => {
+        const s = seedPressRef.current;
+        if (s && (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10)) cancelSeedPress();
+    };
 
     // 主题 token：昼/夜两套
     const t = isNight ? {
@@ -1308,7 +1319,7 @@ const WorldView: React.FC<{
                         <div className="space-y-2">
                             {(world.seeds || []).filter(s => s.status !== 'resolved').slice().reverse().map(seed => (
                                 <div key={seed.id} className={`rounded-xl border p-2.5 select-none ${seed.status === 'armed' ? 'border-rose-400/60 bg-rose-400/10' : t.panelSolid}`}
-                                    onPointerDown={() => startSeedPress(seed.id)} onPointerUp={cancelSeedPress} onPointerLeave={cancelSeedPress} onPointerCancel={cancelSeedPress}>
+                                    onPointerDown={e => startSeedPress(e, seed.id)} onPointerMove={moveSeedPress} onPointerUp={cancelSeedPress} onPointerLeave={cancelSeedPress} onPointerCancel={cancelSeedPress}>
                                     <div className={`text-[11px] leading-snug ${t.textMain}`}>
                                         <span className="font-black">{seed.charName}</span>
                                         <span className={`text-[9px] ml-1.5 ${t.textSub}`}>{seed.storyTime} · 瞒着{seed.hideFrom.length > 0 ? seed.hideFrom.join('、') : '所有人'}</span>
@@ -1497,7 +1508,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
     };
 
     // 世界视图的顶栏要压在深色页底上，配色跟着走
-    const worldNight = view === 'world' && active ? isNightClock(active.storyClock) : false;
+    const worldNight = view === 'world' && active ? isNightWorld(active) : false;
     const darkHeader = view === 'world' && worldNight;
     const headerBg = view === 'world'
         ? (worldNight ? '#11142a' : '#cfe7da')
@@ -1570,7 +1581,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
 
                     {worlds.map(w => {
                         const ms = w.memberIds.map(id => characters.find(c => c.id === id)).filter(Boolean) as CharacterProfile[];
-                        const night = isNightClock(w.storyClock);
+                        const night = isNightWorld(w);
                         return (
                             <button key={w.id} onClick={() => { setActiveId(w.id); setView('world'); }}
                                 className="w-full rounded-2xl overflow-hidden text-left shadow-[0_6px_18px_rgba(120,100,180,.18)] active:scale-[0.99] transition-transform border border-white/70">

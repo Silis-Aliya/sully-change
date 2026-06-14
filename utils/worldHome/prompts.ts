@@ -72,6 +72,36 @@ export function storyTimeLabel(storyClock: number): string {
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+/** 真实时钟 → 现实段：<5点算「晚」（深夜归夜），<12 早，<18 中，否则晚。 */
+export function realNowSeg(now: Date = new Date()): { dayKey: string; seg: number } {
+    const h = now.getHours();
+    const seg = h < 5 ? 2 : h < 12 ? 0 : h < 18 ? 1 : 2;
+    const dayKey = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+    return { dayKey, seg };
+}
+/** {dayKey,seg} → 标签「YYYY年M月D日 周X 早上/中午/晚上」。 */
+export function formatRealClock(rc: { dayKey: string; seg: number }): string {
+    const d = new Date(`${rc.dayKey}T00:00:00`);
+    if (isNaN(d.getTime())) return `${rc.dayKey} ${SEGMENT_LABELS[rc.seg] || ''}`;
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]} ${SEGMENT_LABELS[rc.seg] || ''}`;
+}
+/**
+ * real 模式下一次「观测」要演的现实段（早/中/晚），跟着真实时钟走：
+ *   - 没演过 → 演当前这一段；
+ *   - 落后于今天 → 补今天还没补的下一段（不超过现在）；
+ *   - 落后于过去某天 → 直接跳到今天最早一段（过去错过的补不回来）；
+ *   - 已追上现实 → null（这一段还没过去，没东西可演）。
+ */
+export function realObserveTarget(world: WorldProfile, now: Date = new Date()): { dayKey: string; seg: number } | null {
+    const cur = world.realClock;
+    const nw = realNowSeg(now);
+    if (!cur) return nw;
+    if (cur.dayKey < nw.dayKey) return { dayKey: nw.dayKey, seg: 0 }; // 过去的天丢掉，跳到今天最早一段
+    if (cur.dayKey > nw.dayKey) return null; // 数据异常（时钟回拨），不补
+    return cur.seg < nw.seg ? { dayKey: nw.dayKey, seg: cur.seg + 1 } : null; // 同一天：补下一段，或已追上
+}
+
 /**
  * 时间模式感知的时间标签：
  *   - real（默认）：沿用「第N天 早上/中午/晚上」。
@@ -85,7 +115,15 @@ export function worldTimeLabel(world: WorldProfile, storyClock: number = world.s
         const wd = WEEKDAYS[d.getDay()];
         return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${wd} ${SEGMENT_LABELS[storyClock % SEGMENTS_PER_DAY]}`;
     }
+    // real 模式：跟现实时钟同步，显示已演到的那一现实段
+    if (world.timeMode !== 'sim' && world.realClock) return formatRealClock(world.realClock);
     return storyTimeLabel(storyClock);
+}
+
+/** 该世界「当前那一段」是否算夜晚（real 看 realClock，sim 看 storyClock）。 */
+export function isNightWorld(world: WorldProfile): boolean {
+    if (world.timeMode !== 'sim' && world.realClock) return world.realClock.seg === 2;
+    return isNightClock(world.storyClock);
 }
 
 /** 找出某成员住在哪（不在任何小屋 = 独居）。 */

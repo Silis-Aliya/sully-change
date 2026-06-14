@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide } from './prompts';
+import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide, realNowSeg, realObserveTarget, worldTimeLabel } from './prompts';
 import { applyRelationshipDeltas, collectSeeds, buildSummary } from './engine';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, dmThreadsOf, groupThreadOf, formatThreadForPrompt, dmThreadId, GROUP_THREAD_ID } from './threads';
 import { WorldScheduler } from './scheduler';
@@ -200,6 +200,39 @@ describe('关系看法（label）可变 + 叙述人称', () => {
         expect(narrationPersonGuide({ narrationPerson: 'second' } as any, '小满')).toContain('第二人称');
         expect(narrationPersonGuide({ narrationPerson: 'third' } as any, '小满')).toContain('第三人称');
         expect(narrationPersonGuide({} as any, '小满')).toContain('第一人称'); // 默认
+    });
+});
+
+describe('真实时间（跟现实早/中/晚同步，错过当天可补、隔天不补）', () => {
+    const at = (s: string) => new Date(s);
+
+    it('realNowSeg：按小时分早/中/晚（深夜算晚）', () => {
+        expect(realNowSeg(at('2026-06-15T08:00:00')).seg).toBe(0); // 早
+        expect(realNowSeg(at('2026-06-15T13:00:00')).seg).toBe(1); // 中
+        expect(realNowSeg(at('2026-06-15T20:00:00')).seg).toBe(2); // 晚
+        expect(realNowSeg(at('2026-06-15T02:00:00')).seg).toBe(2); // 深夜→晚
+        expect(realNowSeg(at('2026-06-15T13:00:00')).dayKey).toBe('2026-06-15');
+    });
+
+    it('没演过 → 演当前这一段', () => {
+        expect(realObserveTarget(mkWorld({ timeMode: 'real' }), at('2026-06-15T13:00:00'))).toEqual({ dayKey: '2026-06-15', seg: 1 });
+    });
+
+    it('同一天落后 → 补下一段；已追上 → null', () => {
+        const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 0 } });
+        expect(realObserveTarget(w, at('2026-06-15T20:00:00'))).toEqual({ dayKey: '2026-06-15', seg: 1 }); // 只补一段
+        expect(realObserveTarget(mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 2 } }), at('2026-06-15T20:00:00'))).toBeNull();
+    });
+
+    it('隔天没补的丢掉 → 直接跳到今天最早一段', () => {
+        const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-13', seg: 1 } });
+        expect(realObserveTarget(w, at('2026-06-15T20:00:00'))).toEqual({ dayKey: '2026-06-15', seg: 0 });
+    });
+
+    it('worldTimeLabel：real 模式显示已演到的现实段', () => {
+        const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 2 } });
+        expect(worldTimeLabel(w)).toContain('2026年6月15日');
+        expect(worldTimeLabel(w)).toContain('晚上');
     });
 });
 

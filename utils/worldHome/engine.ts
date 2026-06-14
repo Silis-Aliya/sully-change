@@ -25,7 +25,7 @@ import { safeFetchJson } from '../safeApi';
 import { processNewMessages } from '../memoryPalace/pipeline';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
-    parseCharBeat, parseNpcScene,
+    parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock,
 } from './prompts';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines } from './threads';
 import { shouldCloseChapter, summarizeChapter, SIM_CHAPTER_CLOCKS } from './chapters';
@@ -211,8 +211,12 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
     if (!api.baseUrl) return { ok: false, reason: 'no-api' };
     const baseUrl = api.baseUrl.replace(/\/+$/, '');
 
+    // real 模式：演的那一段跟着真实时钟走，且只能补当天错过的段；已追上现实就没东西可演
+    const realTarget = world.timeMode !== 'sim' ? realObserveTarget(world) : null;
+    if (world.timeMode !== 'sim' && !realTarget) return { ok: false, reason: 'caught-up' };
+
     running.add(world.id);
-    const storyTime = worldTimeLabel(world);
+    const storyTime = realTarget ? formatRealClock(realTarget) : worldTimeLabel(world);
     const round = world.storyClock + 1;
     // sim 模式不进记忆/聊天——演绎攒在家园里，靠每 20 天的结卷总结沉淀
     const entersMemory = world.timeMode !== 'sim' && world.injectToChat !== false;
@@ -360,6 +364,8 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
             seeds: world.seeds,
             directives: remainingDirectives,
             storyClock: world.storyClock + 1,
+            // real 模式：把世界的「现实段」推进到这次演的那一段
+            realClock: realTarget || world.realClock,
             updatedAt: Date.now(),
         };
         await DB.saveWorld(updatedWorld);

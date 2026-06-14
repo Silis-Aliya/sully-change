@@ -867,6 +867,9 @@ export interface WorldProfile {
     timeMode?: WorldTimeMode;
     /** sim 模式的起始日期（不设时按创建当天） */
     simStartDate?: WorldSimDate;
+    /** real 模式：世界已演到的「现实段」（早/中/晚跟着真实时钟走）。dayKey=YYYY-MM-DD，seg=0早/1中/2晚。
+     *  只能补当天错过的段，过了今天就补不了；未演过时为空。 */
+    realClock?: { dayKey: string; seg: number };
     /** sim 模式：已被卷入章节总结的剧情时钟数（round ≤ 此值的原文已归档，不再喂原文） */
     simSummarizedClock?: number;
     /** sim 模式：每 20 天结一卷的章节总结（按 index 升序累积；最新一卷参与下一卷的上文喂养） */
