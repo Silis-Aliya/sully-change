@@ -317,7 +317,14 @@ const CallApp: React.FC = () => {
   const [voiceLang, setVoiceLang] = useState('');
   const [showLangPicker, setShowLangPicker] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const currentBlobUrlRef = useRef<string | null>(null);
+  // All blob: URLs created this call session. Kept alive so 重播/下载 work on every
+  // bubble; revoked together only when leaving/resetting the call (not per-turn).
+  const sessionBlobUrlsRef = useRef<Set<string>>(new Set());
+  const trackBlobUrl = (url?: string) => { if (url && url.startsWith('blob:')) sessionBlobUrlsRef.current.add(url); };
+  const revokeSessionBlobs = () => {
+    sessionBlobUrlsRef.current.forEach(u => { try { URL.revokeObjectURL(u); } catch { /* ignore */ } });
+    sessionBlobUrlsRef.current.clear();
+  };
   const longPressTimerRef = useRef<number | null>(null);
   const callTouchStartPos = useRef({ x: 0, y: 0 });
   const selectedChar = useMemo(() => characters.find(c => c.id === selectedCharId) || null, [characters, selectedCharId]);
@@ -391,10 +398,7 @@ const CallApp: React.FC = () => {
     }
   }, [suspendedCall]);
   useEffect(() => () => {
-    if (currentBlobUrlRef.current) {
-      URL.revokeObjectURL(currentBlobUrlRef.current);
-      currentBlobUrlRef.current = null;
-    }
+    revokeSessionBlobs();
     sttSessionRef.current?.stop();
   }, []);
   // Voice input: toggle speech-to-text into the draft input box.
@@ -513,7 +517,7 @@ const CallApp: React.FC = () => {
               }
             }
             if (greetingAudioUrl) {
-              if (greetingAudioUrl.startsWith('blob:')) currentBlobUrlRef.current = greetingAudioUrl;
+              trackBlobUrl(greetingAudioUrl);
               setAudioUrl(greetingAudioUrl);
               setBubbles(prev => prev.map(b => b.id === greetingBubble.id ? { ...b, audioUrl: greetingAudioUrl } : b));
               setTimeout(() => playAudio(greetingAudioUrl), 0);
@@ -577,10 +581,7 @@ const CallApp: React.FC = () => {
     setCallRecords(records);
   };
   const resetCurrentCall = () => {
-    if (currentBlobUrlRef.current) {
-      URL.revokeObjectURL(currentBlobUrlRef.current);
-      currentBlobUrlRef.current = null;
-    }
+    revokeSessionBlobs();
     stopPlayback();
     setCallState('idle');
     setBubbles([]);
@@ -857,11 +858,7 @@ const CallApp: React.FC = () => {
         }
       }
 
-      if (currentBlobUrlRef.current) {
-        URL.revokeObjectURL(currentBlobUrlRef.current);
-        currentBlobUrlRef.current = null;
-      }
-      if (finalUrl.startsWith('blob:')) currentBlobUrlRef.current = finalUrl;
+      trackBlobUrl(finalUrl);
       setAudioUrl(finalUrl);
       setTimeout(() => playAudio(finalUrl), 0);
       setTraceId(traceIds.filter(Boolean).join(' | '));
@@ -995,8 +992,7 @@ const CallApp: React.FC = () => {
               }
             }
             if (rerollAudioUrl) {
-              if (currentBlobUrlRef.current) URL.revokeObjectURL(currentBlobUrlRef.current);
-              if (rerollAudioUrl.startsWith('blob:')) currentBlobUrlRef.current = rerollAudioUrl;
+              trackBlobUrl(rerollAudioUrl);
               setAudioUrl(rerollAudioUrl);
               setBubbles(prev => prev.map(b => b.id === bubble.id ? { ...b, audioUrl: rerollAudioUrl } : b));
               setTimeout(() => playAudio(rerollAudioUrl), 0);
