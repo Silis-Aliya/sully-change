@@ -1192,7 +1192,17 @@ export const useChatAI = ({
         } catch (e: any) {
             // 注意: 这个 catch 兜的是「拿到 API 响应之后」的整条后处理管线 (applyAssistantPostProcessing,
             // 13 步)。这里抛错多半不是网络问题, 而是解析/正则/落库异常。别再叫"连接中断"误导排查。
-            await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[回复处理失败: ${e.message}]` });
+            const errMsg = e?.message || String(e);
+            // 瑞一杯模式下报错: 大概率是聊天模型/中转不支持 function calling(tools) → 带 tools 一发就 400。
+            // 在 APK 里看不到控制台, 这里把完整原因 + 解法存成可读消息, 方便排查。
+            if (luckinChatRef?.current?.active && /\b400\b|tool|function[_\s-]?call/i.test(errMsg)) {
+                await DB.saveMessage({
+                    charId: char.id, role: 'system', type: 'text',
+                    content: `[瑞一杯失败] ${errMsg}\n\n大概率是你当前聊天用的「模型/中转」不支持函数调用(function calling / tools)——瑞一杯靠角色自己调工具点单, 模型不支持就会直接报 400。\n解决: 换一个支持 tools 的模型/中转 (如官方 OpenAI / Claude / 多数主流中转)。\n另外确认: APK 是全新存储, 你的聊天 API 配置(密钥/地址/模型)在 APK 里填好了吗?`,
+                });
+            } else {
+                await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[回复处理失败: ${errMsg}]` });
+            }
             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
         } finally {
             KeepAlive.stop();
