@@ -1246,7 +1246,7 @@ const CallApp: React.FC = () => {
         </div>
       )}
       <div className="px-7 pb-7 pt-1.5">
-        <div className="flex items-end justify-between">
+        <div className="flex items-start justify-between">
           {/* mic */}
           <button onClick={() => setShowInputPanel(prev => !prev)} className="flex flex-col items-center gap-1.5 transition active:scale-95">
             <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
@@ -1265,13 +1265,13 @@ const CallApp: React.FC = () => {
             <span className="text-[10px] text-white/70">翻译</span>
             <span className="text-[8px] tracking-[0.15em]" style={{ color: voiceLang ? accentColor : 'rgba(255,255,255,0.3)' }}>{voiceLang ? 'ON' : 'OFF'}</span>
           </button>
-          {/* end call (center) */}
+          {/* end call */}
           <button onClick={handleHangup} className="flex flex-col items-center gap-1.5 transition active:scale-95">
-            <span className="w-16 h-16 rounded-full flex items-center justify-center border border-rose-200/40"
-              style={{ background: 'linear-gradient(135deg, #f0569f, #b4347b)', boxShadow: `0 0 30px #f0569f88` }}>
-              <PhoneDisconnect size={26} weight="fill" className="text-white" />
+            <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition hover:bg-rose-500/20"
+              style={{ background: 'rgba(244,63,94,0.12)', borderColor: 'rgba(251,113,133,0.4)' }}>
+              <PhoneDisconnect size={22} weight="fill" className="text-rose-300/90" />
             </span>
-            <span className="text-[10px] text-white/80">结束通话</span>
+            <span className="text-[10px] text-white/70">结束通话</span>
           </button>
           {/* speaker */}
           <button
