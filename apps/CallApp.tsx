@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate } from '@phosphor-icons/react';
+import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate, Gear, Clock, CaretLeft, CaretRight } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { safeFetchJson } from '../utils/safeApi';
 import { minimaxFetch } from '../utils/minimaxEndpoint';
@@ -12,7 +12,7 @@ import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { RealtimeContextManager } from '../utils/realtimeContext';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
-import { Message, ChatTheme } from '../types';
+import { Message, ChatTheme, AppID } from '../types';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
 type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ended' | 'error';
 type ViewMode = 'role-select' | 'in-call' | 'history' | 'record-detail';
@@ -283,10 +283,15 @@ const buildCallPrompt = (userName: string, charName?: string, coreContext?: stri
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
-  const { closeApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
   const [selectedCharId, setSelectedCharId] = useState<string>(activeCharacterId || characters[0]?.id || '');
+  const ROLES_PER_PAGE = 6;
+  const [rolePage, setRolePage] = useState<number>(() => {
+    const i = characters.findIndex(c => c.id === (activeCharacterId || characters[0]?.id));
+    return i > 0 ? Math.floor(i / 6) : 0;
+  });
   const [recordDetailId, setRecordDetailId] = useState<string>('');
   const [callState, setCallState] = useState<CallState>('idle');
   const [bubbles, setBubbles] = useState<CallBubble[]>([]);
@@ -1011,29 +1016,113 @@ const CallApp: React.FC = () => {
     }
   };
   if (viewMode === 'role-select') {
+    const totalPages = Math.max(1, Math.ceil(characters.length / ROLES_PER_PAGE));
+    const page = Math.min(rolePage, totalPages - 1);
+    const pagedChars = characters.slice(page * ROLES_PER_PAGE, page * ROLES_PER_PAGE + ROLES_PER_PAGE);
     return (
-      <div className="h-full w-full bg-gradient-to-b from-[#140d28] via-[#0a0613] to-[#0a0613] text-white px-5 pt-10 pb-6 flex flex-col">
-        <h1 className="text-2xl font-semibold">想找谁聊聊？</h1>
-        <p className="text-sm text-white/45 mt-1">选一个人，拨过去吧。</p>
-        <div className="mt-5 space-y-3 flex-1 overflow-y-auto">
-          {characters.map(char => (
-            <button key={char.id} onClick={() => setSelectedCharId(char.id)} className={`w-full rounded-2xl p-4 border text-left transition ${selectedCharId === char.id ? 'border-white/40' : 'bg-white/5 border-white/15'}`} style={selectedCharId === char.id ? { backgroundColor: `${accentColor}20` } : undefined}>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full border border-white/30 flex items-center justify-center font-semibold" style={{ backgroundColor: `${accentColor}40` }}>{char.avatar ? <img src={char.avatar} alt={char.name} className="w-full h-full rounded-full object-cover" /> : (char.name?.[0] || '角')}</div>
-                <div>
-                  <div className="font-medium">{char.name}</div>
-                  <div className="text-xs text-white/55 mt-1 line-clamp-2">{char.description || '等你一通电话。'}</div>
-                </div>
-              </div>
-            </button>
+      <div className="relative h-full w-full bg-gradient-to-b from-[#140d28] via-[#0a0613] to-[#05030c] text-white flex flex-col overflow-hidden">
+        {/* floating sparkles */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {CALL_SPARKLES.map((p, i) => (
+            <span key={i} className="absolute rounded-full bg-white animate-pulse"
+              style={{ top: p.top, left: p.left, width: p.s, height: p.s, opacity: 0.5, animationDelay: `${i * 0.4}s`, boxShadow: `0 0 6px ${accentColor}` }} />
           ))}
         </div>
-        <div className="pt-4 space-y-2">
-          <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); }} className="w-full py-3 rounded-2xl text-white font-medium transition active:scale-[0.98]" style={{ backgroundColor: accentColor }}>
-            {selectedChar ? `拨给 ${selectedChar.name}` : '开始通话'}
-          </button>
-          <button onClick={() => setViewMode('history')} className="w-full py-3 rounded-2xl border border-white/15 bg-white/5 text-white/80 backdrop-blur-md transition hover:bg-white/10">通话记录</button>
-          <button onClick={closeApp} className="w-full py-2 text-sm text-white/40">关闭</button>
+        {/* top-right character art bleed */}
+        {selectedChar?.avatar && (
+          <div className="absolute top-0 right-0 w-48 h-60 pointer-events-none"
+            style={{ WebkitMaskImage: 'radial-gradient(135% 105% at 100% 0%, #000 32%, transparent 72%)', maskImage: 'radial-gradient(135% 105% at 100% 0%, #000 32%, transparent 72%)' }}>
+            <img src={selectedChar.avatar} alt="" className="w-full h-full object-cover object-top opacity-60" />
+          </div>
+        )}
+
+        <div className="relative z-10 flex flex-col h-full px-5 pt-10 pb-5">
+          {/* header */}
+          <div className="shrink-0">
+            <div className="text-[10px] tracking-[0.42em] text-white/35 font-semibold">CHAT WITH</div>
+            <h1 className="mt-1 text-[2rem] font-bold leading-tight inline-flex items-start gap-1.5">
+              想找谁聊聊？
+              <span className="text-sm mt-1" style={{ color: accentColor, textShadow: `0 0 10px ${accentColor}` }}>✦</span>
+            </h1>
+            <p className="text-sm text-white/45 mt-1">选一个人，拨过去吧。</p>
+          </div>
+
+          {/* character cards (6 / page) */}
+          <div className="mt-5 flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2.5">
+            {pagedChars.map(char => {
+              const selected = selectedCharId === char.id;
+              return (
+                <button key={char.id} onClick={() => setSelectedCharId(char.id)}
+                  className="relative w-full rounded-3xl px-4 py-3.5 text-left border backdrop-blur-md transition active:scale-[0.99]"
+                  style={selected
+                    ? { borderColor: accentColor, background: `${accentColor}22`, boxShadow: `0 0 18px ${accentColor}55, inset 0 0 18px ${accentColor}1f` }
+                    : { borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)' }}>
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-full overflow-hidden border flex items-center justify-center font-semibold shrink-0"
+                      style={{ borderColor: selected ? accentColor : 'rgba(255,255,255,0.25)', backgroundColor: `${accentColor}40` }}>
+                      {char.avatar ? <img src={char.avatar} alt={char.name} className="w-full h-full object-cover" /> : (char.name?.[0] || '角')}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[15px] truncate" style={selected ? { color: accentColor } : undefined}>{char.name}</div>
+                      <div className="text-xs text-white/45 mt-0.5 truncate">{char.description || '点击编辑设定...'}</div>
+                    </div>
+                    <span className="text-base shrink-0" style={{ color: selected ? accentColor : 'rgba(255,255,255,0.25)' }}>✦</span>
+                  </div>
+                </button>
+              );
+            })}
+            {!characters.length && (
+              <div className="text-center py-10 text-white/40 text-sm">还没有角色，先去创建一个吧</div>
+            )}
+          </div>
+
+          {/* pagination */}
+          {totalPages > 1 && (
+            <div className="shrink-0 flex items-center justify-center gap-3 pt-3">
+              <button disabled={page === 0} onClick={() => setRolePage(p => Math.max(0, p - 1))}
+                className="w-7 h-7 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/70 disabled:opacity-25 active:scale-90 transition">
+                <CaretLeft size={14} weight="bold" />
+              </button>
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: totalPages }).map((_, i) => (
+                  <button key={i} onClick={() => setRolePage(i)} aria-label={`第${i + 1}页`}
+                    className="rounded-full transition-all" style={{ width: i === page ? 16 : 6, height: 6, background: i === page ? accentColor : 'rgba(255,255,255,0.25)' }} />
+                ))}
+              </div>
+              <button disabled={page >= totalPages - 1} onClick={() => setRolePage(p => Math.min(totalPages - 1, p + 1))}
+                className="w-7 h-7 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/70 disabled:opacity-25 active:scale-90 transition">
+                <CaretRight size={14} weight="bold" />
+              </button>
+            </div>
+          )}
+
+          {/* actions */}
+          <div className="shrink-0 pt-4 space-y-2.5">
+            <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); }}
+              className="relative w-full py-3.5 rounded-2xl overflow-hidden transition active:scale-[0.98]"
+              style={{ background: `linear-gradient(to right, ${accentColor}26, ${accentColor}4d, ${accentColor}26)`, border: `1px solid ${accentColor}80`, boxShadow: `0 0 22px ${accentColor}40` }}>
+              <span className="absolute inset-[3px] rounded-xl border border-white/10 pointer-events-none" />
+              <span className="absolute left-5 top-1/2 -translate-y-1/2 text-xs" style={{ color: accentColor }}>✦</span>
+              <span className="absolute right-5 top-1/2 -translate-y-1/2 text-xs text-white/60">✦</span>
+              <span className="relative text-white/90 text-[15px]">
+                {selectedChar ? <>拨给 <span className="font-serif italic text-xl align-baseline" style={{ textShadow: `0 0 12px ${accentColor}` }}>{selectedChar.name}</span></> : '开始通话'}
+              </span>
+            </button>
+            <button onClick={() => setViewMode('history')}
+              className="relative w-full py-3 rounded-2xl border border-white/15 bg-white/[0.04] backdrop-blur-md text-white/80 flex items-center justify-center gap-2 transition active:scale-[0.98] hover:bg-white/[0.08]">
+              <Clock size={16} weight="bold" style={{ color: accentColor }} /> 通话记录
+            </button>
+            <div className="flex items-center justify-between pt-1">
+              <button onClick={() => openApp(AppID.Settings)} title="设置"
+                className="w-9 h-9 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/60 active:scale-90 transition">
+                <Gear size={16} weight="fill" />
+              </button>
+              <button onClick={closeApp} className="flex items-center gap-2 text-sm text-white/45 active:scale-95 transition">
+                <span style={{ color: accentColor }}>✦</span> 关闭 <span style={{ color: accentColor }}>✦</span>
+              </button>
+              <div className="w-9 h-9" />
+            </div>
+          </div>
         </div>
       </div>
     );
