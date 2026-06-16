@@ -1100,29 +1100,22 @@ export async function sendInstantPushAndAwaitReply(
           businessError: ack.businessError,
         });
       },
-      // 调试遥测 (amsg-client 2.6+ 支持; 旧版运行时会忽略此选项, 无副作用)。
-      // 把 raw reader.read() 的原始字节信息暴露出来 —— 含被解析层静默丢弃的 `: keepalive`
-      // 注释帧。用来判断「42s 静默期里到底有没有字节真的到 iOS」: 若每秒都有 keepalive
-      // 字节进来则连接活着 (业务首字节慢)，若一直 0 字节则是连接被中间层掐了。
-      // contentEncoding 首帧带回 —— 验证 SSE 有没有被边缘压缩 (压缩会吞掉小 keepalive 帧)。
-      // 用 spread+cast: 装的 amsg-client 2.5.0 的 .d.ts (DeliverOptions) 还没这个字段, 直接
-      // 写字面量会触发 TS excess-property 检查; spread 进来的属性不受该检查。升到 2.6 后可改回普通字段。
-      ...({
-        onRawRead: (meta: any) => {
-          instantTrace(sessionId, 'sse-raw-read', {
-            byteLength: meta?.byteLength,
-            done: meta?.done,
-            textPreview: meta?.textPreview,
-            contentEncoding: meta?.contentEncoding,
-            contentType: meta?.contentType,
-            status: meta?.status,
-          });
-        },
-        // 请求体 gzip 上行 (amsg-client 2.7+ 支持; 旧版忽略, 明文发, 无副作用)。
-        // 大 body 超阈值时压缩再发, worker 入口解压 —— iOS 上行 ~322KB 压到 ~50KB,
-        // 绕开「大 body 上传撑过 42s 被掐」。上下文全量不变。线上契约见 worker decodeGzipRequestBody。
-        compressRequest: true,
-      } as Record<string, unknown>),
+      // 请求体 gzip 上行：大 body 超阈值时压缩再发, worker 入口解压 —— iOS 上行 ~322KB
+      // 压到 ~50KB, 绕开「大 body 上传撑过超时被中间层掐」。上下文全量不变。线上契约见
+      // worker decodeGzipRequestBody。旧版库忽略此选项、明文发, 向后兼容。
+      compressRequest: true,
+      // SSE 原始读遥测: 每次 reader.read() 后回调原始字节信息 (含被解析层静默丢弃的
+      // `: keepalive` 注释帧), 排查「连接静默期里有没有字节真到达」用。
+      onRawRead: (meta: any) => {
+        instantTrace(sessionId, 'sse-raw-read', {
+          byteLength: meta?.byteLength,
+          done: meta?.done,
+          textPreview: meta?.textPreview,
+          contentEncoding: meta?.contentEncoding,
+          contentType: meta?.contentType,
+          status: meta?.status,
+        });
+      },
     });
 
     // amsg-client 2.5.0 的 .d.ts 是 JSDoc + JS, TS 推断 result.detail 时只看到必填的

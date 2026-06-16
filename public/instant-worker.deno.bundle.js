@@ -2733,7 +2733,9 @@ var MULTIPART_TRANSPORT = { enabled: true };
 var UTILITY_CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token",
+  // X-Amsg-Request-Encoding: 大请求体 gzip 上行用的自定义头 (见 decodeGzipRequestBody)。
+  // 跨域带它会触发 CORS 预检, 必须放行, 否则浏览器拦请求。amsg-instant 库的预检不含它, 故 worker 自己回预检。
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding",
   "Access-Control-Max-Age": "86400"
 };
 var D1_BLOB_TABLE = "amsg_transient_blobs";
@@ -3154,15 +3156,7 @@ var src_default = {
   fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding",
-          "Access-Control-Max-Age": "86400"
-        }
-      });
+      return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
     }
     if (url.pathname === "/version") {
       return handleVersionRequest(request);

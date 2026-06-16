@@ -62,7 +62,9 @@ const MULTIPART_TRANSPORT = { enabled: true };
 const UTILITY_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token',
+  // X-Amsg-Request-Encoding: 大请求体 gzip 上行用的自定义头 (见 decodeGzipRequestBody)。
+  // 跨域带它会触发 CORS 预检, 必须放行, 否则浏览器拦请求。amsg-instant 库的预检不含它, 故 worker 自己回预检。
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding',
   'Access-Control-Max-Age': '86400',
 };
 const D1_BLOB_TABLE = 'amsg_transient_blobs';
@@ -597,21 +599,11 @@ export default {
   fetch: async (request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) => {
     const url = new URL(request.url);
 
-    // CORS 预检自处理：amsg-instant 的 Access-Control-Allow-Headers 写死成
-    // "Content-Type, Authorization, X-Client-Token" 且不暴露配置，不含压缩用的
-    // X-Amsg-Request-Encoding。跨域(站点→workers.dev)带该自定义头会触发预检，库的预检
-    // 不放行它 → 浏览器拦掉真正的 POST → fetch 报 TypeError: Load failed、零响应。
-    // 这里抢在 amsg-instant 之前回一个放行了该头的预检响应。
+    // CORS 预检自处理：amsg-instant 库的预检 Allow-Headers 写死且不含压缩用的
+    // X-Amsg-Request-Encoding，跨域带该头的预检会被它拦死。抢在库之前回我们自己的
+    // 预检响应（放行列表见 UTILITY_CORS_HEADERS），与 version/capabilities 分支一致。
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding',
-          'Access-Control-Max-Age': '86400',
-        },
-      });
+      return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
     }
 
     if (url.pathname === '/version') {
