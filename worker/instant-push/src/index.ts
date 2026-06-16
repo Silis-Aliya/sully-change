@@ -596,6 +596,24 @@ async function decodeGzipRequestBody(request: Request): Promise<Request> {
 export default {
   fetch: async (request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) => {
     const url = new URL(request.url);
+
+    // CORS 预检自处理：amsg-instant 的 Access-Control-Allow-Headers 写死成
+    // "Content-Type, Authorization, X-Client-Token" 且不暴露配置，不含压缩用的
+    // X-Amsg-Request-Encoding。跨域(站点→workers.dev)带该自定义头会触发预检，库的预检
+    // 不放行它 → 浏览器拦掉真正的 POST → fetch 报 TypeError: Load failed、零响应。
+    // 这里抢在 amsg-instant 之前回一个放行了该头的预检响应。
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding',
+          'Access-Control-Max-Age': '86400',
+        },
+      });
+    }
+
     if (url.pathname === '/version') {
       return handleVersionRequest(request);
     }

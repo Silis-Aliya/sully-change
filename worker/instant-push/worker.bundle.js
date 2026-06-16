@@ -3153,6 +3153,17 @@ async function decodeGzipRequestBody(request) {
 var src_default = {
   fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Token, X-Amsg-Request-Encoding",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
     if (url.pathname === "/version") {
       return handleVersionRequest(request);
     }
