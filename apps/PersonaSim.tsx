@@ -129,7 +129,7 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog }) => {
 
             setLoadStage('正在回放最近的对话…');
             const msgs = await DB.getMessagesByCharId(targetChar.id);
-            const recent = msgs.slice(-80).map(m => {
+            const recent = msgs.slice(-50).map(m => {
                 const who = m.role === 'user' ? userProfile.name : targetChar.name;
                 const c = m.type === 'text' ? m.content : `[${m.type}]`;
                 return `${who}: ${c}`;
@@ -141,7 +141,7 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog }) => {
             const res = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }], temperature: 0.95 }),
+                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }], temperature: 0.95, max_tokens: 16000 }),
             });
             if (!res.ok) throw new Error('API');
             const data = await safeResponseJson(res);
