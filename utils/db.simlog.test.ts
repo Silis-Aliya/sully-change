@@ -13,7 +13,14 @@ describe('生活记录 (phoneState.simLogs) 导出/导入 round-trip', () => {
       phoneState: {
         records: [],
         simLogs: [
-          { id: 'sim-1', mode: 'daily', theme: '雨天', title: '一个雨天', summary: '', ending: 'soft', beatsCount: 12, memoryText: '下了一天的雨。', timestamp: 1718900000000 },
+          // 新版：带完整脚本快照（可重播），导出导入须把 script.beats 一起带走
+          { id: 'sim-1', mode: 'daily', theme: '雨天', title: '一个雨天', summary: '', ending: 'soft', beatsCount: 12, memoryText: '下了一天的雨。', timestamp: 1718900000000,
+            script: { title: '一个雨天', summary: '', ending: 'soft', beats: [
+              { kind: 'lock', time: '07:00', monologue: '不想起床。' },
+              { kind: 'thought', monologue: '又下雨了。', vibe: 'numb' },
+              { kind: 'end' },
+            ] } },
+          // 旧版：没有 script 快照，导入后仍应保持「没有」（只能发送、不能重播）
           { id: 'sim-2', mode: 'event', theme: '搬家', title: '搬家那天', summary: '', ending: 'open', beatsCount: 20, memoryText: '箱子堆满了客厅。', timestamp: 1718990000000 },
         ],
       },
@@ -37,7 +44,13 @@ describe('生活记录 (phoneState.simLogs) 导出/导入 round-trip', () => {
     // 4) 导入后从 DB 重新读
     const all = await DB.getAllCharacters();
     const restored = all.find(c => c.id === 'sim-rt-char');
-    expect(restored?.phoneState?.simLogs?.length).toBe(2);
-    expect(restored?.phoneState?.simLogs?.[0].memoryText).toBe('下了一天的雨。');
+    const restoredLogs = restored?.phoneState?.simLogs;
+    expect(restoredLogs?.length).toBe(2);
+    expect(restoredLogs?.[0].memoryText).toBe('下了一天的雨。');
+    // 新版脚本快照完整 round-trip → 导入后仍可重播
+    expect(restoredLogs?.[0].script?.beats?.length).toBe(3);
+    expect(restoredLogs?.[0].script?.beats?.[0].monologue).toBe('不想起床。');
+    // 旧版没有 script，导入后依旧没有（不会凭空冒出来）
+    expect(restoredLogs?.[1].script).toBeUndefined();
   });
 });
