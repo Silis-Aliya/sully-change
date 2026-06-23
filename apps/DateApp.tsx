@@ -105,6 +105,10 @@ const DateApp: React.FC = () => {
                 model: apiConfig.model,
                 messages,
                 temperature,
+                // max_tokens 是 Claude 原生 API 的必填字段；缺了它，糯米机/Csy 等
+                // OpenAI→Claude 中转会被上游打回，再包成 502 / bad_response_status_code。
+                // 与私聊 (useChatAI.ts) 对齐，统一带 8000。
+                max_tokens: 8000,
                 stream: apiConfig.stream ?? false,
             })
         });
@@ -287,23 +291,19 @@ const DateApp: React.FC = () => {
         }
         
         // 2. Prepare Context
-        // 展示用全量（见面记录需要全部 source='date' 消息）
+        // Re-fetch messages. Since we saved the opening in handleEnterSession,
+        // 'allMsgs' will now correctly contain: [History..., Opening, UserMsg]
         const allMsgs = await DB.getMessagesByCharId(char.id, true);
 
         // Update local state for display
         const dateFiltered = allMsgs.filter(m => m.metadata?.source === 'date').sort((a,b) => a.timestamp - b.timestamp);
         setDateMessages(dateFiltered);
 
-        // 发给 LLM 的上下文与 chatapp 对齐：用有界 + 记忆宫殿排除的 getRecentMessagesByCharId
-        // （contextLimit 条、includeProcessed=false），而不是把整段历史一次性塞进请求——
-        // 后者在长历史 / 大 contextLimit 下会一次发出近全量消息（见 919 条），直接撑爆输入上限。
-        const contextMsgs = await DB.getRecentMessagesByCharId(char.id, char.contextLimit || 500);
-
         const emojis = await DB.getEmojis();
         const { messages } = await DatePrompts.buildSessionPayload({
             char,
             userProfile,
-            allMsgs: contextMsgs,
+            allMsgs,
             emojis,
             userText: text,
             variant: 'send',
@@ -333,9 +333,8 @@ const DateApp: React.FC = () => {
         await DB.deleteMessage(lastMsg.id);
         
         // 2. Find the user input that triggered it
-        // 与 handleSendMessage 一致：发给 LLM 的上下文走有界 + 记忆宫殿排除的取数，与 chatapp 对齐
-        const contextMsgs = await DB.getRecentMessagesByCharId(char.id, char.contextLimit || 500);
-        const validMsgs = contextMsgs.filter(m => m.id !== lastMsg.id);
+        const allMsgs = await DB.getMessagesByCharId(char.id, true);
+        const validMsgs = allMsgs.filter(m => m.id !== lastMsg.id);
         const lastUserMsg = validMsgs[validMsgs.length - 1];
         
         if (!lastUserMsg || lastUserMsg.role !== 'user') throw new Error("Context lost");

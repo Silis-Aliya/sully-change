@@ -682,6 +682,9 @@ const CallApp: React.FC = () => {
         model: apiConfig.model,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
         temperature: 0.85,
+        // max_tokens 是 Claude 原生 API 的必填字段；缺了它，OpenAI→Claude 中转会被
+        // 上游打回，包成 502 / bad_response_status_code。与私聊 (useChatAI.ts) 对齐。
+        max_tokens: 8000,
         stream: false,
       }),
     }, 2, 0, { appName: '电话', charId: selectedChar?.id, charName: selectedChar?.name, purpose: '语音通话' });
