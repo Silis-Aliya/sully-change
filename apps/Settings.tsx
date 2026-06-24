@@ -118,8 +118,10 @@ const Settings: React.FC = () => {
   const [ghTesting, setGhTesting] = useState(false);
   const [ghTestResult, setGhTestResult] = useState<string>('');
 
-  // 主代理 Worker 地址（联网搜索 / 备份代理 / Notion / 飞书 / MCD·瑞幸 MCP / 网页抓取 / 出图都走它）
+  // 主代理 Worker 地址（联网搜索 / 备份代理 / Notion / 飞书 / MCD·瑞幸 MCP / 网页抓取 / 出图都走它）。
+  // 入口刻意低调：默认折叠，普通用户不需要碰，开箱即用。
   const [proxyWorkerInput, setProxyWorkerInput] = useState(getProxyWorkerUrl());
+  const [showProxyConfig, setShowProxyConfig] = useState(false);
 
   // 实时感知配置的本地状态
   const [rtWeatherEnabled, setRtWeatherEnabled] = useState(realtimeConfig.weatherEnabled);
@@ -1067,48 +1069,6 @@ const Settings: React.FC = () => {
             </p>
         </section>
 
-        {/* 网络代理 (Worker) 区域 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center gap-2 mb-4">
-                <div className="p-2 bg-indigo-100 rounded-xl text-indigo-600">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" /></svg>
-                </div>
-                <h2 className="text-sm font-semibold text-slate-600 tracking-wider">网络代理 (Worker)</h2>
-            </div>
-
-            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
-                联网搜索、新闻热榜、WebDAV / GitHub 备份代理、Notion、飞书、麦当劳 / 瑞幸点单、网页抓取、AI 出图
-                都通过同一个 Cloudflare Worker 转发（源码在仓库 <b>worker/index.js</b>，可一键部署到你自己的 Cloudflare 账号）。
-                默认用的是作者部署的公共实例；想完全自托管、或公共实例哪天失效，把你自己的 Worker 地址填到这里即可，以上功能会全部切过去。
-            </p>
-
-            <label className="text-[11px] text-slate-500 font-medium mb-1 block">Worker 地址</label>
-            <input
-                type="text"
-                value={proxyWorkerInput}
-                onChange={(e) => setProxyWorkerInput(e.target.value)}
-                placeholder={DEFAULT_PROXY_WORKER}
-                spellCheck={false}
-                autoCapitalize="none"
-                autoCorrect="off"
-                className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 mb-3"
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-                <button onClick={handleResetProxyWorker} className="py-2.5 bg-slate-100 rounded-xl text-xs font-bold text-slate-500 active:scale-95 transition-transform">
-                    恢复默认
-                </button>
-                <button onClick={handleSaveProxyWorker} className="py-2.5 bg-indigo-500 rounded-xl text-xs font-bold text-white active:scale-95 transition-transform">
-                    保存
-                </button>
-            </div>
-
-            <p className="text-[10px] text-slate-400 px-1 mt-3 leading-relaxed">
-                只填到域名即可（如 <b>{DEFAULT_PROXY_WORKER}</b>），<b>不要</b>带 /search、/webdav 等路径。<br/>
-                音乐（网易云）和小红书 Lite 在各自的 App / 设置里有独立的 Worker 地址，不受这里影响。
-            </p>
-        </section>
-
         {/* AI 连接设置区域 */}
         <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
              <div className="flex items-center justify-between mb-4">
@@ -1705,6 +1665,55 @@ const Settings: React.FC = () => {
                 与上方 Push 加速器不同：前端发 prompt 到你自部署的 Worker，Worker 调你自己的 LLM 生成回复后分句逐条 Web Push。零数据库、零 cron。
             </p>
         </section>
+
+        {/* 自定义网络代理 — 刻意低调的高级入口。默认折叠，不主动指引基本发现不了。
+            普通用户无需配置：默认走作者部署的公共 Worker，所有功能开箱即用。 */}
+        {!showProxyConfig ? (
+            <button
+                onClick={() => setShowProxyConfig(true)}
+                className="w-full text-center text-[10px] text-slate-300 hover:text-slate-400 py-1 transition-colors"
+            >
+                · 自定义网络代理 ·
+            </button>
+        ) : (
+            <section className="bg-white/60 rounded-2xl p-4 border border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-xs font-semibold text-slate-500">自定义网络代理 (Worker)</h2>
+                    <button onClick={() => { setShowProxyConfig(false); setProxyWorkerInput(getProxyWorkerUrl()); }} className="text-[10px] text-slate-400">收起</button>
+                </div>
+
+                <div className="text-[10px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-2 mb-3 leading-relaxed">
+                    ⚠️ <b>除非你清楚自己在做什么，否则不用动这里。</b>默认配置开箱即用，
+                    所有功能（联网搜索 / 备份代理 / Notion / 飞书 / 点单 / 网页抓取 / 出图）都正常。
+                    只有在你自己部署了 <b>worker/index.js</b>、想换成自己的实例时才需要填。
+                </div>
+
+                <input
+                    type="text"
+                    value={proxyWorkerInput}
+                    onChange={(e) => setProxyWorkerInput(e.target.value)}
+                    placeholder={DEFAULT_PROXY_WORKER}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-200 mb-2"
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                    <button onClick={handleResetProxyWorker} className="py-2 bg-slate-100 rounded-xl text-[11px] font-bold text-slate-500 active:scale-95 transition-transform">
+                        恢复默认
+                    </button>
+                    <button onClick={handleSaveProxyWorker} className="py-2 bg-slate-700 rounded-xl text-[11px] font-bold text-white active:scale-95 transition-transform">
+                        保存
+                    </button>
+                </div>
+
+                <p className="text-[10px] text-slate-400 px-1 mt-2 leading-relaxed">
+                    只填到域名（如 <b>{DEFAULT_PROXY_WORKER}</b>），不要带 /search、/webdav 等路径。
+                    音乐和小红书 Lite 有各自独立的地址，不受这里影响。
+                </p>
+            </section>
+        )}
 
         <VersionInfo />
       </div>
