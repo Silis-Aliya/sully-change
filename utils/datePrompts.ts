@@ -22,6 +22,7 @@ import { CharacterProfile, UserProfile, Message, Emoji, DateStyleConfig } from '
 import { ContextBuilder } from './context';
 import { ChatPrompts } from './chatPrompts';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
+import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 
 export type ApiMessage = { role: string; content: any };
 
@@ -30,11 +31,15 @@ export type ApiMessage = { role: string; content: any };
  * 不要从 OSContext 的 virtualTime 取——那个名字唬人，实际也是每秒同步的真实
  * 时间，但只有"星期 + 时:分"，缺日期，而且没必要让 prompt 构建依赖 React 状态。
  */
-const getRealTimeStr = (): string => {
-    const now = new Date();
+const getRealTimeStr = (tz?: string): string => {
+    const now = nowInTimeZone(tz);
     const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    return `${ChatPrompts.formatDate(now.getTime())} ${days[now.getDay()]}`;
+    return `${ChatPrompts.formatDate(now.getTime(), tz)} ${days[now.getDay()]}`;
 };
+
+/** 线下时间感知开关：默认开启，显式关掉后见面 prompt 不再注入时间。 */
+const isDateTimeAwarenessOn = (char: CharacterProfile): boolean =>
+    char.dateTimeAwarenessEnabled !== false;
 
 /** 立绘系统要求必备的五种基础情绪；角色自定义立绘在此之上叠加 */
 export const REQUIRED_DATE_EMOTIONS = ['normal', 'happy', 'angry', 'sad', 'shy'];
@@ -249,13 +254,13 @@ const getDateEmotions = (char: CharacterProfile): string[] =>
  * 见面侧的时间间隔提示。与 ChatPrompts.getTimeGapHint（IM 风格文案）刻意分开：
  * 这里的措辞面向"多久没见面/互动"的场景判断，不是"多久没回消息"。
  */
-const getTimeGapHint = (lastMsgTimestamp: number | undefined): string => {
+const getTimeGapHint = (lastMsgTimestamp: number | undefined, tz?: string): string => {
     if (!lastMsgTimestamp) return '这是你们的初次互动。';
     const now = Date.now();
     const diffMs = now - lastMsgTimestamp;
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const currentHour = new Date().getHours();
+    const currentHour = nowInTimeZone(tz).getHours();
     const isNight = currentHour >= 23 || currentHour <= 6;
 
     if (diffMins < 5) return '';
@@ -289,7 +294,8 @@ const flattenHistoryToText = (apiMessages: ApiMessage[]): string =>
  * 风格 / 人称 / 自定义补充按 char.dateStyleConfig 动态拼装。
  */
 const buildVNModeBlock = (char: CharacterProfile, userName: string): string => {
-    const timeStr = getRealTimeStr();
+    const dateTimeOn = isDateTimeAwarenessOn(char);
+    const timeLine = dateTimeOn ? `1. **Time**: 当前时间 ${getRealTimeStr(resolveCharTimeZone(char))}。\n` : '';
     const dateEmotions = getDateEmotions(char);
     const styleConfig = char.dateStyleConfig;
     const preset = getStylePreset(styleConfig);
@@ -312,9 +318,8 @@ ${char.dateVoiceEnabled ? `4. **语音情绪（跟立绘分开）**: \`[emotion]
 ${preset.block}
 
 ${digBlock}${povBlock}${extraBlock}### 场景上下文
-1. **Time**: 当前时间 ${timeStr}。
-2. **Location**: 你们现在**面对面**。
-3. **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
+${timeLine}- **Location**: 你们现在**面对面**。
+- **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
 `;
 };
 
@@ -357,11 +362,13 @@ export const DatePrompts = {
         emojis: Emoji[];
     }): { messages: ApiMessage[] } => {
         const { char, userProfile, allMsgs, emojis } = input;
-        const timeStr = getRealTimeStr();
+        const charTz = resolveCharTimeZone(char);
+        const dateTimeOn = isDateTimeAwarenessOn(char);
+        const timeStr = getRealTimeStr(charTz);
         const limit = char.contextLimit || 500;
         const peekLimit = Math.min(limit, 50);
         const lastMsg = allMsgs[allMsgs.length - 1];
-        const gapHint = getTimeGapHint(lastMsg?.timestamp);
+        const gapHint = getTimeGapHint(lastMsg?.timestamp, charTz);
 
         const { apiMessages } = ChatPrompts.buildMessageHistory(
             allMsgs, peekLimit, char, userProfile || ({} as UserProfile), emojis,
@@ -382,8 +389,7 @@ export const DatePrompts = {
 
         const peekInstructions = `
 ### 场景：感知 (Sense Presence)
-当前时间: ${timeStr}
-时间上下文: ${gapHint}
+${dateTimeOn ? `当前时间: ${timeStr}\n` : ''}时间上下文: ${gapHint}
 
 ### 任务
 你现在并不在和用户直接对话。用户正在悄悄靠近你所在的地点。

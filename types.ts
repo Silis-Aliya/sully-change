@@ -1715,6 +1715,16 @@ export interface CharacterProfile {
   // （注意：历史消息本身仍带时间戳，关掉后弱化程度取决于模型自身理解）。
   timeAwarenessEnabled?: boolean;
 
+  // 自定义时区（异国恋 / 角色身处异国等场景）。与「时间感知强化」完全独立、可任意组合：
+  // 开启后，注入给该角色的「当前时间 / 消息时间戳 / 夜间判断」都按 customTimezone 折算，
+  // 让 ta 活在自己的本地时间里，并知道与用户之间存在时差。
+  customTimezoneEnabled?: boolean;
+  customTimezone?: string; // IANA 时区 id，如 'Asia/Tokyo'
+
+  // 线下时间感知（约会 / 见面 App）：开启（默认）时向见面 system prompt 注入「当前真实时间」。
+  // 关掉后见面场景不再注入时间，让剧情脱离现实时间线。独立开关。
+  dateTimeAwarenessEnabled?: boolean;
+
   // Chat & Date voice TTS settings
   chatVoiceEnabled?: boolean;
   chatVoiceLang?: string;

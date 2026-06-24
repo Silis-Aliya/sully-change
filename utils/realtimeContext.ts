@@ -5,6 +5,7 @@
 
 import { safeResponseJson } from './safeApi';
 import { DB } from './db';
+import { nowInTimeZone, tzAwarenessNote } from './timezone';
 
 export interface WeatherData {
     temp: number;
@@ -407,8 +408,8 @@ export const RealtimeContextManager = {
     /**
      * 获取时间上下文
      */
-    getTimeContext: () => {
-        const now = new Date();
+    getTimeContext: (tz?: string) => {
+        const now = nowInTimeZone(tz);
         const hour = now.getHours();
         const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
         const dayOfWeek = dayNames[now.getDay()];
@@ -512,7 +513,7 @@ export const RealtimeContextManager = {
     /**
      * 构建完整的实时上下文（注入到系统提示词）
      */
-    buildFullContext: async (config: RealtimeConfig): Promise<string> => {
+    buildFullContext: async (config: RealtimeConfig, tz?: string): Promise<string> => {
         const parts: string[] = [];
 
         // 开头强调：这是真实世界的信息
@@ -520,9 +521,11 @@ export const RealtimeContextManager = {
         parts.push(`⚠️ 重要：以下信息来自真实世界，不是虚构的。你现在真的能"看到"外面的世界。`);
         parts.push('');
 
-        // 1. 时间信息（总是包含）
-        const time = RealtimeContextManager.getTimeContext();
+        // 1. 时间信息（总是包含）。tz 非空时按角色所在时区折算，并附时差提示
+        const time = RealtimeContextManager.getTimeContext(tz);
         parts.push(`📅 当前真实时间: ${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}`);
+        const tzNote = tzAwarenessNote(tz);
+        if (tzNote) parts.push(tzNote.trim());
 
         // 2. 特殊日期
         const specialDates = RealtimeContextManager.checkSpecialDates();

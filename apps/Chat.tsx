@@ -2466,6 +2466,10 @@ const Chat: React.FC = () => {
                 onToggleXhs={() => updateCharacter(char.id, { xhsEnabled: !char.xhsEnabled })}
                 timeAwarenessEnabled={char.timeAwarenessEnabled !== false}
                 onToggleTimeAwareness={() => updateCharacter(char.id, { timeAwarenessEnabled: char.timeAwarenessEnabled === false })}
+                customTimezoneEnabled={!!char.customTimezoneEnabled}
+                customTimezone={char.customTimezone || ''}
+                onToggleCustomTimezone={() => updateCharacter(char.id, { customTimezoneEnabled: !char.customTimezoneEnabled })}
+                onSetCustomTimezone={(tz: string) => updateCharacter(char.id, { customTimezone: tz })}
                 htmlModeEnabled={!!(char as any).htmlModeEnabled}
                 onToggleHtmlMode={() => updateCharacter(char.id, { htmlModeEnabled: !((char as any).htmlModeEnabled) } as any)}
                 htmlModeCustomPrompt={settingsHtmlModeCustomPrompt}

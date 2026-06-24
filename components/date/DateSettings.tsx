@@ -261,6 +261,23 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                 </section>
 
                 <section className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between">
+                        <div className="pr-4">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase">线下时间感知</h3>
+                            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                                默认开启：见面时向剧本注入「当前真实时间」，让场景跟着现实时间走。关掉后见面剧情不再带现实时间，更适合纯架空 / 不想被时间束缚的剧情。与聊天的时间感知互相独立。
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => updateCharacter(char.id, { dateTimeAwarenessEnabled: char.dateTimeAwarenessEnabled === false ? undefined : false })}
+                            className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${char.dateTimeAwarenessEnabled !== false ? 'bg-primary' : 'bg-slate-200'}`}
+                        >
+                            <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${char.dateTimeAwarenessEnabled !== false ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                        </button>
+                    </div>
+                </section>
+
+                <section className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
                     <h3 className="text-xs font-bold text-slate-400 uppercase">文风与叙事 (Writing Style)</h3>
                     <p className="text-[11px] text-slate-400 mt-1 mb-4">调整见面时 AI 的写作风格与叙事人称，修改后从下一条回复开始生效。</p>
 

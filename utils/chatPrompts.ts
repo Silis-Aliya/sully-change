@@ -10,6 +10,7 @@ import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
 import { RealtimeContextManager, NotionManager, FeishuManager, defaultRealtimeConfig } from './realtimeContext';
 import { isScheduleFeatureOn } from './scheduleGenerator';
 import { VOICE_ACTING_GUIDE } from './minimaxTts';
+import { resolveCharTimeZone, nowInTimeZone, tzAwarenessNote } from './timezone';
 
 // 群活动注入专用：把一条群消息压成"适合塞进别人私聊背景"的短文本。
 // 关键：image 消息的 content 是 base64（群里发图走 processImage 压成 JPEG，单张几十 KB），
@@ -49,19 +50,19 @@ function summarizeGroupMsgContent(m: Message): string {
 }
 
 export const ChatPrompts = {
-    // 格式化时间戳
-    formatDate: (ts: number) => {
-        const d = new Date(ts);
+    // 格式化时间戳（tz 非空时按该时区折算墙上时间，用于自定义时区角色）
+    formatDate: (ts: number, tz?: string) => {
+        const d = nowInTimeZone(tz, new Date(ts));
         return `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
     },
 
-    // 格式化时间差提示
-    getTimeGapHint: (lastMsg: Message | undefined, currentTimestamp: number): string => {
+    // 格式化时间差提示（tz 影响「深夜/清晨」判断，时差本身不变）
+    getTimeGapHint: (lastMsg: Message | undefined, currentTimestamp: number, tz?: string): string => {
         if (!lastMsg) return '';
         const diffMs = currentTimestamp - lastMsg.timestamp;
         const diffMins = Math.floor(diffMs / (1000 * 60));
         const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-        const currentHour = new Date(currentTimestamp).getHours();
+        const currentHour = nowInTimeZone(tz, new Date(currentTimestamp)).getHours();
         const isNight = currentHour >= 23 || currentHour <= 6;
         if (diffMins < 10) return ''; 
         if (diffMins < 60) return `[系统提示: 距离上一条消息: ${diffMins} 分钟。短暂的停顿。]`;
@@ -137,19 +138,22 @@ export const ChatPrompts = {
         // 原来是 7 段串行 await，总耗时 = 各段之和；现在取 max。
         const config = realtimeConfig || defaultRealtimeConfig;
         const today = new Date().toISOString().split('T')[0];
+        // 自定义时区：开启后「当前时间」按角色所在时区折算，并附时差提示（异国恋等场景）
+        const charTz = resolveCharTimeZone(char);
 
         // 1. 实时世界信息（天气/新闻/时间）
         const realtimePromise: Promise<string> = (async () => {
             try {
                 if (config.weatherEnabled || config.newsEnabled) {
-                    const realtimeContext = await RealtimeContextManager.buildFullContext(config);
+                    const realtimeContext = await RealtimeContextManager.buildFullContext(config, charTz);
                     return `\n${realtimeContext}\n`;
                 }
-                const time = RealtimeContextManager.getTimeContext();
+                const time = RealtimeContextManager.getTimeContext(charTz);
                 const specialDates = RealtimeContextManager.checkSpecialDates();
                 let s = `\n### 【当前时间】\n`;
                 s += `${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}\n`;
                 if (specialDates.length > 0) s += `今日特殊: ${specialDates.join('、')}\n`;
+                s += tzAwarenessNote(charTz);
                 return s;
             } catch (e) {
                 console.error('Failed to inject realtime context:', e);
@@ -754,7 +758,8 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
             effectiveHistory = effectiveHistory.filter(m => !processedExcludeIds.has(m.id));
         }
         const historySlice = effectiveHistory.slice(-limit);
-        
+        const charTz = resolveCharTimeZone(char);
+
         let timeGapHint = "";
         if (historySlice.length >= 2) {
             const currentMsg = historySlice[historySlice.length - 1];
@@ -768,13 +773,13 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                 }
             }
             // 时间感知强化开关：默认开启（undefined 视为 true），显式关掉后不再注入「距离上次聊天多久」提示
-            if (lastRealMsg && currentMsg && char.timeAwarenessEnabled !== false) timeGapHint = ChatPrompts.getTimeGapHint(lastRealMsg, currentMsg.timestamp);
+            if (lastRealMsg && currentMsg && char.timeAwarenessEnabled !== false) timeGapHint = ChatPrompts.getTimeGapHint(lastRealMsg, currentMsg.timestamp, charTz);
         }
 
         return {
             apiMessages: historySlice.map((m, index) => {
                 let content: any = m.content;
-                const timeStr = `[${ChatPrompts.formatDate(m.timestamp)}]`;
+                const timeStr = `[${ChatPrompts.formatDate(m.timestamp, charTz)}]`;
                 const sourceTag = (() => {
                     const source = m.metadata?.source;
                     if (source === 'call') return '[通话]';
