@@ -412,12 +412,49 @@ const CollageItem: React.FC<{ frag: DreamFragment; theme: DreamTheme; index: num
             ))}
         </span>;
     } else if (frag.kind === 'screenplay') {
-        inner = <span className="inline-flex flex-col gap-1.5 items-start">
-            {(frag.lines || []).map((l, k) => (
-                <span key={k} className={k === 0 ? 'text-[10px] tracking-[0.25em] uppercase' : 'text-[13.5px] text-white/80'}
-                    style={{ fontFamily: MONO, color: k === 0 ? tint : undefined }}>{l}</span>
-            ))}
-        </span>;
+        // 做成一张「剧本场景卡」：胶片齿孔 + slug 场景头 + 角色名居中/台词在下，动作行作旁白
+        const ls = frag.lines || [];
+        const slug = ls[0] || '';
+        const body = ls.slice(1);
+        inner = (
+            <span className="inline-block w-full text-left" style={{ maxWidth: 300 }}>
+                <span className="block relative rounded-2xl overflow-hidden border pt-4 pb-4 px-4"
+                    style={{ borderColor: `${tint}33`, background: 'linear-gradient(165deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012))', boxShadow: `0 10px 34px ${tint}16` }}>
+                    {/* 顶部一道光 + 胶片齿孔 */}
+                    <span className="absolute inset-x-0 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${tint}66, transparent)` }} />
+                    <span className="absolute inset-x-0 top-1.5 flex justify-between px-3 pointer-events-none" aria-hidden>
+                        {Array.from({ length: 9 }).map((_, d) => (
+                            <span key={d} className="block rounded-[1px]" style={{ width: 5, height: 3, background: `${tint}2e` }} />
+                        ))}
+                    </span>
+                    {/* slug：内景/外景 · 地点 — 时间 */}
+                    <span className="block text-[9.5px] tracking-[0.28em] uppercase mt-2 mb-2.5 pb-1.5 border-b"
+                        style={{ color: tint, borderColor: `${tint}24`, fontFamily: MONO }}>▸ {slug}</span>
+                    <span className="flex flex-col gap-2.5 items-stretch">
+                        {body.map((l, k) => {
+                            const m = l.match(/^\s*(.+?)\s*[:：]\s*(.+)$/);
+                            if (m) {
+                                const cue = m[1];
+                                const speech = m[2];
+                                const pm = cue.match(/^(.*?)\s*[（(](.+?)[）)]\s*$/);
+                                const nm = pm ? pm[1] : cue;
+                                const paren = pm ? pm[2] : '';
+                                return (
+                                    <span key={k} className="flex flex-col items-center gap-0.5 text-center">
+                                        <span className="text-[9px] tracking-[0.22em] uppercase" style={{ color: `${tint}cc` }}>
+                                            {nm}{paren && <span className="text-white/35 tracking-normal lowercase">（{paren}）</span>}
+                                        </span>
+                                        <span className="text-[14px] text-white/85 leading-relaxed" style={{ fontFamily: ff }}>{speech}</span>
+                                    </span>
+                                );
+                            }
+                            // 动作 / 舞台指示行
+                            return <span key={k} className="text-[12px] text-white/45 italic text-center leading-relaxed" style={{ fontFamily: ff }}>— {l} —</span>;
+                        })}
+                    </span>
+                </span>
+            </span>
+        );
     } else if (frag.kind === 'diary') {
         inner = <span className="inline-block rounded-lg px-4 py-3 text-left bg-white/[0.035] border border-white/[0.08]"
             style={{ boxShadow: `0 6px 28px ${tint}10`, maxWidth: 244 }}>
