@@ -9,7 +9,7 @@ import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { safeResponseJson } from '../utils/safeApi';
 import {
-    CaretLeft, Play, Pause, MoonStars, Cloud, ArrowClockwise, X, Eye,
+    CaretLeft, Play, Pause, MoonStars, Cloud, ArrowClockwise, X, Eye, Sparkle, Lock,
 } from '@phosphor-icons/react';
 
 // ============================================================
@@ -61,6 +61,57 @@ const ALL_ARCHETYPES: DreamArchetype[] = [
 // 测试选择器格子上显示的序号（深眠是隐藏项 → 标「隐」而非数字）
 const archetypeNo = (a: DreamArchetype): string =>
     a === 'deepsleep' ? '隐' : String(ALL_ARCHETYPES.indexOf(a) + 1).padStart(2, '0');
+
+// ============================================================
+//  盲盒收藏册 (Dream Blind Box) — 做完一场梦抽到对应原型的小猫，集齐成图鉴。
+//  图床沿用项目惯例（jsDelivr，定期活动同款），文件名带空格需编码。
+// ============================================================
+const DREAM_BOX_BASE = 'https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/img/DREAMS/';
+const DREAM_BOX_FILE: Record<DreamArchetype, string> = {
+    sweet: '01 Sweet Dream .png',
+    nightmare: '02 Nightmare .png',
+    flower: '03 Flower Dream.png',
+    flying: '04 Flying Dream.png',
+    falling: '05 Falling Dream .png',
+    starry: '06 Starry Dream.png',
+    ocean: '07 Ocean Dream.png',
+    childhood: '08 Childhood Dream.png',
+    anxiety: '09 Anxiety Dream.png',
+    forgotten: '10 Forgotten Dream .png',
+    prophetic: '11 Prophetic Dream .png',
+    lucid: '12 Lucid Dream.png',
+    deepsleep: 'Deep Sleep .png',
+};
+const boxImg = (a: DreamArchetype): string => DREAM_BOX_BASE + encodeURIComponent(DREAM_BOX_FILE[a]);
+
+// 盲盒系列（定期活动；以后换弹改这里 / 扩成多套）
+const DREAM_BOX_SERIES = { id: 'dreamcats-01', title: '小小梦境 · 喵梦盲盒', sub: '第一弹 Vol.1' };
+
+// 收藏册：账号级，localStorage。记录每个原型的首次解锁时间与累计抽到次数（含重复）。
+const DREAM_COLLECTION_KEY = 'os_dream_collection';
+type DreamCollection = Record<string, { firstAt: number; count: number }>;
+function loadCollection(): DreamCollection {
+    try { return JSON.parse(localStorage.getItem(DREAM_COLLECTION_KEY) || '{}') || {}; } catch { return {}; }
+}
+function unlockCollectible(a: DreamArchetype): { collection: DreamCollection; isNew: boolean; count: number } {
+    const cur = loadCollection();
+    const prev = cur[a];
+    const count = (prev?.count || 0) + 1;
+    const next: DreamCollection = { ...cur, [a]: { firstAt: prev?.firstAt || Date.now(), count } };
+    try { localStorage.setItem(DREAM_COLLECTION_KEY, JSON.stringify(next)); } catch { }
+    return { collection: next, isNew: !prev, count };
+}
+
+// 盲盒小猫图（带兜底背景，图未加载时不至于难看）
+const BoxCat: React.FC<{ archetype: DreamArchetype; size?: number; className?: string }> = ({ archetype, size = 128, className }) => (
+    <div className={`relative flex items-center justify-center ${className || ''}`} style={{ width: size, height: size }}>
+        <div className="absolute inset-0 rounded-2xl" style={{ background: `radial-gradient(circle at 50% 40%, ${THEMES[archetype].accent}22, transparent 70%)` }} />
+        <img src={boxImg(archetype)} alt={THEMES[archetype].label} loading="lazy"
+            className="relative w-full h-full object-contain"
+            style={{ filter: 'drop-shadow(0 8px 22px rgba(0,0,0,0.45))' }}
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} />
+    </div>
+);
 
 // ============================================================
 //  GENERATION — 构建导演 prompt、调模型、解析
@@ -398,7 +449,7 @@ const TopBar: React.FC<{ onBack: () => void; right?: React.ReactNode }> = ({ onB
 // ============================================================
 //  COMPONENT
 // ============================================================
-type Phase = 'idle' | 'loading' | 'play' | 'end' | 'error' | 'archive';
+type Phase = 'idle' | 'loading' | 'play' | 'end' | 'error' | 'archive' | 'collection';
 
 const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = ({ char, onExit }) => {
     const { apiConfig, userProfile, updateCharacter, addToast } = useOS();
@@ -411,6 +462,9 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     // 仅本地测试：强制指定原型（null = 让模型自动选）
     const [forcedArchetype, setForcedArchetype] = useState<DreamArchetype | null>(null);
     const devAvailable = isDevDebugAvailable();
+    // 盲盒收藏册（账号级）+ 本场抽到的盲盒结果
+    const [collection, setCollection] = useState<DreamCollection>(() => loadCollection());
+    const [boxReveal, setBoxReveal] = useState<{ archetype: DreamArchetype; isNew: boolean; count: number } | null>(null);
     const savedRef = useRef(false);
     const ffTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -424,7 +478,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         if (!apiConfig?.baseUrl || !apiConfig?.apiKey || !apiConfig?.model) {
             addToast('请先在设置里配置 API', 'error'); return;
         }
-        setPhase('loading'); savedRef.current = false; setIdx(0);
+        setPhase('loading'); savedRef.current = false; setIdx(0); setBoxReveal(null);
         try {
             const s = await generateDreamScript({ char, userProfile, apiConfig, forcedArchetype: forcedArchetype || undefined });
             setScript(s);
@@ -487,6 +541,22 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         }
     }, [char, updateCharacter, theme.accent]);
 
+    // ----- 收束：落库 + buff + 开盲盒 → end -----
+    const finishDream = useCallback(() => {
+        if (!script) return;
+        const fresh = !savedRef.current; // 重看(replay)不再解锁/不重复抽盲盒
+        persist(script);
+        if (fresh) {
+            const r = unlockCollectible(script.archetype);
+            setCollection(r.collection);
+            setBoxReveal({ archetype: script.archetype, isNew: r.isNew, count: r.count });
+        } else {
+            const cur = loadCollection();
+            setBoxReveal({ archetype: script.archetype, isNew: false, count: cur[script.archetype]?.count || 1 });
+        }
+        setPhase('end');
+    }, [script, persist]);
+
     // ----- advance -----
     const advance = useCallback(() => {
         setIdx(i => (i >= frags.length - 1 ? i : i + 1));
@@ -497,10 +567,10 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     useEffect(() => {
         if (phase === 'play' && !isDeepSleep && frags.length > 0 && idx >= frags.length - 1) {
             // 让最后一拍停留片刻再收束
-            const t = setTimeout(() => { if (script) { persist(script); setPhase('end'); } }, 2600);
+            const t = setTimeout(() => finishDream(), 2600);
             return () => clearTimeout(t);
         }
-    }, [phase, idx, frags.length, isDeepSleep, script, persist]);
+    }, [phase, idx, frags.length, isDeepSleep, finishDream]);
 
     // ----- autoplay -----
     useEffect(() => {
@@ -524,11 +594,13 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
 
     // ----- replay a saved dream -----
     const replay = (s: DreamScript) => {
-        savedRef.current = true; // 重看不再写库 / 不再叠 buff
+        savedRef.current = true; // 重看不再写库 / 不再叠 buff / 不再抽盲盒
+        setBoxReveal(null);
         setScript(s); setIdx(0); setAutoplay(true); setHintFaded(false); setPhase('play');
     };
 
     const dreamLogs = char.dreamLogs || [];
+    const collectedCount = ALL_ARCHETYPES.filter(a => collection[a]).length;
 
     // ========================================================
     //  IDLE — 入口
@@ -538,11 +610,9 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
             <Shell bg={THEMES.starry.bg}>
                 <Ambient kind="stars" accent="#cdd6ff" />
                 <TopBar onBack={onExit} right={
-                    dreamLogs.length > 0 ? (
-                        <button onClick={() => setPhase('archive')} className="flex items-center gap-1 text-[11px] text-white/55 active:scale-95 transition">
-                            <MoonStars size={15} /> 梦的残页
-                        </button>
-                    ) : undefined
+                    <button onClick={() => setPhase('collection')} className="flex items-center gap-1 text-[11px] text-white/55 active:scale-95 transition">
+                        🐾 收藏册 <span className="tabular-nums opacity-70">{collectedCount}/{ALL_ARCHETYPES.length}</span>
+                    </button>
                 } />
                 <div className="flex-1 flex flex-col items-center justify-center px-9 text-center">
                     <div className="relative mb-7">
@@ -572,6 +642,20 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
                     <p className="text-[10px] text-white/25 mt-3 max-w-[250px] leading-relaxed">
                         将读取 ta 的设定、记忆与最近的对话，编织成一场梦。可能需要一点时间。
                     </p>
+
+                    {/* 入口：盲盒收藏册 / 梦的残页 */}
+                    <div className="flex items-center gap-2.5 mt-7">
+                        <button onClick={() => setPhase('collection')}
+                            className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] border border-white/[0.1] bg-white/[0.04] text-white/75 active:scale-95 transition">
+                            🐾 盲盒收藏册 <span className="tabular-nums" style={{ color: '#cdd6ff' }}>{collectedCount}/{ALL_ARCHETYPES.length}</span>
+                        </button>
+                        {dreamLogs.length > 0 && (
+                            <button onClick={() => setPhase('archive')}
+                                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] border border-white/[0.1] bg-white/[0.04] text-white/75 active:scale-95 transition">
+                                <MoonStars size={13} /> 梦的残页 <span className="tabular-nums opacity-70">{dreamLogs.length}</span>
+                            </button>
+                        )}
+                    </div>
 
                     {/* 仅本地测试：指定梦境（管理员调试指令，正式版不显示） */}
                     {devAvailable && (
@@ -650,6 +734,68 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     }
 
     // ========================================================
+    //  COLLECTION — 盲盒收藏册（图鉴）
+    // ========================================================
+    if (phase === 'collection') {
+        const total = ALL_ARCHETYPES.length;
+        return (
+            <Shell bg={THEMES.starry.bg}>
+                <Ambient kind="stars" accent="#cdd6ff" />
+                <TopBar onBack={() => setPhase(boxReveal ? 'end' : 'idle')} right={
+                    <span className="text-[11px] text-white/55 tabular-nums">{collectedCount}/{total}</span>
+                } />
+                <div className="px-7 pb-3 shrink-0">
+                    <div className="text-[9px] tracking-[0.3em] uppercase" style={{ color: '#cdd6ff' }}>{DREAM_BOX_SERIES.sub} · Blind Box</div>
+                    <h2 className="text-[19px] font-light text-white mt-1" style={{ fontFamily: SERIF }}>{DREAM_BOX_SERIES.title}</h2>
+                    <p className="text-[11px] text-white/40 mt-1 leading-relaxed">做完一场梦，就抽到那种梦的小猫。集齐它们。</p>
+                    <div className="h-[3px] rounded-full bg-white/[0.07] overflow-hidden mt-3">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${(collectedCount / total) * 100}%`, background: '#cdd6ff' }} />
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto no-scrollbar px-5 pb-10">
+                    <div className="grid grid-cols-3 gap-3">
+                        {ALL_ARCHETYPES.map(a => {
+                            const owned = collection[a];
+                            const t = THEMES[a];
+                            return (
+                                <div key={a} className="rounded-2xl border overflow-hidden flex flex-col"
+                                    style={owned
+                                        ? { borderColor: `${t.accent}40`, background: `linear-gradient(160deg, ${t.accent}14, rgba(255,255,255,0.02))` }
+                                        : { borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}>
+                                    {owned ? (
+                                        <>
+                                            <div className="relative aspect-square flex items-center justify-center p-1.5">
+                                                <BoxCat archetype={a} size={92} />
+                                                {owned.count > 1 && (
+                                                    <span className="absolute top-1 right-1 text-[8.5px] px-1.5 py-0.5 rounded-full font-bold tabular-nums"
+                                                        style={{ background: t.accent, color: '#15121c' }}>×{owned.count}</span>
+                                                )}
+                                            </div>
+                                            <div className="text-center pb-2 px-1">
+                                                <div className="text-[10.5px] text-white/85 leading-tight" style={{ fontFamily: SERIF }}>{t.label}</div>
+                                                <div className="text-[7.5px] tracking-wider uppercase mt-0.5" style={{ color: `${t.accent}cc` }}>{t.sub}</div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <div className="aspect-square flex flex-col items-center justify-center gap-2 text-white/20"
+                                            style={{ background: 'radial-gradient(circle at 50% 45%, rgba(255,255,255,0.04), transparent 70%)' }}>
+                                            <Lock size={20} weight="light" />
+                                            <span className="text-[18px] font-light tracking-[0.2em]">？</span>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <p className="text-[10px] text-white/25 mt-6 text-center leading-relaxed px-4">
+                        🐾 {DREAM_BOX_SERIES.title} · 限时系列<br />未解锁的梦境小猫，藏在还没做过的梦里。
+                    </p>
+                </div>
+            </Shell>
+        );
+    }
+
+    // ========================================================
     //  LOADING
     // ========================================================
     if (phase === 'loading') {
@@ -700,8 +846,29 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
                         </div>
                     )}
 
-                    <p className="text-[10px] text-white/30 mt-7 max-w-[260px] leading-relaxed">
-                        ta 醒来后不会记得这场梦，<br />但它已被你悄悄收进「梦的残页」。
+                    {/* 盲盒揭晓 —— 这场梦抽到的小猫 */}
+                    {boxReveal && (
+                        <div className="mt-7 flex flex-col items-center animate-pop-in">
+                            <div className="relative">
+                                {/* sparkle 环 */}
+                                <Sparkle size={16} weight="fill" className="absolute -top-1 -left-2 animate-pulse" style={{ color: theme.accent }} />
+                                <Sparkle size={12} weight="fill" className="absolute top-3 -right-3 animate-pulse" style={{ color: theme.accent, animationDelay: '300ms' }} />
+                                <BoxCat archetype={boxReveal.archetype} size={128} />
+                            </div>
+                            <div className="mt-1 flex items-center gap-2">
+                                {boxReveal.isNew
+                                    ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider" style={{ background: theme.accent, color: '#15121c' }}>NEW ✦</span>
+                                    : <span className="px-2 py-0.5 rounded-full text-[10px] text-white/60 border border-white/15">已有 · 再抽到 ×{boxReveal.count}</span>}
+                                <span className="text-[12px] text-white/80" style={{ fontFamily: SERIF }}>{THEMES[boxReveal.archetype].label}喵</span>
+                            </div>
+                            <button onClick={() => setPhase('collection')} className="mt-2 text-[11px] text-white/45 underline active:scale-95">
+                                {boxReveal.isNew ? '已收入收藏册 · 去看看' : '查看收藏册'}
+                            </button>
+                        </div>
+                    )}
+
+                    <p className="text-[10px] text-white/30 mt-6 max-w-[260px] leading-relaxed">
+                        ta 醒来后不会记得这场梦，<br />但梦与小猫，都被你悄悄收下了。
                     </p>
 
                     <div className="flex gap-3 mt-6">
@@ -724,7 +891,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     if (isDeepSleep) {
         return (
             <Shell bg={theme.bg}>
-                <div className="flex-1 flex flex-col items-center justify-center px-12 text-center select-none" onClick={() => { if (script) { persist(script); setPhase('end'); } }}>
+                <div className="flex-1 flex flex-col items-center justify-center px-12 text-center select-none" onClick={finishDream}>
                     <div className="w-3 h-3 rounded-full bg-white/40 animate-dot-pulse" style={{ boxShadow: '0 0 30px rgba(255,255,255,0.3)' }} />
                     <p className="text-[12px] text-white/20 mt-12 tracking-[0.3em]" style={{ fontFamily: SERIF }}>……</p>
                     <p className="absolute bottom-12 text-[10px] text-white/20">轻触，醒来</p>
