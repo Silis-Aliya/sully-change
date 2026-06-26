@@ -212,6 +212,14 @@ const CheckPhone: React.FC = () => {
     const linkedCharOf = (c: PhoneContact) => (c.linkedCharId ? characters.find(ch => ch.id === c.linkedCharId) : undefined);
     // 真人联系人复用其神经链接角色的头像，否则用联系人自带头像
     const contactAvatar = (c: PhoneContact): string | undefined => linkedCharOf(c)?.avatar || c.avatar;
+    // 真人联系人显示成「备注名（真名）」：identity(称呼/关系) 当备注名，真名放括号；虚构/无备注名就显示本名
+    const contactDisplayName = (c: PhoneContact): string => {
+        const realName = (c.kind === 'real' && c.linkedCharId) ? linkedCharOf(c)?.name : undefined;
+        if (!realName) return c.name;
+        const alias = (c.identity && normName(c.identity) !== normName(realName)) ? c.identity
+            : (normName(c.name) !== normName(realName) ? c.name : '');
+        return alias ? `${alias}（${realName}）` : realName;
+    };
 
     useEffect(() => {
         if (targetChar) {
@@ -431,15 +439,34 @@ const CheckPhone: React.FC = () => {
             }).join('\n');
 
             // 真假甄别用：神经链接里真实存在的其他角色名单
-            const roster = characters.filter(c => c.id !== targetChar.id).map(c => ({ id: c.id, name: c.name }));
-            const rosterHint = roster.length
-                ? roster.map(r => r.name).join('、')
+            const rosterChars = characters.filter(c => c.id !== targetChar.id);
+            const roster = rosterChars.map(c => ({ id: c.id, name: c.name }));
+            // 给每个真实角色附一段「扫一眼设定」+ 机主与 TA 的已知关系，让关系判定有据可依、别瞎编
+            const myContacts = targetChar.phoneState?.contacts || [];
+            const briefOf = (ch: CharacterProfile) => (ch.socialProfile?.bio || ch.description || ch.systemPrompt || '')
+                .replace(/\s+/g, ' ').trim().slice(0, 90);
+            const rosterInfo = rosterChars.length
+                ? rosterChars.map(c => {
+                    const known = myContacts.find(k => k.linkedCharId === c.id);
+                    const rel = known
+                        ? `；和机主的已知关系：${known.identity || '未标注'}${known.note ? `（备注：${known.note}）` : ''}`
+                        : '；机主通讯录里暂无 TA（未必认识）';
+                    return `- ${c.name}：${briefOf(c) || '（无公开设定）'}${rel}`;
+                }).join('\n')
                 : '（无其他真实角色）';
             // 约束：是否允许虚构 NPC。关掉则只能和神经链接里的真实角色来往
             const allowFictional = targetChar.phoneState?.allowFictionalContacts !== false;
             const fictionRule = allowFictional
                 ? ''
                 : `\n**硬约束**：禁止虚构任何 NPC，联系人**只能**取自上面的真实角色名单。若名单为空，直接返回空数组 []。`;
+            // 真实角色的甄别 + 关系判定共同要求（chat / contacts 共用）——核心：依据设定，别瞎安关系
+            const realCharRule = `**真实存在的人（神经链接名单 · 含设定与已知关系）**：
+${rosterInfo}
+
+**真假甄别 + 关系判定（务必走心）**：
+- 联系人就是名单里的人 → "kind":"real"，"linkedName" 填名单里的**原名**；否则按人设虚构 → "kind":"npc"。
+- **关系必须贴合上面每个真实角色的设定与已知关系，别凭空安成「同事/老友」**。机主跟某人**根本不认识、或只是在某处（如「彼方」VR 世界）打过照面**，就如实标（如「彼方网友」「不太熟」「点头之交」），**不认识就别硬塞进通讯录**。
+- "identity" 写**机主对 TA 的称呼 / 关系备注**（如「学长」「前任」「彼方网友」「中间人」），要具体贴合来历、别只写真名——它会作为备注名显示。${fictionRule}`;
 
             let promptInstruction = "";
             let logPrefix = "";
@@ -462,30 +489,22 @@ ${layoutHint[layout || 'generic']}`;
                 if (type === 'chat') {
                     promptInstruction = `生成 3 个该角色手机聊天软件(Message/Line)中的**对话片段**。
 
-**真实存在的人（神经链接名单）**: ${rosterHint}
-**真假甄别规则（重要）**:
-- 如果某个联系人就是上面名单里的人 → 输出 "kind":"real" 并在 "linkedName" 里填名单里的原名。
-- 否则（按人设虚构的路人）→ 输出 "kind":"npc"。
-- 优先复用名单里的真实角色作为联系人（让 TA 的社交圈和真实角色产生交集），其余再虚构 NPC。${fictionRule}
+${realCharRule}
 
 要求：
-1. **联系人**: 根据人设给出合理的联系人（学生→辅导员/社团学长；杀手→中间人）。不要用“User”。
-2. **对话感**: 有来有回的对话脚本（3-4句），体现关系。
+1. **联系人**: 真实角色按上面的设定与关系来；其余可按人设虚构合理的人（学生→辅导员/社团学长；杀手→中间人）。不要用“User”。
+2. **对话感**: 有来有回的对话脚本（3-4句），体现真实的关系。
 3. **格式**: 严格用 "我:..." 代表主角(你)，"对方:..." 代表联系人。
 4. **好感**: 给出该角色对此联系人的好感度 "affinity"（-100~100）。
-格式JSON数组: [{ "title": "联系人名称 (身份)", "kind": "real|npc", "linkedName": "若 real 填真实角色名否则留空", "identity": "身份标签", "affinity": 30, "detail": "对方: 最近怎么样？\\n我: 还活着。\\n对方: 那就好。" }, ...]`;
+格式JSON数组: [{ "title": "真实角色填原名/虚构填名字", "kind": "real|npc", "linkedName": "若 real 填真实角色原名否则留空", "identity": "机主对 TA 的称呼/关系备注", "affinity": 30, "detail": "对方: 最近怎么样？\\n我: 还活着。\\n对方: 那就好。" }, ...]`;
                     logPrefix = "聊天软件";
                 } else if (type === 'contacts') {
                     promptInstruction = `扫描并生成该角色手机通讯录里的 4-6 个**联系人**（不要对话，只要联系人本身）。
 
-**真实存在的人（神经链接名单）**: ${rosterHint}
-**真假甄别规则（重要）**:
-- 联系人若是名单里的人 → "kind":"real" + "linkedName" 填原名。
-- 否则虚构路人 → "kind":"npc"。
-- 尽量让名单里的真实角色出现在通讯录里，其余按人设虚构。${fictionRule}
+${realCharRule}
 
-每个联系人给出：姓名、身份标签、机主对 TA 的好感度(-100~100)、一句机主视角的备注。
-格式JSON数组: [{ "title": "姓名", "kind": "real|npc", "linkedName": "", "identity": "同事/前任/网友…", "affinity": 20, "detail": "一句备注，比如：欠我一顿饭，最近老是已读不回。" }, ...]`;
+每个联系人给出：姓名、关系备注(identity)、机主对 TA 的好感度(-100~100)、一句机主视角的备注(detail)。真实角色要符合上面的设定与已知关系，别瞎安。
+格式JSON数组: [{ "title": "真实角色填原名/虚构填名字", "kind": "real|npc", "linkedName": "若 real 填真实角色原名否则留空", "identity": "机主对 TA 的称呼/关系，如 学长/前任/彼方网友", "affinity": 20, "detail": "一句备注，比如：在彼方认识的，聊得来；或：欠我一顿饭，最近老已读不回。" }, ...]`;
                     logPrefix = "通讯录";
                 } else if (type === 'call') {
                     promptInstruction = `生成 3 条该角色的近期**通话记录**。
@@ -559,17 +578,22 @@ ${layoutHint[layout || 'generic']}`;
                             await new Promise(r => setTimeout(r, 10));
                             continue;
                         }
+                        // 真实角色统一用「原名」当联系人名（稳定去重 + 显示靠 identity 做备注名）；
+                        // 已有该真人的联系人则复用其名字，避免同一真人因别名生成出两条。
+                        const realChar = linkedId ? characters.find(c => c.id === linkedId) : undefined;
+                        const existingByLink = linkedId ? contactsAcc.find(c => c.linkedCharId === linkedId) : undefined;
+                        const contactName = existingByLink?.name || realChar?.name || pureName;
                         contactsAcc = upsertContact(contactsAcc, {
-                            name: pureName,
+                            name: contactName,
                             identity: item.identity,
                             kind,
                             linkedCharId: linkedId,
-                            avatar: linkedId ? characters.find(c => c.id === linkedId)?.avatar : undefined,
+                            avatar: linkedId ? realChar?.avatar : undefined,
                             affinity: typeof item.affinity === 'number' ? item.affinity : undefined,
                             note: type === 'contacts' ? recordDetail : undefined,
                             lastInteraction: Date.now(),
                         });
-                        contactId = contactsAcc.find(c => normName(c.name) === normName(pureName))?.id;
+                        contactId = contactsAcc.find(c => (linkedId && c.linkedCharId === linkedId) || normName(c.name) === normName(contactName))?.id;
                     }
 
                     // contacts 模式只建联系人，不落聊天卡片/记录
@@ -1635,12 +1659,12 @@ ${layoutHint[layout || 'generic']}`;
                                 )}
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">
-                                        <span className="font-semibold text-[13.5px] text-white/95 truncate">{c.name}</span>
+                                        <span className="font-semibold text-[13.5px] text-white/95 truncate">{contactDisplayName(c)}</span>
                                         <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full shrink-0" style={{ color: badge.color, background: `${badge.color}1f` }}>{badge.icon}{badge.label}</span>
                                         {c.status === 'deleted' && <span className="text-[9px] text-rose-300/80 shrink-0">已删</span>}
                                         {c.status === 'blocked' && <span className="text-[9px] text-rose-300/80 shrink-0">已拉黑</span>}
                                     </div>
-                                    <div className="text-[11px] text-white/40 truncate mt-0.5">{c.identity || c.note || '—'}</div>
+                                    <div className="text-[11px] text-white/40 truncate mt-0.5">{c.note || c.identity || '—'}</div>
                                     <div className="flex items-center gap-2 mt-1.5">
                                         <div className="h-1 flex-1 rounded-full bg-white/[0.08] overflow-hidden">
                                             <div className="h-full rounded-full" style={{ width: `${(c.affinity + 100) / 2}%`, background: affColor(c.affinity) }} />
@@ -1809,7 +1833,7 @@ ${layoutHint[layout || 'generic']}`;
         const parsed = rec ? parseTranscript(rec.detail).map(t => ({ isMe: t.isMe, content: t.text })) : [];
         return (
             <SubAppShell>
-                <TermHeader title={c.name} sub={badge.label} accent={accent} onBack={() => setActiveAppId('contacts')}
+                <TermHeader title={contactDisplayName(c)} sub={badge.label} accent={accent} onBack={() => setActiveAppId('contacts')}
                     right={<button onClick={() => askConfirm({
                         title: '彻底移除该联系人？',
                         desc: c.kind === 'real' && c.linkedCharId
