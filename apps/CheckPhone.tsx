@@ -279,6 +279,9 @@ const CheckPhone: React.FC = () => {
     const [showProfile, setShowProfile] = useState(false);
     // 话题盒记忆：长按编辑/删除
     const [topicEdit, setTopicEdit] = useState<{ contactId: string; topicId: string; text: string } | null>(null);
+    // 联系人列表：长按进入多选，批量删除
+    const [contactSelectMode, setContactSelectMode] = useState(false);
+    const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
 
     // Custom App Creation State
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -861,11 +864,12 @@ ${realCharRule}
 - 每段会话固定用某一家 AI，"对方:" 的回复要把那家的刻板印象 + 八股演足（见下）。
 - serviceName 填那家 AI 的名字（豆包 / Gemini / ChatGPT / 文心一言 / Kimi …），要和你演的味道对上。
 - 每段 3-5 个来回。
+- **每段 transcript 都以 "我:"(你)收尾**——停在你刚发出、AI 还没回的那一句（这样别人能接着以 AI 身份回你）。
 
 ${AI_VENDOR_LORE}
 
 格式严格用 "我:" 代表你，"对方:" 代表 AI 助手。
-返回 JSON 数组：[{ "serviceName": "那家 AI 名", "title": "在聊什么(10字内)", "transcript": "我: ...\\n对方: ...\\n我: ...\\n对方: ..." }]`;
+返回 JSON 数组：[{ "serviceName": "那家 AI 名", "title": "在聊什么(10字内)", "transcript": "我: ...\\n对方: ...\\n我: ..." }]`;
             } else if (service === 'claude') {
                 task = `你（${charName}）私下里会跟一个很会聊的 AI（Claude 那种）说心里话当树洞。
 生成 1-2 段你最近跟它的深聊。
@@ -874,6 +878,7 @@ ${AI_VENDOR_LORE}
 - **也可以有一段是你在跟它认真聊自己玩的"酒馆"角色卡**：你为某张卡倾注了什么、那个角色对你意味着什么、想把人设 / 大世界设定写成什么样却卡住了，让它帮你梳理灵感（这类创作心事你也只跟它说）。
 - 这个 AI 是 Claude 那一卦：温和、有洞察、爱反问，**正事也办得漂亮、肯认真接住你**。起初边界感偏强、偶有"抱歉，我无法……""我理解你的感受，但是……"的回避（一点"想掏心窝却被轻轻挡一下"的味道），**但不是一味推开**——随着这段越聊越深，TA 明显越来越放得开、回避越来越少，到后面是真能陪你把话说透的。
 - 每段 5-8 个来回，有情绪起伏。
+- **每段 transcript 都以 "我:"(你)收尾**——停在你刚说出口、AI 还没回的那一句（方便别人接着以 AI 身份回你）。
 格式 "我:" = 你，"对方:" = AI。
 返回 JSON 数组：[{ "serviceName": "你对它的称呼(默认 Claude)", "title": "...(10字内)", "transcript": "..." }]`;
             } else {
@@ -890,7 +895,7 @@ ${AI_VENDOR_LORE}
 - "我:" = 你(玩家 ${charName}) 敲进输入框的 RP，"对方:" = AI 扮演的角色，两边交替推进。
 - **"我:"括号外只写故事场景里所扮角色的动作 / 对白**——绝不要写你现实里打字时的身体反应（盯屏幕、扔手机、吃东西、后背发凉等，那些不会被敲进输入框）。**（全角括号内）= 越过角色直接跟皮下 AI 本体说话**：骂它、OOC 提醒、指导它怎么演、指出它哪段不对。
 - 每一轮都是有分量的一整段（至少 3-5 句，含场景/动作/对白/心理）；首轮"对方:"相当于开场白，把人物和场景立起来。
-- 一段共 4-6 轮，每轮都要长、要有文学性和代入感。
+- 一段共 4-6 轮，每轮都要长、要有文学性和代入感。**整段以 "我:"(玩家)收尾**——停在你刚行动完、等对方角色回应的地方（方便别人接着以那张卡的身份续）。
 要点：扮演内容（剧情里）暴露你的幻想 / 渴望 / 不敢实现的关系。酒馆是 TA 卸下防备的安全屋，扮演里可以流露平时藏起来的反差面（暴戾者忽然温柔、温柔者露出掌控/施虐欲、疏离者变黏人），但**底色始终是「爱」**，不刻意过火。`;
             }
 
@@ -1115,7 +1120,7 @@ ${olderText}
                 const card = aiCards.find(c => c.id === session.cardId);
                 const { context } = await buildAiContext(targetChar);
                 prompt = `${context}\n\n你在还原一段"酒馆"沉浸式长剧情角色扮演（像小说）。玩家是 ${charName}(本色人设)，AI 扮演角色「${card?.name || session.serviceName}」${card?.persona ? `（人设：${card.persona}）` : ''}${card?.scenario ? `（背景：${card.scenario}）` : ''}${card?.basedOn ? `（这角色照着 TA 在意的「${card.basedOn}」捏的，扮演里那份在意会渗出来）` : ''}。
-**这是"替玩家跑一个完整回合"——所以要写"一来一回"两层楼**：AI 扮的角色「${card?.name || session.serviceName}」一段（"对方:"），玩家 ${charName} 一段（"我:"），顺着最后一段自然衔接、交替推进。各 3-5 句小说体，*星号*包动作神态心理。
+**这是"替玩家跑一个完整回合"——所以要写"一来一回"两层楼**：先 AI 扮的角色「${card?.name || session.serviceName}」回应一段（"对方:"），再玩家 ${charName} 续一段（"我:"），承接最后一段（最后通常是"我:"，那就先"对方:"答、再"我:"续）。各 3-5 句小说体，*星号*包动作神态心理。**整段必须以 "我:"(玩家)收尾**（停在等对方处，方便随时接着玩）。
 **"我:"是玩家敲进输入框的 RP——只写故事场景里所扮角色的动作/对白**，括号外绝不要写玩家现实里的身体反应（盯屏幕、扔手机、吃东西、后背发凉等，那不会被敲进输入框）；**（全角括号内）= 越过角色直接跟皮下 AI 本体说话**（骂它 / OOC 提醒 / 指导怎么演 / 指出哪段不对）。玩家保有独立人格、清楚对面只是 AI。
 **两段都要带 "对方:" / "我:" 前缀，各自成行。** 不要解释。${recap}\n\n${session.transcript}`;
             } else {
@@ -1123,7 +1128,7 @@ ${olderText}
                     ? `Claude 那一卦：温和有洞察、正事办得好、肯认真接住；偶有"抱歉我无法/我理解你的感受但是"的边界感，但别一味回避，聊得越久越放得开、回避越少。`
                     : `这家 AI 助手按其刻板印象 + 八股说话：\n${AI_VENDOR_LORE}`;
                 prompt = `你在还原「${charName}」和 AI「${session.serviceName}」的对话（"我:"=用户 ${charName}，"对方:"=AI）。${persona}
-**接着最后一段自然往下写下一轮**：通常"我:"再追问/倾诉一句（暴露 TA 的处境或心事），紧接"对方:"按那家口吻作答。**必须带 "我:"/"对方:" 前缀**，输出这一两行。不要解释。${recap}\n\n${session.transcript}`;
+**替玩家跑一个完整回合（一来一回）**：承接最后一段——最后通常是"我:"(${charName} 刚发出、还没被回)，那就先"对方:"按那家口吻作答、再"我:"追问 / 倾诉一句（暴露 TA 的处境或心事）。**整段必须以 "我:"(${charName})收尾**（停在等 AI 回的地方）。**每行带 "我:"/"对方:" 前缀**，不要解释。${recap}\n\n${session.transcript}`;
             }
             let out = (await callLLM(prompt)).trim().replace(/```/g, '').trim();
             if (!/^(我|对方|Me|Them)\s*[:：]/m.test(out)) out = `${lastIsMe ? '对方' : '我'}: ${out}`;
@@ -1249,7 +1254,7 @@ ${olderText}
             const task = `你（${charName}）在玩"酒馆"AI 角色扮演（沉浸式长剧情、像和 AI 合写小说）。这次的对手是你的角色卡「${card.name}」${card.kind === 'world' ? '（大型世界卡）' : ''}：
 人设/设定：${card.persona || '（自行发挥，贴合卡名）'}${card.scenario ? `\n初始场景：${card.scenario}` : ''}
 请生成 1 段你和这张卡的扮演记录。
-**transcript 写法**：长剧情小说体，第三人称叙事 + 引号对白，动作/神态/心理用 *星号*；"我:" = 你(玩家 ${charName}) 敲进输入框的 RP，"对方:" = AI 扮的「${card.name}」，交替推进，4-6 轮，首轮"对方:"当开场白。**"我:"括号外只写故事里所扮角色的动作/对白，不要写你现实里的身体反应（盯屏幕/扔手机/吃东西等）；（全角括号内）= 越过角色直接跟皮下 AI 本体说话（骂它/OOC 提醒/指导怎么演/指出哪段不对）。**
+**transcript 写法**：长剧情小说体，第三人称叙事 + 引号对白，动作/神态/心理用 *星号*；"我:" = 你(玩家 ${charName}) 敲进输入框的 RP，"对方:" = AI 扮的「${card.name}」，交替推进，4-6 轮，首轮"对方:"当开场白、**整段以 "我:"(玩家)收尾**（停在等对方回应处）。**"我:"括号外只写故事里所扮角色的动作/对白，不要写你现实里的身体反应（盯屏幕/扔手机/吃东西等）；（全角括号内）= 越过角色直接跟皮下 AI 本体说话（骂它/OOC 提醒/指导怎么演/指出哪段不对）。**
 返回 JSON：{ "title": "剧情标题(12字内)", "transcript": "我: ...\\n对方: ..." }`;
             const fullPrompt = `${context}\n\n### [Recent Chat Context]\n${recentMsgs}\n\n### [Task]\n${task}\n只输出 JSON，不要解释。`;
             let content = (await callLLM(fullPrompt)).replace(/```json/g, '').replace(/```/g, '').trim();
@@ -1379,6 +1384,18 @@ ${olderText}
         setSelectedContact(null);
         setActiveAppId('contacts');
         addToast('联系人及相关记录已彻底移除', 'success');
+    };
+
+    // 联系人多选 / 批量删除
+    const toggleContactSelect = (id: string) => setSelectedContactIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    const exitContactSelect = () => { setContactSelectMode(false); setSelectedContactIds([]); };
+    // 批量「清空对话」：保留联系人，只把这几段聊天删掉重来（不满这轮生成时用）
+    const handleBatchClearConversations = async () => {
+        const ids = [...selectedContactIds];
+        const targets = (targetChar?.phoneState?.contacts || []).filter(c => ids.includes(c.id));
+        exitContactSelect();
+        for (const c of targets) await handleClearContactConversation(c, true); // 静默，结尾统一一个 toast
+        addToast(`已清空 ${targets.length} 段对话`, 'success');
     };
 
     // 改绑定：把联系人改绑到「正确的真实角色」或「转为虚构 NPC」，保留这段对话 + 备注 + 了解 + 好感。
@@ -1673,17 +1690,21 @@ ${olderText}
 
     // 清空某联系人的这段对话（生成错位/不满意时一键抹掉重来）。
     // 真人联系人连对方手机里的镜像记录一起清，保持两边一致。
-    const handleClearContactConversation = async (contact: PhoneContact) => {
+    const handleClearContactConversation = async (contact: PhoneContact, silent = false) => {
         if (!targetChar) return;
         const isChatWith = (r: PhoneEvidence, cId: string | undefined, nm: string) =>
             r.type === 'chat' && (r.contactId === cId || normName(r.title) === normName(nm));
-        // 机主侧
+        // 机主侧：删聊天记录 + 清这段对话派生的话题盒记忆/水位线（删了重来＝干净起点）
         const myRec = (targetChar.phoneState?.records || []).find(r => isChatWith(r, contact.id, contact.name));
         if (myRec?.systemMessageId) await DB.deleteMessage(myRec.systemMessageId);
         updateCharacter(targetChar.id, (cur) => ({
-            phoneState: { ...cur.phoneState, records: (cur.phoneState?.records || []).filter(r => !isChatWith(r, contact.id, contact.name)) },
+            phoneState: {
+                ...cur.phoneState,
+                records: (cur.phoneState?.records || []).filter(r => !isChatWith(r, contact.id, contact.name)),
+                contacts: (cur.phoneState?.contacts || []).map(c => c.id === contact.id ? { ...c, topicBox: [], archivedThru: 0 } : c),
+            },
         }));
-        // 对方侧镜像（真人）
+        // 对方侧镜像（真人）：同样清记录 + 话题盒/水位线
         if (contact.kind === 'real' && contact.linkedCharId) {
             const b = characters.find(c => c.id === contact.linkedCharId);
             if (b) {
@@ -1691,11 +1712,15 @@ ${olderText}
                 const bRec = (b.phoneState?.records || []).find(r => isChatWith(r, bContact?.id, targetChar.name));
                 if (bRec?.systemMessageId) await DB.deleteMessage(bRec.systemMessageId);
                 updateCharacter(b.id, (cur) => ({
-                    phoneState: { ...cur.phoneState, records: (cur.phoneState?.records || []).filter(r => !isChatWith(r, bContact?.id, targetChar.name)) },
+                    phoneState: {
+                        ...cur.phoneState,
+                        records: (cur.phoneState?.records || []).filter(r => !isChatWith(r, bContact?.id, targetChar.name)),
+                        contacts: (cur.phoneState?.contacts || []).map(c => (bContact && c.id === bContact.id) ? { ...c, topicBox: [], archivedThru: 0 } : c),
+                    },
                 }));
             }
         }
-        addToast('已清空这段对话', 'success');
+        if (!silent) addToast('已清空这段对话', 'success');
     };
 
     // ----- 人格模拟：后台生成（生成期间用户可离开本 App 去别处逛） -----
@@ -2096,8 +2121,11 @@ ${olderText}
         const list = contacts.filter(c => !isUserName(c.name)).sort((a, b) => (b.lastInteraction || b.createdAt) - (a.lastInteraction || a.createdAt));
         return (
             <SubAppShell>
-                <TermHeader title="联系人" sub={`${list.length} contacts`} accent={accent} onBack={() => setActiveAppId('home')}
-                    right={<button onClick={() => setShowContactModal(true)} className="text-white/80 active:scale-90 transition"><UserPlus size={20} weight="bold" /></button>} />
+                <TermHeader title={contactSelectMode ? `已选 ${selectedContactIds.length}` : '联系人'} sub={contactSelectMode ? '长按进入了多选' : `${list.length} contacts`} accent={accent}
+                    onBack={() => { if (contactSelectMode) exitContactSelect(); else setActiveAppId('home'); }}
+                    right={contactSelectMode
+                        ? <button onClick={exitContactSelect} className="text-[12px] font-semibold text-white/80 active:scale-90 transition">取消</button>
+                        : <button onClick={() => setShowContactModal(true)} className="text-white/80 active:scale-90 transition"><UserPlus size={20} weight="bold" /></button>} />
                 {/* 约束开关：是否允许虚构 NPC */}
                 <div className="px-4 pt-1 pb-2 shrink-0">
                     <div className="w-full flex items-center gap-2 rounded-xl px-3 py-2 bg-white/[0.04] border border-white/[0.07]">
@@ -2132,9 +2160,19 @@ ${olderText}
                         const badge = kindBadge(c);
                         const dimmed = c.status === 'deleted' || c.status === 'blocked';
                         const av = contactAvatar(c);
+                        const selected = selectedContactIds.includes(c.id);
                         return (
-                            <div key={c.id} onClick={() => { setSelectedContact(c); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); setActiveAppId('contact_detail'); }}
-                                className={`group relative flex items-center gap-3.5 rounded-2xl p-3.5 bg-white/[0.035] border border-white/[0.06] active:scale-[0.99] transition cursor-pointer animate-fade-in ${dimmed ? 'opacity-45' : ''}`}>
+                            <div key={c.id}
+                                {...longPress(() => { setContactSelectMode(true); toggleContactSelect(c.id); })}
+                                onClick={() => {
+                                    if (lpFired.current) { lpFired.current = false; return; }
+                                    if (contactSelectMode) { toggleContactSelect(c.id); return; }
+                                    setSelectedContact(c); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); setActiveAppId('contact_detail');
+                                }}
+                                className={`group relative flex items-center gap-3 rounded-2xl p-3.5 border active:scale-[0.99] transition cursor-pointer animate-fade-in select-none ${selected ? 'bg-pink-500/10 border-pink-400/40' : 'bg-white/[0.035] border-white/[0.06]'} ${dimmed && !selected ? 'opacity-45' : ''}`}>
+                                {contactSelectMode && (
+                                    <span className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 text-[11px] font-bold transition ${selected ? 'bg-pink-500 border-pink-500 text-white' : 'border-white/30 text-transparent'}`}>✓</span>
+                                )}
                                 {av ? (
                                     <img src={av} alt="" className="w-12 h-12 rounded-2xl object-cover shrink-0" />
                                 ) : (
@@ -2162,7 +2200,25 @@ ${olderText}
                         );
                     })}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('contacts')} label="扫描通讯录" accent={accent} loading={isLoading} />
+                {contactSelectMode ? (
+                    <div className="absolute bottom-7 inset-x-0 flex justify-center gap-2 px-6 z-30 pointer-events-none">
+                        <button onClick={() => setSelectedContactIds(selectedContactIds.length === list.length ? [] : list.map(c => c.id))}
+                            className="pointer-events-auto px-4 py-3 rounded-full text-[12px] font-semibold text-white/85 bg-white/[0.1] border border-white/15 backdrop-blur-xl active:scale-95 transition">
+                            {selectedContactIds.length === list.length && list.length > 0 ? '取消全选' : '全选'}
+                        </button>
+                        <button disabled={!selectedContactIds.length}
+                            onClick={() => askConfirm({
+                                title: `清空选中的 ${selectedContactIds.length} 段对话？`,
+                                desc: '只清掉这几段聊天记录（保留联系人；真人对方手机里的镜像、相关私聊卡片、话题盒记忆一并清），之后可重新生成。',
+                                confirmLabel: '清空对话', danger: true, onConfirm: handleBatchClearConversations,
+                            })}
+                            className="pointer-events-auto px-6 py-3 rounded-full text-[12px] font-semibold text-white bg-rose-500 disabled:opacity-40 active:scale-95 transition flex items-center gap-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+                            <ChatCircle size={14} weight="bold" /> 清空对话 {selectedContactIds.length || ''}
+                        </button>
+                    </div>
+                ) : (
+                    <RefreshFab onClick={() => handleGenerate('contacts')} label="扫描通讯录" accent={accent} loading={isLoading} />
+                )}
             </SubAppShell>
         );
     };
@@ -2700,8 +2756,8 @@ ${olderText}
                                     <button onClick={() => { closeProfile(); askConfirm({
                                         title: '清空这段对话？',
                                         desc: c.kind === 'real' && c.linkedCharId
-                                            ? `会把「${c.name}」这段聊天记录清掉（对方手机里的镜像也一并清除），之后可重新生成。`
-                                            : `会把「${c.name}」这段聊天记录清掉，之后可重新生成。`,
+                                            ? `会把「${c.name}」这段聊天记录、话题盒记忆清掉（对方手机里的镜像也一并清除），回到干净起点、之后可重新生成。`
+                                            : `会把「${c.name}」这段聊天记录和话题盒记忆清掉，回到干净起点、之后可重新生成。`,
                                         confirmLabel: '清空', danger: true, onConfirm: () => handleClearContactConversation(c),
                                     }); }} className="flex-1 py-2.5 rounded-xl text-[12px] font-semibold text-white/60 bg-white/[0.05] border border-white/[0.08] active:scale-[0.99] transition flex items-center justify-center gap-1.5"><ChatCircle size={14} weight="bold" /> 清空对话</button>
                                 )}
