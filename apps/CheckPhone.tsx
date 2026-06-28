@@ -282,6 +282,9 @@ const CheckPhone: React.FC = () => {
     // 联系人列表：长按进入多选，批量删除
     const [contactSelectMode, setContactSelectMode] = useState(false);
     const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+    // 聊天气泡：长按进入多选，删选中的几条（不满这轮生成时挑掉重来）
+    const [msgSelectMode, setMsgSelectMode] = useState(false);
+    const [selectedMsgIdx, setSelectedMsgIdx] = useState<number[]>([]);
 
     // Custom App Creation State
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1714,6 +1717,80 @@ ${olderText}
         if (!silent) addToast('已清空这段对话', 'success');
     };
 
+    // 把「编辑后的 A 视角脚本」落库：刷新机主侧记录/卡片 + 真人镜像 + 同步 archivedThru；全删空则移除记录。
+    const saveEditedConversation = async (c: PhoneContact, newDetail: string, newArchived: number) => {
+        if (!targetChar) return;
+        const isChatWith = (r: PhoneEvidence, cId: string | undefined, nm: string) =>
+            r.type === 'chat' && (r.contactId === cId || normName(r.title) === normName(nm));
+        const has = !!newDetail.trim();
+        // 机主侧卡片刷新
+        const ownerRec = (targetChar.phoneState?.records || []).find(r => isChatWith(r, c.id, c.name));
+        if (ownerRec?.systemMessageId) await DB.deleteMessage(ownerRec.systemMessageId);
+        let msgId: number | undefined;
+        if (has && targetChar.phoneState?.sendToChat !== false) {
+            msgId = await DB.saveMessage({
+                charId: targetChar.id, role: 'assistant', type: 'phone_card',
+                content: `[你手机的聊天软件] 你和「${c.name}」的对话：${newDetail.replace(/\n/g, ' ')}`,
+                metadata: { phoneCard: { app: '聊天软件', kind: 'chat', title: c.name, detail: newDetail } },
+            } as any);
+        }
+        updateCharacter(targetChar.id, (cur) => ({
+            phoneState: {
+                ...cur.phoneState,
+                records: has
+                    ? (cur.phoneState?.records || []).map(r => isChatWith(r, c.id, c.name) ? { ...r, detail: newDetail, timestamp: Date.now(), systemMessageId: msgId } : r)
+                    : (cur.phoneState?.records || []).filter(r => !isChatWith(r, c.id, c.name)),
+                contacts: (cur.phoneState?.contacts || []).map(x => x.id === c.id ? { ...x, archivedThru: newArchived } : x),
+            },
+        }));
+        // 真人镜像
+        if (c.kind === 'real' && c.linkedCharId) {
+            const b = characters.find(x => x.id === c.linkedCharId);
+            if (b) {
+                const bDetail = flipTranscript(newDetail);
+                const bHas = !!bDetail.trim();
+                const bContact = (b.phoneState?.contacts || []).find(x => x.linkedCharId === targetChar.id || normName(x.name) === normName(targetChar.name));
+                const bRec = (b.phoneState?.records || []).find(r => isChatWith(r, bContact?.id, targetChar.name));
+                if (bRec?.systemMessageId) await DB.deleteMessage(bRec.systemMessageId);
+                let bMsgId: number | undefined;
+                if (bHas && b.phoneState?.sendToChat !== false) {
+                    bMsgId = await DB.saveMessage({
+                        charId: b.id, role: 'assistant', type: 'phone_card',
+                        content: `[你手机的聊天软件] 你和「${targetChar.name}」的对话：${bDetail.replace(/\n/g, ' ')}`,
+                        metadata: { phoneCard: { app: '聊天软件', kind: 'chat', title: targetChar.name, detail: bDetail } },
+                    } as any);
+                }
+                updateCharacter(b.id, (cur) => ({
+                    phoneState: {
+                        ...cur.phoneState,
+                        records: bHas
+                            ? (cur.phoneState?.records || []).map(r => isChatWith(r, bContact?.id, targetChar.name) ? { ...r, detail: bDetail, timestamp: Date.now(), systemMessageId: bMsgId } : r)
+                            : (cur.phoneState?.records || []).filter(r => !isChatWith(r, bContact?.id, targetChar.name)),
+                        contacts: (cur.phoneState?.contacts || []).map(x => (bContact && x.id === bContact.id) ? { ...x, archivedThru: newArchived } : x),
+                    },
+                }));
+            }
+        }
+    };
+
+    const exitMsgSelect = () => { setMsgSelectMode(false); setSelectedMsgIdx([]); };
+    // 删掉聊天里选中的几条气泡（按完整脚本的下标），重排回脚本落库
+    const handleDeleteSelectedMessages = async () => {
+        if (!targetChar || !selectedContact || !selectedMsgIdx.length) { exitMsgSelect(); return; }
+        const c = selectedContact;
+        const rec = (targetChar.phoneState?.records || []).find(r => r.type === 'chat' && (r.contactId === c.id || normName(r.title) === normName(c.name)));
+        if (!rec) { exitMsgSelect(); return; }
+        const turns = parseTranscript(rec.detail);
+        const sel = new Set(selectedMsgIdx);
+        const deletedInArchived = [...sel].filter(i => i < (c.archivedThru ?? 0)).length;
+        const keep = turns.filter((_, i) => !sel.has(i));
+        const newDetail = serializeTurns(keep);
+        const newArchived = Math.max(0, (c.archivedThru ?? 0) - deletedInArchived);
+        await saveEditedConversation(c, newDetail, newArchived);
+        addToast(`已删除 ${sel.size} 条`, 'success');
+        exitMsgSelect();
+    };
+
     // ----- 人格模拟：后台生成（生成期间用户可离开本 App 去别处逛） -----
     const runSim = async (m: 'daily' | 'event', t: string, presence: 'default' | 'light' | 'none' = 'default', tone: 'mix' | 'depressive' | 'darkhumor' | 'cute' = 'mix') => {
         if (!targetChar) return;
@@ -2158,7 +2235,7 @@ ${olderText}
                                 onClick={() => {
                                     if (lpFired.current) { lpFired.current = false; return; }
                                     if (contactSelectMode) { toggleContactSelect(c.id); return; }
-                                    setSelectedContact(c); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); setActiveAppId('contact_detail');
+                                    setSelectedContact(c); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); exitMsgSelect(); setActiveAppId('contact_detail');
                                 }}
                                 className={`group relative flex items-center gap-3 rounded-2xl p-3.5 border active:scale-[0.99] transition cursor-pointer animate-fade-in select-none ${selected ? 'bg-pink-500/10 border-pink-400/40' : 'bg-white/[0.035] border-white/[0.06]'} ${dimmed && !selected ? 'opacity-45' : ''}`}>
                                 {contactSelectMode && (
@@ -2558,7 +2635,7 @@ ${olderText}
                 <div className="shrink-0 z-20">
                     <StatusStrip />
                     <div className="h-14 flex items-center gap-2 px-3">
-                        <button onClick={() => setActiveAppId('contacts')} className="w-9 h-9 -ml-0.5 rounded-full flex items-center justify-center text-white/80 bg-white/[0.05] border border-white/[0.08] active:scale-90 transition shrink-0">
+                        <button onClick={() => { if (msgSelectMode) exitMsgSelect(); else setActiveAppId('contacts'); }} className="w-9 h-9 -ml-0.5 rounded-full flex items-center justify-center text-white/80 bg-white/[0.05] border border-white/[0.08] active:scale-90 transition shrink-0">
                             <CaretLeft size={18} weight="bold" />
                         </button>
                         <button onClick={() => setShowProfile(true)} className="flex items-center gap-2.5 flex-1 min-w-0 active:opacity-70 transition">
@@ -2588,8 +2665,20 @@ ${olderText}
                             ▲ 展开更早的 {hidden} 条消息
                         </button>
                     )}
-                    {shown.map((m, i) => (
-                        <div key={i} className={`flex items-end gap-2 ${m.isMe ? 'justify-end' : 'justify-start'}`}>
+                    {shown.map((m, i) => {
+                        const realIdx = hidden + i; // 映射回完整脚本下标
+                        const sel = selectedMsgIdx.includes(realIdx);
+                        return (
+                        <div key={realIdx}
+                            {...longPress(() => { setMsgSelectMode(true); setSelectedMsgIdx(prev => prev.includes(realIdx) ? prev : [...prev, realIdx]); })}
+                            onClick={() => {
+                                if (lpFired.current) { lpFired.current = false; return; }
+                                if (msgSelectMode) setSelectedMsgIdx(prev => prev.includes(realIdx) ? prev.filter(x => x !== realIdx) : [...prev, realIdx]);
+                            }}
+                            className={`flex items-end gap-2 select-none ${m.isMe ? 'justify-end' : 'justify-start'} ${msgSelectMode ? 'cursor-pointer rounded-xl -mx-1 px-1 py-0.5 transition ' + (sel ? 'bg-pink-500/15' : '') : ''}`}>
+                            {msgSelectMode && (
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 text-[9px] font-bold self-center ${sel ? 'bg-pink-500 border-pink-500 text-white' : 'border-white/30 text-transparent'} ${m.isMe ? 'order-last' : ''}`}>✓</span>
+                            )}
                             {!m.isMe && (av
                                 ? <img src={av} alt="" className="w-7 h-7 rounded-xl object-cover shrink-0" />
                                 : <div className="w-7 h-7 rounded-xl flex items-center justify-center text-[11px] text-white shrink-0" style={{ background: `linear-gradient(135deg, ${accent}40, ${accent}10)` }}>{c.name[0]}</div>)}
@@ -2597,7 +2686,7 @@ ${olderText}
                                 style={m.isMe ? { background: `linear-gradient(135deg, ${accent}, ${accent}bb)` } : undefined}>{m.content}</div>
                             {m.isMe && <img src={targetChar.avatar} alt="" className="w-7 h-7 rounded-xl object-cover shrink-0" />}
                         </div>
-                    ))}
+                    );})}
                     {isLoading && (
                         <div className="flex justify-center py-3">
                             <div className="flex gap-1.5">
@@ -2610,9 +2699,23 @@ ${olderText}
                     <div ref={contactEndRef} />
                 </div>
 
-                {/* 底部：发起 / 偷看对话（像聊天的输入区） */}
+                {/* 底部：多选时＝删除选中条；否则＝发起/偷看对话（像聊天输入区） */}
                 <div className="shrink-0 w-full p-4 pb-6">
-                    {isReal ? (
+                    {msgSelectMode ? (
+                        <div className="flex gap-2">
+                            <button onClick={exitMsgSelect}
+                                className="px-5 py-3 rounded-2xl text-[13px] font-semibold text-white/75 bg-white/[0.06] border border-white/[0.08] active:scale-[0.99] transition">取消</button>
+                            <button disabled={!selectedMsgIdx.length}
+                                onClick={() => askConfirm({
+                                    title: `删除选中的 ${selectedMsgIdx.length} 条消息？`,
+                                    desc: c.kind === 'real' && c.linkedCharId ? '这几条会从两边手机里一并删除。' : '从这段对话里删掉这几条。',
+                                    confirmLabel: '删除', danger: true, onConfirm: handleDeleteSelectedMessages,
+                                })}
+                                className="flex-1 py-3 rounded-2xl text-[13px] font-semibold text-white bg-rose-500 disabled:opacity-40 active:scale-[0.99] transition flex items-center justify-center gap-2">
+                                <Trash size={16} weight="bold" /> 删除选中 {selectedMsgIdx.length || ''}
+                            </button>
+                        </div>
+                    ) : isReal ? (
                         <button onClick={() => handleRealConversation(c)} disabled={isLoading}
                             className="w-full py-3 rounded-2xl text-[13px] font-semibold text-white active:scale-[0.99] transition flex items-center justify-center gap-2"
                             style={{ background: `linear-gradient(135deg, ${accent}, ${accent}bb)` }}>
