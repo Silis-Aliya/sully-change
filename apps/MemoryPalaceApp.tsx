@@ -2509,7 +2509,7 @@ export default function MemoryPalaceApp() {
                         <div>
                             <label className={labelClass}>BASE URL</label>
                             <input type="text" value={lightUrl} onChange={e => setLightUrl(e.target.value)}
-                                placeholder="https://api.siliconflow.cn/v1" className={inputClass} />
+                                placeholder="https://..." className={inputClass} />
                         </div>
                         <div>
                             <label className={labelClass}>API KEY</label>
@@ -2519,9 +2519,10 @@ export default function MemoryPalaceApp() {
                         <div>
                             <label className={labelClass}>MODEL</label>
                             <input type="text" value={lightModel} onChange={e => setLightModel(e.target.value)}
-                                placeholder="deepseek-ai/DeepSeek-V2.5" className={inputClass} />
+                                placeholder="一个便宜的对话模型名" className={inputClass} />
                             <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, paddingLeft: 4 }}>
-                                推荐: deepseek-ai/DeepSeek-V2.5 · Qwen/Qwen2.5-7B-Instruct · GLM-4-Flash
+                                填任意一家便宜的<b>对话模型</b>即可（按主 API 一样的填法），自己挑就好。
+                                注意：这里要的是跑后台文字任务的<b>对话</b>模型，<b>不是</b> embedding 向量模型——别填到下面 Embedding 区才该用的那类。
                             </div>
                         </div>
                     </div>
