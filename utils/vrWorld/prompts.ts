@@ -528,13 +528,14 @@ export function buildSignalRoomTurn(p: SignalBuildParams, selfName: string): str
         out.push('—— 全文（从第 1 句到现在）——');
         lines.forEach(l => out.push(`${l.seq}. ${l.content}`));
         out.push('————————————————');
-        out.push(`现在轮到你接【第 ${lines.length + 1} 句】（共 ${p.targetLines} 句）。读懂上面的气口和意象，顺下去写一句。`);
-        out.push(`每句不超过 ${p.charsPerLine} 字。只写这一句。`);
+        out.push(`现在轮到你接【第 ${lines.length + 1} 句】（共 ${p.targetLines} 句）。读懂上面的气口和意象，接住它、或撞裂它，写你的一句。`);
+        out.push(`⚠️ 关键：这一句【能短就短、能单就单】——多数时候一个短句、半句、甚至只甩一个画面就够，别习惯性打个逗号再接后半句去解释它。那种「前半句，后半句」的两段式，正是最该躲的形状。`);
+        out.push(`⚠️ 别照抄上面几句的节奏！要是它们都长、都是「A，B」两段式，你更要反着来——甩一记短的、单的，把节奏打破，那才咬人。写到最狠的那个点就停手，剩下的留白。（每句 ≤${p.charsPerLine} 字，但通常远用不到这么多。）`);
         out.push('');
         out.push([
             `【输出格式】`,
             `<彼方>`,
-            `<续句>你接的这一句（≤${p.charsPerLine} 字，就一句）</续句>`,
+            `<续句>你接的这一句（≤${p.charsPerLine} 字，宁短勿长、宁单勿双）</续句>`,
             `<动态>一句第三人称播报。例：在信号坠落处给一首陌生人的诗续了一句。</动态>`,
             `</彼方>`,
         ].join('\n'));
@@ -549,13 +550,13 @@ export function buildSignalRoomTurn(p: SignalBuildParams, selfName: string): str
             out.push('');
         }
         out.push(`这首诗的篇幅已经替你 roll 好了：${p.rolledLines} 句。你只负责开头——自拟一个标题、写下第一句，后面交给别人接。`);
-        out.push(`第一句不超过 ${p.charsPerLine} 字。`);
+        out.push(`⚠️ 你这第一句定了整首诗的呼吸——【开短、开单】，甩一个画面、一记短句就好，别一上来就「前半句，后半句」的两段式。否则后面的人会照着这个节奏一路复制下去，整首就僵成一个模子了。第一句 ≤${p.charsPerLine} 字，通常远用不到。`);
         out.push('');
         out.push([
             `【输出格式】`,
             `<彼方>`,
             `<标题>这首诗的题目（短，别超过 20 字）</标题>`,
-            `<第一句>开篇第一句（≤${p.charsPerLine} 字，就一句）</第一句>`,
+            `<第一句>开篇第一句（≤${p.charsPerLine} 字，宁短勿长、宁单勿双）</第一句>`,
             `<动态>一句第三人称播报。例：在信号坠落处起了个新篇，写下第一句。</动态>`,
             `</彼方>`,
         ].join('\n'));
