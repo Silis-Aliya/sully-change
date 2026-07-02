@@ -16,7 +16,7 @@ import { armDateResumeAttempt, clearDateResumeAttempt, takeCrashedDateResume } f
 import { BookOpen, Sparkle, CaretLeft, GearSix } from '@phosphor-icons/react';
 
 const DateApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, setActiveCharacterId, apiConfig, addToast, updateCharacter, virtualTime, userProfile, memoryPalaceConfig } = useOS();
+    const { closeApp, characters, activeCharacterId, setActiveCharacterId, apiConfig, addToast, updateCharacter, virtualTime, userProfile, memoryPalaceConfig, dateAutoStartCharId, consumeDateAutoStart } = useOS();
 
     // 记忆宫殿（与聊天侧共用同一套上下文：同 charId、同高水位线）
     // 见面流也需要在 AI 回复后跑一次缓冲区检查 + 自动归档，否则只有"读"没有"写"。
@@ -156,6 +156,15 @@ const DateApp: React.FC = () => {
             startPeek(c);
         }
     };
+
+    // 从聊天「见面」按钮跳进来：等同于在选择页点击该角色（有存档则弹继续/新开，否则直接感知）
+    useEffect(() => {
+        if (!dateAutoStartCharId) return;
+        const target = characters.find(c => c.id === dateAutoStartCharId);
+        consumeDateAutoStart();
+        if (target) handleCharClick(target);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dateAutoStartCharId]);
 
     const handleResumeSession = () => {
         if (!pendingSessionChar) return;
