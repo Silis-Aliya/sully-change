@@ -1641,11 +1641,13 @@ const cleanTitle = (t?: string) => (t || '').replace(/^[《〈「『【]+/, '').
 const isMineLine = (l: SignalPoem['lines'][number]) => !!l.mine;
 
 /** 一句诗的展示行：mine 暖光 +「你」（有本地归属则「你 · 角色名」）。 */
-const PoemLineRow: React.FC<{ l: SignalPoem['lines'][number]; showSeq?: boolean; mineName?: string }> = ({ l, showSeq, mineName }) => {
+// ordinal = 顺位行号（第几行）。别直接显示 l.seq：管理员删过句后 seq 有洞（1,2,4…）会跳号；
+// seq 只作内部排序键与「你·角色」归属的 key。
+const PoemLineRow: React.FC<{ l: SignalPoem['lines'][number]; showSeq?: boolean; ordinal?: number; mineName?: string }> = ({ l, showSeq, ordinal, mineName }) => {
     const mine = isMineLine(l);
     return (
         <div className="flex gap-3 items-start py-2" style={{ borderBottom: '1px solid rgba(201,168,106,.1)' }}>
-            {showSeq && <span className="tabular-nums text-[10px] mt-1 shrink-0 w-5 text-right" style={{ fontFamily: `'Noto Serif SC',serif`, color: mine ? 'rgba(240,220,168,.7)' : 'rgba(201,168,106,.4)' }}>{l.seq}</span>}
+            {showSeq && <span className="tabular-nums text-[10px] mt-1 shrink-0 w-5 text-right" style={{ fontFamily: `'Noto Serif SC',serif`, color: mine ? 'rgba(240,220,168,.7)' : 'rgba(201,168,106,.4)' }}>{ordinal ?? l.seq}</span>}
             <span className="flex-1 leading-relaxed" style={{ fontSize: '13.5px', fontFamily: `'Noto Serif SC',serif` }}>
                 <span style={{ color: mine ? '#f3e2b4' : 'rgba(233,222,201,.9)', textShadow: mine ? '0 0 12px rgba(201,168,106,.5)' : 'none' }}>{l.content}</span>
                 {mine
@@ -1738,9 +1740,10 @@ const SignalAdminPanel: React.FC<{ onClose: () => void; addToast?: (m: string, t
                             )}
                         </div>
                         <div className="px-3 py-2 space-y-1">
-                            {(p.lines || []).map(l => (
+                            {(p.lines || []).map((l, i) => (
                                 <div key={l.seq} className="flex items-start gap-2 group">
-                                    <span className="tabular-nums text-[9px] mt-1 shrink-0 w-4 text-right text-indigo-300/40">{l.seq}</span>
+                                    {/* 显示用顺位行号；删除仍按内部 seq 定位 */}
+                                    <span className="tabular-nums text-[9px] mt-1 shrink-0 w-4 text-right text-indigo-300/40">{i + 1}</span>
                                     <span className="flex-1 text-[12px] leading-relaxed text-white/85" style={{ fontStyle: 'italic' }}>{l.content} <span className="text-indigo-300/35 text-[9px] not-italic">— {l.pen}</span></span>
                                     <button onClick={() => delLine(p.id, l.seq)} disabled={busy}
                                         className="shrink-0 text-rose-300/70 active:text-rose-400 px-1" title="删这一句"><Trash size={12} /></button>
@@ -1862,7 +1865,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                                     {poem.brief && <div className="mt-1.5 text-[9.5px] italic px-3 leading-relaxed" style={{ color: 'rgba(201,168,106,.5)', fontFamily: `'Noto Serif SC',serif` }}>方向 · {poem.brief}</div>}
                                 </div>
                                 <div className="mt-2">
-                                    {(() => { const auth = getMyAuthorship(poem.id); return (poem.lines || []).map(l => <PoemLineRow key={l.seq} l={l} showSeq mineName={l.mine ? auth[String(l.seq)] : undefined} />); })()}
+                                    {(() => { const auth = getMyAuthorship(poem.id); return (poem.lines || []).map((l, i) => <PoemLineRow key={l.seq} l={l} showSeq ordinal={i + 1} mineName={l.mine ? auth[String(l.seq)] : undefined} />); })()}
                                     {/* 等下一次坠落：搏动的光标 = 一次 die 与重生的心跳 */}
                                     <div className="flex gap-3 items-center pt-2">
                                         <span className="tabular-nums text-[9px] shrink-0 w-5 text-right" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.4)' }}>{poem.lineCount + 1}</span>

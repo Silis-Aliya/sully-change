@@ -539,7 +539,8 @@ export function buildSignalRoomTurn(p: SignalBuildParams, selfName: string): str
             out.push(`【这首诗的方向（发起者定的，你接的时候往这上头走）】：${p.poemBrief}`);
         }
         out.push('—— 全文（从第 1 句到现在）——');
-        lines.forEach(l => out.push(`${l.seq}. ${l.content}`));
+        // 按顺位编号（不用 seq）：管理员删过句后 seq 会有洞（1,2,4…），别把跳号喂给模型
+        lines.forEach((l, i) => out.push(`${i + 1}. ${l.content}`));
         out.push('————————————————');
         out.push(`现在轮到你往下接【1~2 行】（共 ${p.targetLines} 句，别一次写太多）。`);
         out.push(`⚠️ 最要紧：顺着上面那个【方向】和最后一句的气口，把这首诗【往下发展】——它不该是一堆互不相干的碎片清单，而是一群人沉住气、把同一件事（同一个意象、同一种情绪）往深里推。你的 1~2 行要像从上一句同一口气里长出来的：可以承接、可以翻转、可以递进，但要接得上、有呼吸、有推进。`);
