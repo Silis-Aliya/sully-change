@@ -337,18 +337,29 @@ function pickMaterialLines(nodes: MemoryNode[], room: PlateRoom): string[] {
 /**
  * 全量整理四块门牌。由 runCognitiveDigestion 在消化尾声调用，
  * 也可从 UI 手动触发。一次 LLM 调用覆盖全部房间。
+ *
+ * @param extraMaterial 消化状态机之外提交的蒸馏候选（synthesize_user /
+ *   internalize / self_insight 的产出）。放在原料最前——它们是本次消化
+ *   刚提炼的概括，优先级高于按 importance 挑出的旧节点，且不占节点配额。
  */
 export async function consolidateAllPlates(
     charId: string,
     charName: string,
     userName: string | undefined,
     llmConfig: LightLLMConfig,
+    extraMaterial?: Partial<Record<PlateRoom, string[]>>,
 ): Promise<{ updated: PlateRoom[] }> {
     const allNodes = await MemoryNodeDB.getByCharId(charId);
-    const materials: PlateMaterial[] = PLATE_ROOMS.map(room => ({
-        room,
-        lines: pickMaterialLines(allNodes, room),
-    }));
+    const materials: PlateMaterial[] = PLATE_ROOMS.map(room => {
+        const extra = (extraMaterial?.[room] || [])
+            .map(l => l.replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .map(l => l.slice(0, MATERIAL_LINE_MAX_CHARS * 2)); // 领悟全文可到 200 字，放宽截断
+        return {
+            room,
+            lines: [...extra, ...pickMaterialLines(allNodes, room)],
+        };
+    });
     return consolidatePlates(charId, charName, userName || '用户', materials, llmConfig);
 }
 

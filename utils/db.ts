@@ -16,7 +16,7 @@ import { exportMcdLocal, importMcdLocal } from './mcdMcpClient';
 import { exportWorldHomeLocal, importWorldHomeLocal } from './worldHome/localBackup';
 
 const DB_NAME = 'AetherOS_Data';
-const DB_VERSION = 65; // Bumped: v65 记忆宫殿房间门牌 room_plates（情景→语义固化层）
+const DB_VERSION = 66; // Bumped: v66 消化日志 digest_reports（v65 房间门牌 room_plates）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_MESSAGES = 'messages';
@@ -378,6 +378,12 @@ export const openDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains('room_plates')) {
           const rpStore = db.createObjectStore('room_plates', { keyPath: 'id' });
           rpStore.createIndex('charId', 'charId', { unique: false });
+      }
+
+      // ─── 消化日志（v66 新增，认知消化可回看记录） ─────
+      if (!db.objectStoreNames.contains('digest_reports')) {
+          const drStore = db.createObjectStore('digest_reports', { keyPath: 'id' });
+          drStore.createIndex('charId', 'charId', { unique: false });
       }
 
       // ─── v48 一次性强制清空记忆宫殿（EventBox 体系，旧 boxId 数据不兼容） ───

@@ -1,19 +1,29 @@
 /**
  * Memory Palace — 认知消化 (Cognitive Digestion)
  *
- * 模拟大脑的后台认知过程。每次封盒后触发一次"消化循环"，
- * 角色带着自己的人设和记忆，对所有待消化的内容做一次统一审视：
+ * 模拟大脑的后台认知过程。角色带着自己的人设和记忆，
+ * 对所有待消化的内容做一次统一审视。消化是**纯状态机**：
  *
  * - 阁楼困惑：化解了→卧室 / 恶化→创伤加深 / 淡忘→衰减
  * - 窗台期盼：实现了→卧室温暖记忆 / 落空了→阁楼心结
- * - 书房知识：反复访问→内化为自我认同（self_room）
+ * - 自我反刍：新困惑→阁楼
+ *
+ * 概括类产出（书房内化 / 用户信息整合 / 自我领悟）**不再新建记忆节点**——
+ * 它们是语义不是情景，写回情景库会变成"泛情感高 imp 记忆"污染召回
+ * （近似重复词条问题的根源）。这些产出作为蒸馏候选提交给房间门牌
+ * （roomPlates.ts），由门牌的合并语义 + 容量上限自然防过拟合。
+ * 被消费的源节点打 digestedAt 标记退出候选池。
+ *
+ * 每次消化落一条 DigestReport（消化日志），可在记忆宫殿 App 回看
+ * "这次到底消化了什么"。
  *
  * 这不是分区域轮流审查，而是一次 LLM 调用，角色作为一个整体去"回想"。
  */
 
-import type { MemoryNode, Anticipation, PersonalityStyle, EmbeddingConfig, RemoteVectorConfig } from './types';
+import type { MemoryNode, Anticipation, PersonalityStyle, EmbeddingConfig, RemoteVectorConfig, PlateRoom, DigestReport, DigestReportSection } from './types';
+import { PLATE_TITLES } from './types';
 import type { LightLLMConfig } from './pipeline';
-import { MemoryNodeDB, AnticipationDB } from './db';
+import { MemoryNodeDB, AnticipationDB, DigestReportDB } from './db';
 import { fulfillAnticipation, disappointAnticipation } from './anticipation';
 import { vectorizeAndStore } from './vectorStore';
 import { safeFetchJson } from '../safeApi';
@@ -41,16 +51,16 @@ interface DigestAction {
         | 'fade'           // 淡忘 → importance 降低
         | 'fulfill'        // 期盼实现
         | 'disappoint'     // 期盼落空
-        | 'internalize'    // 书房知识内化 → 生成 self_room 记忆
-        | 'synthesize_user' // user_room 信息整合 → 合并/归类用户信息
-        | 'self_insight'    // self_room 反刍 → 产生自我领悟（常驻词条）
-        | 'self_confuse'    // self_room 反刍 → 产生新的自我困惑 → 阁楼
+        | 'internalize'    // 书房知识内化 → 提交「我是谁」门牌（不再新建节点）
+        | 'synthesize_user' // user_room 信息整合 → 提交「TA的事」门牌（不再新建节点）
+        | 'self_insight'    // self_room 反刍 → 自我领悟：弹窗昭告 + 提交「我是谁」门牌
+        | 'self_confuse'    // self_room 反刍 → 产生新的自我困惑 → 阁楼（状态机输入，仍建节点）
         | 'keep';          // 维持现状
-    /** 角色的内心独白（用于生成新记忆时的 content） */
+    /** 角色的内心独白（状态机动作的改写内容 / 概括类动作的门牌候选文本） */
     reflection?: string;
     /** synthesize_user 时的分类标签 */
     category?: string;
-    /** self_insight 产生的简短常驻词条（注入到 contextBuilder） */
+    /** self_insight 的领悟全文（弹窗展示 + 门牌蒸馏候选） */
     insight?: string;
 }
 
@@ -116,9 +126,10 @@ async function gatherDigestMaterial(charId: string): Promise<{
 }> {
     const allNodes = await MemoryNodeDB.getByCharId(charId);
 
-    // 已经被消化过一次的源节点集合：若它的 id 是某条 digestion 衍生记忆的 sourceId，
-    // 说明上次消化已为它产出过 internalize/synthesize_user/self_insight/self_confuse —
-    // 不再让它进入下一轮 LLM 候选，否则同一源会被反复 self_insight 出近似条目。
+    // 已经被消化过一次的源节点不再进入候选池，否则同一源会被反复
+    // synthesize/insight 出近似条目。两代标记并用：
+    //   - digestedAt 字段（新）：消化改道门牌后由 executeActions 显式打标
+    //   - sourceId 反查（旧）：改道前靠衍生节点的 sourceId 隐式标记，兜底旧数据
     const digestedSourceIds = new Set<string>();
     for (const n of allNodes) {
         if (n.origin === 'digestion' && n.sourceId) digestedSourceIds.add(n.sourceId);
@@ -126,7 +137,7 @@ async function gatherDigestMaterial(charId: string): Promise<{
     // digestion 衍生节点自身也不参与下一轮处理：它们是产物，不是原料；
     // 反刍它们会让 LLM 产出"insight 的 insight"，正是用户截图里那种近似重复条目的来源。
     const isFreshCandidate = (n: MemoryNode) =>
-        n.origin !== 'digestion' && !digestedSourceIds.has(n.id);
+        n.origin !== 'digestion' && !n.digestedAt && !digestedSourceIds.has(n.id);
 
     // 阁楼：所有未消化的困惑（resolve/deepen/fade 修改原节点，不会产生衍生重复，无需过滤）
     const atticNodes = allNodes.filter(n => n.room === 'attic');
@@ -387,15 +398,20 @@ async function executeActions(
         userRoomNodes: MemoryNode[];
         selfRoomNodes: MemoryNode[];
     },
-): Promise<DigestResult> {
+): Promise<{ result: DigestResult; plateSubmissions: Partial<Record<PlateRoom, string[]>> }> {
     const result: DigestResult = {
         resolved: [], deepened: [], faded: [],
         fulfilled: [], disappointed: [], internalized: [],
         synthesizedUser: [], selfInsights: [], selfConfused: [],
     };
+    // 概括类产出的归宿：不落节点，作为蒸馏候选提交给门牌
+    const plateSubmissions: Partial<Record<PlateRoom, string[]>> = {};
+    const submitToPlate = (room: PlateRoom, line: string) => {
+        (plateSubmissions[room] ||= []).push(line);
+    };
 
     // 保存新衍生节点前用于查重的全量快照（同房间内容近似的就跳过 save）。
-    // 本轮内新建的也加进来，防止同一轮里 LLM 返回两条 reflection 文案近似的动作。
+    // 现在只剩 self_confuse 还新建节点（阁楼困惑是状态机的合法输入）。
     const existingNodes = await MemoryNodeDB.getByCharId(charId);
 
     for (const action of actions) {
@@ -461,119 +477,57 @@ async function executeActions(
                 }
 
                 case 'internalize': {
-                    // 书房→self_room：知识内化为自我认同
+                    // 书房知识内化：概括是语义不是情景——不再新建 self_room 节点，
+                    // reflection 提交给「我是谁」门牌蒸馏；源节点打标退出候选池。
                     const node = material.studyNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
-                        const dup = findNearDuplicateInRoom(existingNodes, 'self_room', action.reflection);
-                        if (dup) {
-                            console.log(`🪞 [Digest] Skip internalize (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
-                            break;
-                        }
-                        const selfMemory: MemoryNode = {
-                            id: generateId(),
-                            charId,
-                            content: action.reflection,
-                            room: 'self_room',
-                            tags: ['内化', '成长', ...node.tags],
-                            importance: Math.max(node.importance, 7),
-                            mood: 'peaceful',
-                            embedded: false,
-                            boxId: node.boxId,
-                            boxTopic: '认知内化',
-                            createdAt: node.createdAt,
-                            lastAccessedAt: Date.now(),
-                            accessCount: 0,
-                            sourceId: node.id,
-                            origin: 'digestion',
-                        };
-                        await MemoryNodeDB.save(selfMemory);
-                        existingNodes.push(selfMemory);
-                        result.internalized.push({ id: selfMemory.id, content: selfMemory.content });
-                        console.log(`🪞 [Digest] Internalized → self_room: "${action.reflection.slice(0, 30)}..."`);
+                        node.digestedAt = Date.now();
+                        await MemoryNodeDB.save(node);
+                        result.internalized.push({ id: node.id, content: action.reflection });
+                        submitToPlate('self_room', action.reflection);
+                        console.log(`🪞 [Digest] Internalize → 门牌候选(self_room): "${action.reflection.slice(0, 30)}..."`);
                     }
                     break;
                 }
 
                 case 'synthesize_user': {
-                    // user_room：信息整合，将零散词条合并为分类化的认知
+                    // 用户信息整合：同理不落节点，提交给「TA的事」门牌。
+                    // 过时/站不住的概括会在门牌合并时被容量压力挤掉，而非永久驻留召回池。
                     const node = material.userRoomNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
-                        const dup = findNearDuplicateInRoom(existingNodes, 'user_room', action.reflection);
-                        if (dup) {
-                            console.log(`👤 [Digest] Skip synthesize_user (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
-                            break;
-                        }
+                        node.digestedAt = Date.now();
+                        await MemoryNodeDB.save(node);
                         const category = action.category || '综合';
-                        const synthesized: MemoryNode = {
-                            id: generateId(),
-                            charId,
-                            content: action.reflection,
-                            room: 'user_room',
-                            tags: [category, '整合认知', ...node.tags.filter(t => t !== '整合认知')],
-                            importance: Math.max(node.importance, 6),
-                            mood: 'peaceful',
-                            embedded: false,
-                            boxId: node.boxId,
-                            boxTopic: `用户认知整合·${category}`,
-                            createdAt: node.createdAt,
-                            lastAccessedAt: Date.now(),
-                            accessCount: 0,
-                            sourceId: node.id,
-                            origin: 'digestion',
-                        };
-                        await MemoryNodeDB.save(synthesized);
-                        existingNodes.push(synthesized);
-                        result.synthesizedUser.push({ id: synthesized.id, content: synthesized.content, category });
-                        console.log(`👤 [Digest] Synthesized user → user_room [${category}]: "${action.reflection.slice(0, 30)}..."`);
+                        result.synthesizedUser.push({ id: node.id, content: action.reflection, category });
+                        submitToPlate('user_room', `[${category}] ${action.reflection}`);
+                        console.log(`👤 [Digest] Synthesize user → 门牌候选(user_room) [${category}]: "${action.reflection.slice(0, 30)}..."`);
                     }
                     break;
                 }
 
                 case 'self_insight': {
-                    // self_room 反刍 → 产生常驻自我领悟词条
+                    // 自我领悟：弹窗昭告的时刻保留（result.selfInsights 仍驱动 UI），
+                    // 但归宿从 char.selfInsights（只进不出的追加列表）换成「我是谁」门牌——
+                    // 时刻是体验，存储是架构。
                     const node = material.selfRoomNodes.find(n => n.id === action.id);
                     if (node && action.insight) {
-                        const insightContent = action.reflection || action.insight;
-                        // self_room 同时按 content 和 insight 全文查一次，
-                        // 因为 content 是 50 字内独白，insight 是 200 字全文，两者风格不同。
-                        const dupByContent = findNearDuplicateInRoom(existingNodes, 'self_room', insightContent);
-                        const dupByInsight = findNearDuplicateInRoom(existingNodes, 'self_room', action.insight);
-                        if (dupByContent || dupByInsight) {
-                            const dup = dupByContent || dupByInsight!;
-                            console.log(`💡 [Digest] Skip self_insight (dup of ${dup.id}): "${action.insight.slice(0, 30)}..."`);
-                            break;
-                        }
-                        // 将领悟作为特殊标记的 self_room 记忆存储
-                        const insightMemory: MemoryNode = {
-                            id: generateId(),
-                            charId,
-                            content: insightContent,
-                            room: 'self_room',
-                            tags: ['自我领悟', '常驻', ...node.tags.filter(t => t !== '自我领悟' && t !== '常驻')],
-                            importance: 9, // 领悟是高重要性的
-                            mood: 'peaceful',
-                            embedded: false,
-                            boxId: 'digest_self_insight',
-                            boxTopic: '自我领悟',
-                            createdAt: node.createdAt,
-                            lastAccessedAt: Date.now(),
-                            accessCount: 0,
-                            sourceId: node.id,
-                            origin: 'digestion',
-                        };
-                        await MemoryNodeDB.save(insightMemory);
-                        existingNodes.push(insightMemory);
-                        // 返回 insight 文本用于注入 contextBuilder
+                        node.digestedAt = Date.now();
+                        await MemoryNodeDB.save(node);
                         result.selfInsights.push(action.insight);
-                        console.log(`💡 [Digest] Self insight: "${action.insight}"`);
+                        submitToPlate('self_room', action.insight);
+                        console.log(`💡 [Digest] Self insight → 门牌候选(self_room): "${action.insight.slice(0, 40)}..."`);
                     }
                     break;
                 }
 
                 case 'self_confuse': {
-                    // self_room 反刍 → 产生新的自我困惑 → 阁楼
+                    // self_room 反刍 → 产生新的自我困惑 → 阁楼。
+                    // 这条保留建节点：新困惑是状态机的合法输入（后续消化会 resolve/deepen/fade 它），
+                    // 不是语义概括。源节点仍打标退出候选池，防止反复困惑。
                     const node = material.selfRoomNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
+                        node.digestedAt = Date.now();
+                        await MemoryNodeDB.save(node);
                         const dup = findNearDuplicateInRoom(existingNodes, 'attic', action.reflection);
                         if (dup) {
                             console.log(`🌀 [Digest] Skip self_confuse (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
@@ -609,7 +563,7 @@ async function executeActions(
         }
     }
 
-    return result;
+    return { result, plateSubmissions };
 }
 
 // ─── 主入口 ──────────────────────────────────────────
@@ -653,15 +607,78 @@ async function vectorizeOrphanedNodes(charId: string, embeddingConfig: Embedding
     }
 }
 
+/** 组装 + 落盘消化日志（失败只 warn，不影响消化结果） */
+async function saveDigestReport(
+    charId: string,
+    trigger: 'auto' | 'manual',
+    userName: string | undefined,
+    material: Awaited<ReturnType<typeof gatherDigestMaterial>> | null,
+    result: DigestResult,
+    plateSubmissions: Partial<Record<PlateRoom, string[]>>,
+    plateUpdated: PlateRoom[],
+): Promise<void> {
+    const preview = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 100);
+    const userLabel = userName || '用户';
+    try {
+        const examined: DigestReportSection[] = [];
+        if (material) {
+            const sec = (label: string, items: string[]) => {
+                if (items.length > 0) examined.push({ label, items: items.map(preview) });
+            };
+            sec('阁楼困惑', material.atticNodes.map(n => n.content));
+            sec('窗台期盼', material.anticipations.map(a => a.content));
+            sec('书房知识', material.studyNodes.map(n => n.content));
+            sec(`${userLabel}的房间`, material.userRoomNodes.map(n => n.content));
+            sec('自我认知', material.selfRoomNodes.map(n => n.content));
+        }
+
+        const outcomes: DigestReportSection[] = [];
+        const out = (label: string, items: string[]) => {
+            if (items.length > 0) outcomes.push({ label, items: items.map(preview) });
+        };
+        out('化解（阁楼→卧室）', result.resolved.map(e => e.content));
+        out('创伤加深', result.deepened.map(e => e.content));
+        out('淡忘', result.faded.map(e => e.content));
+        out('期盼实现', result.fulfilled.map(e => e.content));
+        out('期盼落空', result.disappointed.map(e => e.content));
+        out('新的自我困惑（→阁楼）', result.selfConfused.map(e => e.content));
+
+        const submissions: DigestReportSection[] = [];
+        for (const [room, lines] of Object.entries(plateSubmissions)) {
+            if (lines && lines.length > 0) {
+                submissions.push({
+                    label: `提交给门牌「${PLATE_TITLES[room as PlateRoom]}」`,
+                    items: lines.map(preview),
+                });
+            }
+        }
+
+        const report: DigestReport = {
+            id: `dr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            charId,
+            createdAt: Date.now(),
+            trigger,
+            examined,
+            outcomes,
+            plateSubmissions: submissions,
+            plateUpdated,
+        };
+        await DigestReportDB.save(report);
+    } catch (e: any) {
+        console.warn(`📋 [Digest] 消化日志保存失败: ${e?.message || e}`);
+    }
+}
+
 export async function runCognitiveDigestion(
     charId: string,
     charName: string,
     charPersona: string,
     llmConfig: LightLLMConfig,
-    _force: boolean = false,
+    manualTrigger: boolean = false,
     userName?: string,
     embeddingConfig?: EmbeddingConfig,
 ): Promise<DigestResult | null> {
+    const trigger: 'auto' | 'manual' = manualTrigger ? 'manual' : 'auto';
     // 收集材料
     const material = await gatherDigestMaterial(charId);
 
@@ -672,15 +689,18 @@ export async function runCognitiveDigestion(
         material.userRoomNodes.length === 0 &&
         material.selfRoomNodes.length === 0) {
         if (embeddingConfig) await vectorizeOrphanedNodes(charId, embeddingConfig);
+        const emptyResult: DigestResult = { resolved: [], deepened: [], faded: [], fulfilled: [], disappointed: [], internalized: [], synthesizedUser: [], selfInsights: [], selfConfused: [] };
         // 门牌整理不受消化门槛限制：卧室节点从不进消化材料池，但「我们之间」需要它们
+        let plateUpdated: PlateRoom[] = [];
         try {
             const { consolidateAllPlates } = await import('./roomPlates');
-            await consolidateAllPlates(charId, charName, userName, llmConfig);
+            plateUpdated = (await consolidateAllPlates(charId, charName, userName, llmConfig)).updated;
         } catch (e: any) {
             console.warn(`🚪 [Digest] 门牌整理失败（不影响消化结果）: ${e?.message || e}`);
         }
+        await saveDigestReport(charId, trigger, userName, null, emptyResult, {}, plateUpdated);
         markDigested(charId);
-        return { resolved: [], deepened: [], faded: [], fulfilled: [], disappointed: [], internalized: [], synthesizedUser: [], selfInsights: [], selfConfused: [] };
+        return emptyResult;
     }
 
     console.log(`🧠 [Digest] Starting cognitive digestion for ${charName}: ${material.atticNodes.length} attic, ${material.anticipations.length} anticipations, ${material.studyNodes.length} study, ${material.userRoomNodes.length} user, ${material.selfRoomNodes.length} self`);
@@ -688,23 +708,27 @@ export async function runCognitiveDigestion(
     // LLM 统一消化
     const actions = await callDigestLLM(charName, charPersona, material, llmConfig, userName);
 
-    // 执行动作
-    const result = await executeActions(actions, charId, material);
+    // 执行动作：状态机改现有节点；概括类产出汇集为门牌蒸馏候选
+    const { result, plateSubmissions } = await executeActions(actions, charId, material);
 
     // 向量化本次新建的节点 + 任何历史遗留的孤儿节点
     if (embeddingConfig) await vectorizeOrphanedNodes(charId, embeddingConfig);
 
     // 门牌全量整理：消化是"独处反思"，正是把情景沉淀为语义的时机。
-    // 放在 executeActions 之后 —— synthesize_user 等衍生节点已落库，能进原料池。
+    // 本次消化提炼的概括（plateSubmissions）作为高优先级原料一并送入。
+    let plateUpdated: PlateRoom[] = [];
     try {
         const { consolidateAllPlates } = await import('./roomPlates');
-        const plateResult = await consolidateAllPlates(charId, charName, userName, llmConfig);
-        if (plateResult.updated.length > 0) {
-            console.log(`🚪 [Digest] 门牌整理完成：${plateResult.updated.join(', ')}`);
+        plateUpdated = (await consolidateAllPlates(charId, charName, userName, llmConfig, plateSubmissions)).updated;
+        if (plateUpdated.length > 0) {
+            console.log(`🚪 [Digest] 门牌整理完成：${plateUpdated.join(', ')}`);
         }
     } catch (e: any) {
         console.warn(`🚪 [Digest] 门牌整理失败（不影响消化结果）: ${e?.message || e}`);
     }
+
+    // 消化日志：这次到底消化了什么，可在记忆宫殿 App 回看
+    await saveDigestReport(charId, trigger, userName, material, result, plateSubmissions, plateUpdated);
 
     // 重置轮数计数器 & 标记时间
     resetDigestRounds(charId);

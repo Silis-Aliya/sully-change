@@ -1327,12 +1327,8 @@ export const useChatAI = ({
                             const persona = [char.systemPrompt || '', char.worldview || ''].filter(Boolean).join('\n');
                             const result = await runCognitiveDigestion(char.id, charName, persona, mpLLM, false, userProfile?.name, mpEmb);
                             if (result) {
-                                // 持久化自我领悟词条到角色档案
-                                if (result.selfInsights.length > 0) {
-                                    const existing = char.selfInsights || [];
-                                    const updatedInsights = [...existing, ...result.selfInsights];
-                                    await DB.saveCharacter({ ...char, selfInsights: updatedInsights });
-                                }
+                                // 自我领悟不再追加到 char.selfInsights（只进不出的旧常驻层）——
+                                // 归宿已改为 self_room 门牌（digestion 内部提交），这里只负责弹窗昭告
                                 const total = result.resolved.length + result.deepened.length + result.faded.length +
                                     result.fulfilled.length + result.disappointed.length + result.internalized.length +
                                     result.synthesizedUser.length + result.selfInsights.length + result.selfConfused.length;

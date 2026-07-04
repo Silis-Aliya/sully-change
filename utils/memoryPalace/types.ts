@@ -74,6 +74,13 @@ export interface MemoryNode {
     pinnedUntil?: number | null; // 便利贴置顶截止时间（timestamp ms），null/undefined = 不置顶
     sourceId?: string | null;   // 消化衍生记忆的源记忆 ID，null = 非衍生记忆
     origin?: 'extraction' | 'digestion' | 'system'; // 记忆来源：extraction=聊天提取, digestion=认知消化衍生, system=系统生成
+    /**
+     * 消化已消费标记：synthesize_user / internalize / self_insight / self_confuse
+     * 消费过的源节点打上时间戳，不再进入后续消化的候选池。
+     * 历史上这个"已消费"信息靠衍生节点的 sourceId 反查——消化改道门牌后
+     * 不再新建衍生节点，改用此字段显式标记（旧数据仍走 sourceId 反查兜底）。
+     */
+    digestedAt?: number | null;
 
     /**
      * 从 CSY-OS 迁移时保留的原始语义元数据。正文与向量会转换成 SullyOS 原生结构，
@@ -282,6 +289,32 @@ export const PLATE_TITLES: Record<PlateRoom, string> = {
     bedroom:   '我们之间',
     study:     '我的领域',
 };
+
+// ─── 消化日志（DigestReport — 认知消化的可回看记录） ───
+
+/**
+ * 每次认知消化落一条报告，回答"这次到底消化了什么"：
+ * 审视了哪些材料 → 状态机改了什么 → 往门牌提交了什么 → 门牌实际更新了哪几块。
+ * 通用 section 结构让 UI 保持傻瓜渲染；每角色只保留最近 DIGEST_REPORT_KEEP 条。
+ */
+export interface DigestReportSection {
+    label: string;      // 如「阁楼困惑」「化解」「提交给门牌·TA的事」
+    items: string[];    // 内容预览（已截断）
+}
+
+export interface DigestReport {
+    id: string;                         // dr_xxx
+    charId: string;
+    createdAt: number;
+    trigger: 'auto' | 'manual';
+    examined: DigestReportSection[];    // 本次审视的材料
+    outcomes: DigestReportSection[];    // 状态机结果（化解/加深/淡忘/实现/落空/新困惑）
+    plateSubmissions: DigestReportSection[]; // 提交给门牌的蒸馏候选
+    plateUpdated: string[];             // 门牌实际更新的房间（PlateRoom）
+}
+
+/** 每角色保留的消化报告条数上限 */
+export const DIGEST_REPORT_KEEP = 30;
 
 // ─── 期盼（窗台） ─────────────────────────────────────
 

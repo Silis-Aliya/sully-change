@@ -9,12 +9,13 @@ export type {
     AnticipationStatus, Anticipation, MemoryBatch,
     PersonalityStyle, EmbeddingConfig, ScoredMemory, RemoteVectorConfig,
     EventBox, PlateRoom, PlateEntry, RoomPlate,
+    DigestReport, DigestReportSection,
 } from './types';
 
 export { ROOM_CONFIGS, ROOM_LABELS, getRoomLabel, PERSONALITY_WEIGHTS, EVENT_BOX_COMPRESSION_THRESHOLD, PLATE_ROOMS, PLATE_TITLES, PLATE_ENTRY_CAPS } from './types';
 
 // 数据库
-export { MemoryNodeDB, MemoryVectorDB, MemoryLinkDB, MemoryBatchDB, TopicBoxDB, AnticipationDB, EventBoxDB, RoomPlateDB } from './db';
+export { MemoryNodeDB, MemoryVectorDB, MemoryLinkDB, MemoryBatchDB, TopicBoxDB, AnticipationDB, EventBoxDB, RoomPlateDB, DigestReportDB } from './db';
 
 // Embedding
 export { getEmbedding, getEmbeddings, cosineSimilarity } from './embedding';

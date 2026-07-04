@@ -2096,8 +2096,9 @@ export interface CharacterProfile {
   memoryPalaceInjection?: string;  // 记忆宫殿检索结果，注入到 System Prompt（运行时填充，不持久化）
   roomPlatesInjection?: string;    // 房间门牌（常驻语义层），注入到 System Prompt（运行时填充，来源 room_plates 表）
 
-  // 自我领悟词条：消化过程中 self_room 反刍产生的常驻认知
-  // 像情绪 buff 一样注入到 contextBuilder 的角色设定下方
+  // 自我领悟词条【已冻结，只读遗留】：旧版消化把 self_room 领悟追加到这里，
+  // 只进不出、无上限、无合并。新领悟的归宿已改为 self_room 门牌（room_plates），
+  // 此字段不再增长；存量仍照常注入 contextBuilder，避免老角色突然"失忆"。
   selfInsights?: string[];
 
   // 音乐人格 — 角色自己的网易云式歌单 / 品味 / 正在听

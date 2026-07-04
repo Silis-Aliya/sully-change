@@ -9,8 +9,9 @@ import {
     reviveArchivedMemory,
     wipeAllMemoryPalace,
     exportMemoryPalace, importMemoryPalace, isMemoryPalaceExportFile,
+    DigestReportDB, PLATE_TITLES,
 } from '../utils/memoryPalace';
-import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox } from '../utils/memoryPalace';
+import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox, DigestReport } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
 import type { Message } from '../types';
 
@@ -485,6 +486,10 @@ export default function MemoryPalaceApp() {
     // 认知消化状态
     const [digesting, setDigesting] = useState(false);
     const [digestResult, setDigestResult] = useState<string | null>(null);
+    // 消化日志：null=未打开；[]=打开但没有记录
+    const [digestReports, setDigestReports] = useState<DigestReport[] | null>(null);
+    const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+    useEffect(() => { setDigestReports(null); setExpandedReportId(null); }, [char?.id]);
 
 
     // 一键清空
@@ -1405,13 +1410,8 @@ export default function MemoryPalaceApp() {
             if (!result) {
                 setDigestResult('没有需要消化的内容');
             } else {
-                // 如果产生了新的自我领悟，持久化到角色档案
-                if (result.selfInsights.length > 0) {
-                    const existing = (char as any).selfInsights || [];
-                    const updated = [...existing, ...result.selfInsights];
-                    updateCharacter(char.id, { selfInsights: updated } as any);
-                }
-
+                // 自我领悟的归宿已改为 self_room 门牌（digestion 内部提交），
+                // 不再追加 char.selfInsights；这里只做结果摘要展示
                 const parts: string[] = [];
                 if (result.resolved.length) parts.push(`${result.resolved.length} 条困惑化解`);
                 if (result.deepened.length) parts.push(`${result.deepened.length} 条创伤加深`);
@@ -1425,6 +1425,10 @@ export default function MemoryPalaceApp() {
                 setDigestResult(parts.length > 0 ? `[ok]${parts.join('，')}` : '没有变化');
             }
             loadStats();
+            // 消化日志面板开着的话，刷新出刚落的这条报告
+            if (digestReports !== null) {
+                try { setDigestReports(await DigestReportDB.getByCharId(char.id)); } catch { /* ignore */ }
+            }
         } catch (err: any) {
             setDigestResult(`[err]消化失败：${err.message}`);
         } finally {
@@ -3765,6 +3769,7 @@ create table if not exists memory_vectors (
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.6 }}>
                         角色会安静地回想最近的事情：阁楼里的困惑有没有想开？窗台上的期盼实现了吗？
                         反复学到的东西是否已经内化成性格的一部分？聊天每 50 轮自动触发一次，也可以随时手动触发。
+                        整合出的概括（用户认知 / 知识内化 / 自我领悟）会沉淀到房间门牌，不再新增记忆条目。
                     </div>
 
                     {digestResult && (
@@ -3786,6 +3791,80 @@ create table if not exists memory_vectors (
                     >
                         {digesting ? `${char.name}正在静静地回想…` : '手动触发消化'}
                     </button>
+
+                    {/* 消化日志：每次消化到底审视了什么、改了什么、往门牌提交了什么 */}
+                    <button
+                        onClick={async () => {
+                            if (!char || digestReports !== null) { setDigestReports(null); return; }
+                            try {
+                                setDigestReports(await DigestReportDB.getByCharId(char.id));
+                            } catch { setDigestReports([]); }
+                        }}
+                        style={{
+                            width: '100%', marginTop: 8, padding: '8px 0',
+                            borderRadius: 10, border: '1px solid #bbf7d0',
+                            fontSize: 12, fontWeight: 600,
+                            color: '#166534', background: 'white', cursor: 'pointer',
+                        }}
+                    >
+                        {digestReports === null ? '查看消化日志' : '收起消化日志'}
+                    </button>
+
+                    {digestReports !== null && (
+                        <div style={{ marginTop: 10 }}>
+                            {digestReports.length === 0 && (
+                                <div style={{ fontSize: 11, color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>
+                                    还没有消化记录——触发一次消化后这里会记下它做了什么
+                                </div>
+                            )}
+                            {digestReports.map(report => {
+                                const expanded = expandedReportId === report.id;
+                                const outcomeCount = report.outcomes.reduce((s, sec) => s + sec.items.length, 0);
+                                const submitCount = report.plateSubmissions.reduce((s, sec) => s + sec.items.length, 0);
+                                const examinedCount = report.examined.reduce((s, sec) => s + sec.items.length, 0);
+                                const renderSection = (sec: { label: string; items: string[] }, color: string) => (
+                                    <div key={sec.label} style={{ marginTop: 6 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color }}>{sec.label}</div>
+                                        {sec.items.map((it, i) => (
+                                            <div key={i} style={{ fontSize: 11, color: '#475569', lineHeight: 1.5, padding: '2px 0 2px 8px', borderLeft: `2px solid ${color}22` }}>{it}</div>
+                                        ))}
+                                    </div>
+                                );
+                                return (
+                                    <div
+                                        key={report.id}
+                                        style={{ background: 'white', borderRadius: 10, border: '1px solid #e5e7eb', padding: '8px 10px', marginBottom: 6, cursor: 'pointer' }}
+                                        onClick={() => setExpandedReportId(expanded ? null : report.id)}
+                                    >
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                            <span style={{ fontSize: 11, fontWeight: 700, color: '#334155' }}>
+                                                {fmtRangeTs(report.createdAt)}
+                                                <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>{report.trigger === 'auto' ? '自动' : '手动'}</span>
+                                            </span>
+                                            <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                                                审视 {examinedCount} · 变化 {outcomeCount} · 提交门牌 {submitCount}
+                                            </span>
+                                        </div>
+                                        {expanded && (
+                                            <div style={{ marginTop: 4 }} onClick={e => e.stopPropagation()}>
+                                                {examinedCount === 0 && outcomeCount === 0 && submitCount === 0 && (
+                                                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>这次没有待消化的内容{report.plateUpdated.length > 0 ? '，但整理了门牌' : ''}</div>
+                                                )}
+                                                {report.examined.map(sec => renderSection(sec, '#0ea5e9'))}
+                                                {report.outcomes.map(sec => renderSection(sec, '#16a34a'))}
+                                                {report.plateSubmissions.map(sec => renderSection(sec, '#8b5cf6'))}
+                                                {report.plateUpdated.length > 0 && (
+                                                    <div style={{ fontSize: 10, color: '#8b5cf6', marginTop: 6 }}>
+                                                        门牌已更新：{report.plateUpdated.map(r => (PLATE_TITLES as Record<string, string>)[r] || r).join('、')}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
 
                 {/* 导出 / 导入记忆：接入外置记忆库、跨设备迁移 */}

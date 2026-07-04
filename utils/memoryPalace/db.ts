@@ -8,8 +8,9 @@ import { openDB } from '../db';
 import type {
     MemoryNode, MemoryVector, MemoryLink, MemoryBatch,
     TopicBox, Anticipation, MemoryRoom, BoxStatus, AnticipationStatus,
-    EventBox, RoomPlate, PlateRoom,
+    EventBox, RoomPlate, PlateRoom, DigestReport,
 } from './types';
+import { DIGEST_REPORT_KEEP } from './types';
 import { bm25Index } from './bm25Index';
 import type { VectorIndexEntry as VectorBackupIndexEntry } from '../backupFormat';
 
@@ -23,6 +24,7 @@ const STORE_TOPIC_BOXES    = 'topic_boxes';
 const STORE_ANTICIPATIONS  = 'anticipations';
 const STORE_EVENT_BOXES    = 'event_boxes';
 const STORE_ROOM_PLATES    = 'room_plates';
+const STORE_DIGEST_REPORTS = 'digest_reports';
 
 // ─── 通用辅助 ──────────────────────────────────────────
 
@@ -577,6 +579,33 @@ export const RoomPlateDB = {
 
     delete: (charId: string, room: PlateRoom) =>
         deleteByKey(STORE_ROOM_PLATES, plateId(charId, room)),
+};
+
+// ─── DigestReport CRUD（消化日志） ────────────────────
+
+export const DigestReportDB = {
+    /** 保存并修剪：每角色只留最近 DIGEST_REPORT_KEEP 条 */
+    save: async (report: DigestReport): Promise<void> => {
+        await put<DigestReport>(STORE_DIGEST_REPORTS, report);
+        try {
+            const all = await getAllByIndex<DigestReport>(STORE_DIGEST_REPORTS, 'charId', report.charId);
+            if (all.length > DIGEST_REPORT_KEEP) {
+                const overflow = all
+                    .sort((a, b) => b.createdAt - a.createdAt)
+                    .slice(DIGEST_REPORT_KEEP);
+                for (const old of overflow) {
+                    await deleteByKey(STORE_DIGEST_REPORTS, old.id);
+                }
+            }
+        } catch { /* 修剪失败不影响本条保存 */ }
+    },
+
+    /** 按时间倒序（最新在前） */
+    getByCharId: (charId: string): Promise<DigestReport[]> =>
+        getAllByIndex<DigestReport>(STORE_DIGEST_REPORTS, 'charId', charId)
+            .then(list => list.sort((a, b) => b.createdAt - a.createdAt)),
+
+    delete: (id: string) => deleteByKey(STORE_DIGEST_REPORTS, id),
 };
 
 // ─── Anticipation CRUD ────────────────────────────────
