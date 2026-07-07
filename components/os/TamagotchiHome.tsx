@@ -362,71 +362,87 @@ const CLOCK_PHASES = {
 type ClockPhase = keyof typeof CLOCK_PHASES;
 const clockPhaseOf = (h: number): ClockPhase => (h >= 23 || h < 5) ? 'late' : h < 8 ? 'dawn' : h < 17 ? 'day' : h < 20 ? 'dusk' : 'night';
 
-// ─── 直播看板（云窗位）：自定义图 / 头像+营业中（虚拟主播 ON AIR 风）+ 电子钟表盘 ──
-// 主区：用户上传的横图（存 blob，localStorage 只记 blobref 令牌）；没传图就展示
-// 角色头像 + 营业状态（白天「营业中·ON AIR」呼吸绿点，深夜自动「休息中·CLOSED」）。
-// 右区：电子钟表盘（时段换底，SVG 太阳/弯月）。点表盘进日程 App。
+// ─── 直播看板（云窗位）：一整张 banner——营业中/电子时间都是排版在图上的文字层 ──
+// 底：用户上传的横图（存 blob，localStorage 只记 blobref 令牌），或 主题渐变+头像。
+// 排版层：营业状态（白天「营业中·ON AIR」呼吸绿点，深夜「休息中·CLOSED」）+
+// 裸排电子时间（有图时用户可自定义文字色，默认白+阴影；无图走主题深字）。
 const LiveBoard = React.memo<{
-    customImg: string; avatar?: string; night: boolean;
+    customImg: string; fg: string; avatar?: string; night: boolean;
     hh: string; mm: string; phase: ClockPhase;
-    onClock: () => void; onUpload: () => void; onClear: () => void;
-}>(({ customImg, avatar, night, hh, mm, phase, onClock, onUpload, onClear }) => {
-    const p = CLOCK_PHASES[phase];
+    onClock: () => void; onUpload: () => void; onClear: () => void; onPickColor: () => void;
+}>(({ customImg, fg, avatar, night, hh, mm, phase, onClock, onUpload, onClear, onPickColor }) => {
     const darkFace = phase === 'night' || phase === 'late';
+    // 排版层文字色：有自定义图 → 用户选的颜色（默认白）+ 阴影保证任何图上可读；
+    // 默认渐变底偏浅 → 走主题深字，无阴影
+    const inkFg = customImg ? fg : 'var(--tg-grape)';
+    const inkSub = customImg ? fg : 'var(--tg-fade)';
+    const inkShadow = customImg ? '0 1px 5px rgba(0,0,0,0.5), 0 0 2px rgba(0,0,0,0.35)' : 'none';
     return (
-        /* 一整块自然表面：没有外框套内框——整个板子就是一张图（或渐变底），
-           时间是叠在画面角上的小表盘角标（相机水印那味儿），✎/× 是半透明微钮 */
-        <div className="absolute left-4 z-[30] rounded-[1.1rem] overflow-hidden h-[4.2rem]"
-            style={{ right: '26%', top: 'calc(var(--safe-top, 0px) + 4.55rem)', border: `1.5px solid ${PAL.frameSoft}`, boxShadow: '0 5px 14px var(--tg-glow25)' }}>
-            {/* 底：自定义图铺满，或 渐变底+头像+营业中 */}
+        /* 一整张 banner：图（或渐变底+头像）铺满，营业中/电子时间都是排版在图上的
+           文字层——没有任何小色块分区，大家都是 banner 的一部分 */
+        <div className="absolute inset-x-4 z-[32] rounded-[1.1rem] overflow-hidden h-[4.2rem]"
+            style={{ top: 'calc(var(--safe-top, 0px) + 4.55rem)', border: `1.5px solid ${PAL.frameSoft}`, boxShadow: '0 5px 14px var(--tg-glow25)' }}>
+            {/* 底：自定义图铺满，或 主题渐变 + 星芒 */}
             {customImg ? (
                 <TokenImg value={customImg} className="absolute inset-0 w-full h-full object-cover" draggable={false} loading="lazy" alt="" />
             ) : (
-                <div className="absolute inset-0 flex items-center gap-2.5 px-3"
-                    style={{ background: 'linear-gradient(135deg, var(--tg-bg-top), var(--tg-bg-bot))' }}>
-                    <Sparkles items={[[58, 20, 8, PAL.frame, 0.7, true], [46, 78, 7, PAL.frame, 0.5], [66, 60, 6, PAL.gold, 0.7, true]]} />
+                <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, var(--tg-bg-top), var(--tg-bg-bot))' }}>
+                    <Sparkles items={[[62, 20, 8, PAL.frame, 0.7, true], [50, 78, 7, PAL.frame, 0.5], [72, 56, 6, PAL.gold, 0.7, true]]} />
+                </div>
+            )}
+            {/* 排版层：头像（仅默认底）+ 营业中 + 电子时间，全部直接躺在 banner 上 */}
+            <div className="absolute inset-0 flex items-center gap-2.5 px-3">
+                {!customImg && (
                     <div className="w-10 h-10 rounded-full p-[2px] shrink-0" style={{ border: `1.5px solid ${PAL.frame}`, boxShadow: '0 0 8px var(--tg-frame-a30)' }}>
                         <div className="w-full h-full rounded-full overflow-hidden" style={{ background: PAL.cardHi }}>
                             {avatar ? <img src={avatar} className="w-full h-full object-cover" alt="" loading="lazy" draggable={false} /> : <span className="w-full h-full flex items-center justify-center text-[13px]" style={{ color: PAL.fade }}>✦</span>}
                         </div>
                     </div>
-                    <div className="min-w-0 leading-none">
-                        <div className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full shrink-0" style={{
-                                background: night ? '#9a94b8' : '#7cd992',
-                                boxShadow: night ? 'none' : '0 0 6px #7cd992',
-                                animation: night ? undefined : 'tama-twinkle 1.8s ease-in-out infinite',
-                            }} />
-                            <span className="text-[13px] font-bold truncate" style={{ fontFamily: FONT_CN, color: PAL.grape }}>{night ? '休息中' : '营业中'}</span>
-                        </div>
-                        <div className="text-[6.5px] font-bold mt-[5px] tracking-[0.3em]" style={{ fontFamily: FONT_PX, color: PAL.fade }}>{night ? 'CLOSED' : 'ON AIR'}</div>
+                )}
+                <div className="min-w-0 leading-none">
+                    <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{
+                            background: night ? '#9a94b8' : '#7cd992',
+                            boxShadow: night ? 'none' : '0 0 6px #7cd992',
+                            animation: night ? undefined : 'tama-twinkle 1.8s ease-in-out infinite',
+                        }} />
+                        <span className="text-[13px] font-bold truncate" style={{ fontFamily: FONT_CN, color: inkFg, textShadow: inkShadow }}>{night ? '休息中' : '营业中'}</span>
                     </div>
+                    <div className="text-[6.5px] font-bold mt-[5px] tracking-[0.3em]" style={{ fontFamily: FONT_PX, color: inkSub, textShadow: inkShadow }}>{night ? 'CLOSED' : 'ON AIR'}</div>
                 </div>
-            )}
-            {/* 右上角：小表盘角标（叠在画面上，不另起分区）；点一下进日程 */}
-            <button onClick={onClock} className="absolute top-1.5 right-1.5 rounded-lg px-2 py-[3px] flex items-center gap-1 active:scale-95 transition-transform"
-                style={{ background: p.bg, border: '1px solid rgba(255,255,255,0.75)', boxShadow: '0 2px 6px rgba(0,0,0,0.18)' }}>
-                {darkFace && <span className="absolute top-[1px] left-[4px] text-[5px]" style={{ color: '#efe8b8', animation: 'tama-twinkle 2.6s ease-in-out infinite' }}>✦</span>}
-                <span className="w-[11px] h-[11px] shrink-0" style={{ color: p.fg }}>
-                    {darkFace ? ICON.moon : (
-                        <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" /></svg>
-                    )}
-                </span>
-                <span className="text-[12px] font-bold tabular-nums leading-none" style={{ fontFamily: FONT_PX, color: p.fg }}>{hh}:{mm}</span>
-                {(phase === 'late') && <span className="text-[7px] leading-none ml-0.5" style={{ fontFamily: FONT_CN, color: p.sub }}>夜深啦</span>}
-            </button>
-            {/* 右下角：换图 ✎ / 恢复默认 ×（半透明微钮，不抢戏） */}
+                <div className="flex-1" />
+                {/* 电子时间：裸排在 banner 右侧（无底无框），点一下进日程 */}
+                <button onClick={onClock} className="shrink-0 text-right leading-none active:scale-95 transition-transform pr-0.5">
+                    <div className="flex items-center justify-end gap-1.5">
+                        <span className="w-[13px] h-[13px] shrink-0" style={{ color: inkFg, filter: customImg ? 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))' : 'none' }}>
+                            {darkFace ? ICON.moon : (
+                                <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" /></svg>
+                            )}
+                        </span>
+                        <span className="text-[19px] font-bold tabular-nums" style={{ fontFamily: FONT_PX, color: inkFg, textShadow: inkShadow, letterSpacing: '0.04em' }}>{hh}:{mm}</span>
+                    </div>
+                    {phase === 'late' && <div className="text-[7.5px] mt-[4px] tracking-[0.22em]" style={{ fontFamily: FONT_CN, color: inkSub, textShadow: inkShadow }}>夜深啦</div>}
+                </button>
+            </div>
+            {/* 右下角微钮：调字色 ○（仅有图时）/ 恢复默认 × / 换图 ✎ —— 半透明，不抢戏 */}
             <div className="absolute bottom-1 right-1.5 flex gap-1">
                 {customImg && (
-                    <button onClick={onClear} aria-label="恢复默认看板"
-                        className="w-[17px] h-[17px] rounded-full flex items-center justify-center active:scale-90 transition-transform"
-                        style={{ background: 'rgba(255,255,255,0.6)', color: PAL.ink }}>
-                        <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" /></svg>
-                    </button>
+                    <>
+                        <button onClick={onPickColor} aria-label="文字颜色"
+                            className="w-[17px] h-[17px] rounded-full flex items-center justify-center active:scale-90 transition-transform"
+                            style={{ background: 'rgba(255,255,255,0.6)' }}>
+                            <span className="w-2 h-2 rounded-full" style={{ background: fg, boxShadow: '0 0 0 1px rgba(0,0,0,0.25)' }} />
+                        </button>
+                        <button onClick={onClear} aria-label="恢复默认看板"
+                            className="w-[17px] h-[17px] rounded-full flex items-center justify-center active:scale-90 transition-transform"
+                            style={{ background: 'rgba(255,255,255,0.6)', color: '#5a5470' }}>
+                            <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" /></svg>
+                        </button>
+                    </>
                 )}
                 <button onClick={onUpload} aria-label="上传看板图"
                     className="w-[17px] h-[17px] rounded-full flex items-center justify-center active:scale-90 transition-transform"
-                    style={{ background: 'rgba(255,255,255,0.6)', color: PAL.ink }}>
+                    style={{ background: 'rgba(255,255,255,0.6)', color: '#5a5470' }}>
                     <svg viewBox="0 0 24 24" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                 </button>
             </div>
@@ -436,7 +452,7 @@ const LiveBoard = React.memo<{
 
 // ─── 天花板小挂饰：从看板下垂两颗 ✦，轻轻摇（transform-only）────────────
 const CeilingCharms = React.memo(() => (
-    <div className="absolute inset-x-0 z-[28] pointer-events-none" style={{ top: 'calc(var(--safe-top, 0px) + 9.1rem)' }}>
+    <div className="absolute inset-x-0 z-[28] pointer-events-none" style={{ top: 'calc(var(--safe-top, 0px) + 8.6rem)' }}>
         {[
             { x: '38%', drop: 13, size: 9, color: PAL.gold },
             { x: '60%', drop: 22, size: 8, color: PAL.frame },
@@ -644,7 +660,7 @@ const FullStage = React.memo<{
 // 跟随界面风格（细线半透卡 + 内描边），端端正正不摇晃。
 const HangingSign = React.memo<{ text: string; onTap: () => void }>(({ text, onTap }) => (
     <div className="absolute left-[6%] z-[30] flex flex-col items-center pointer-events-none"
-        style={{ top: 'calc(var(--safe-top, 0px) + 9.1rem)' }}>
+        style={{ top: 'calc(var(--safe-top, 0px) + 8.6rem)' }}>
         {/* 两根吊绳（挂在顶部横幅正下方，不悬空） */}
         <div className="flex gap-6">
             <span style={{ width: 1.5, height: 24, background: PAL.frameSoft }} />
@@ -711,7 +727,7 @@ const WorldPortals = React.memo<{ onHome: () => void; onPixel: () => void; onDre
         { key: 'dream', label: '梦境', en: 'DREAM', icon: ICON.moon, onClick: onDream },
     ];
     return (
-        <div className="absolute right-3 z-[35] flex flex-col items-center" style={{ top: 'calc(var(--safe-top, 0px) + 5.2rem)' }}>
+        <div className="absolute right-3 z-[35] flex flex-col items-center" style={{ top: 'calc(var(--safe-top, 0px) + 9.6rem)' }}>
             {portals.map((p, i) => (
                 <React.Fragment key={p.key}>
                     {i > 0 && (
@@ -887,6 +903,16 @@ const TamagotchiHome: React.FC = () => {
         setBoardImg('');
         try { localStorage.removeItem('tama_board_img'); } catch { /* ignore */ }
         // 旧 blob 不主动删（见 blobRef 注释的防碎图策略），交给后续 GC
+    }, []);
+    // 看板排版层文字色（有自定义图时生效，默认白）：原生取色器，选完即存
+    const boardColorRef = useRef<HTMLInputElement>(null);
+    const [boardFg, setBoardFg] = useState<string>(() => {
+        try { return localStorage.getItem('tama_board_fg') || '#ffffff'; } catch { return '#ffffff'; }
+    });
+    const onBoardColor = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const v = e.target.value || '#ffffff';
+        setBoardFg(v);
+        try { localStorage.setItem('tama_board_fg', v); } catch { /* ignore */ }
     }, []);
     // 日程详细演绎（小剧场）：点纸卷里「偷看此刻」时生成并播放
     const [theater, setTheater] = useState<{ schedule: DailySchedule; slotIndex: number } | null>(null);
@@ -1191,13 +1217,15 @@ const TamagotchiHome: React.FC = () => {
                         nudge={nudge} say={say} onItemTap={onItemTap} onChat={openChat}
                     />
 
-                    {/* 直播看板（自定义图 / 头像+营业中 + 电子钟表盘），下面挂日程牌和 ✦ 挂饰 */}
-                    <LiveBoard customImg={boardImg} avatar={char.avatar} night={night}
+                    {/* 直播看板（一整张 banner：图/渐变底 + 营业中/电子时间排版层），下面挂日程牌和 ✦ 挂饰 */}
+                    <LiveBoard customImg={boardImg} fg={boardFg} avatar={char.avatar} night={night}
                         hh={hh} mm={mm} phase={clockPhaseOf(virtualTime.hours)}
                         onClock={() => openApp(AppID.Schedule)}
                         onUpload={() => boardInputRef.current?.click()}
-                        onClear={clearBoardImg} />
+                        onClear={clearBoardImg}
+                        onPickColor={() => boardColorRef.current?.click()} />
                     <input type="file" ref={boardInputRef} className="hidden" accept="image/*" onChange={onBoardFile} />
+                    <input type="color" ref={boardColorRef} className="hidden" value={boardFg} onChange={onBoardColor} />
                     <CeilingCharms />
                     <HangingSign text={signText} onTap={() => setScrollOpen(true)} />
                     {scrollOpen && <DayScroll slots={scrollSlots} onPeek={runTheater} onClose={() => setScrollOpen(false)} />}
