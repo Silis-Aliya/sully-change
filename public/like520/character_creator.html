@@ -694,7 +694,9 @@ function mergeExtraItems(items) {
     const cat = PARTS.find(p => p.key === it.categoryKey);
     if (!cat || !Array.isArray(cat.items)) return;
     if (cat.items.some(x => x.id === it.id)) return;
-    cat.items.push({ id: it.id, name: it.name || it.id, src: it.src, tintable: !!it.tintable, shadow: it.shadowSrc || undefined });
+    /* noTint：整类 tint 的类目（头发等）渲染时不看 item.tintable、只认 noTint，
+       自定义部件没勾"可换色"必须显式标 noTint 才能保住原色 */
+    cat.items.push({ id: it.id, name: it.name || it.id, src: it.src, tintable: !!it.tintable, noTint: !it.tintable, shadow: it.shadowSrc || undefined });
     customPartIds.add(it.id);
     added++;
   });
