@@ -714,20 +714,27 @@ export const DB = {
 
   clearMessages: async (charId: string): Promise<void> => {
     const db = await openDB();
-    const transaction = db.transaction(STORE_MESSAGES, 'readwrite');
-    const store = transaction.objectStore(STORE_MESSAGES);
-    const index = store.index('charId');
-    const request = index.openCursor(IDBKeyRange.only(charId));
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (cursor) { 
-          const m = cursor.value as Message;
-          if (!m.groupId) { 
-              store.delete(cursor.primaryKey); 
-          }
-          cursor.continue(); 
-      }
-    };
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_MESSAGES, 'readwrite');
+      const store = transaction.objectStore(STORE_MESSAGES);
+      const index = store.index('charId');
+      const request = index.openCursor(IDBKeyRange.only(charId));
+
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor) {
+            const m = cursor.value as Message;
+            if (!m.groupId) {
+                store.delete(cursor.primaryKey);
+            }
+            cursor.continue();
+        }
+      };
+      request.onerror = () => reject(request.error);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('clearMessages aborted'));
+    });
   },
 
   getGroups: async (): Promise<GroupProfile[]> => {
