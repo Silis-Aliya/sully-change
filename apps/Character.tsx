@@ -1167,7 +1167,10 @@ ${isInitialGeneration ? `
                {/* safe-area: OUTER 保留渐变背景 + 模糊 + sticky，刘海高度由 paddingTop 让位；
                    INNER 不再用 h-32 沉底——那是老的「做高栏 + 内容沉底」状态栏预留写法，会和 safe-top 叠加出一大块空白。
                    改为内容自然高度、直接贴在 safe-top 下方。 */}
-               <div className="bg-gradient-to-b from-white/90 to-transparent backdrop-blur-sm shrink-0 z-40 sticky top-0" style={{ paddingTop: 'var(--safe-top)' }}>
+               {/* 顶栏 paddingTop 用 max(2.75rem, safe-top) 保底：--safe-top 为 0 的环境
+                   （无刘海/某些 WebView）下也留出状态栏高度，避免「列表/发消息」贴到状态栏。
+                   与列表页及全项目 detail 顶栏惯例（max(rem, var(--safe-top))）一致。 */}
+               <div className="bg-gradient-to-b from-white/90 to-transparent backdrop-blur-sm shrink-0 z-40 sticky top-0" style={{ paddingTop: 'max(2.75rem, var(--safe-top))' }}>
                  <div className="flex flex-col px-5 pt-2 pb-2">
                    <div className="flex justify-between items-center mb-3">
                        <button onClick={handleBack} className="p-2 -ml-2 rounded-full hover:bg-white/60 flex items-center gap-1 text-slate-600"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg><span className="text-sm font-medium">列表</span></button>
