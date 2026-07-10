@@ -115,6 +115,9 @@ export interface DigestResult {
 
 /** 每聊 N 轮自动触发一次消化（1轮 = 用户发 + AI 回复） */
 const AUTO_DIGEST_ROUNDS = 50;
+
+/** 消化并发锁：同一角色同时只跑一个消化（链路含多次 LLM 调用，重叠=双倍烧钱+写竞态） */
+const digestionLocks = new Set<string>();
 const ROUND_KEY = (charId: string) => `mp_digestRounds_${charId}`;
 const LAST_DIGEST_KEY = (charId: string) => `mp_lastDigest_${charId}`;
 /**
@@ -874,6 +877,25 @@ export async function runCognitiveDigestion(
     onProgress?: (stage: string) => void,
 ): Promise<DigestResult | null> {
     const trigger: 'auto' | 'manual' = manualTrigger ? 'manual' : 'auto';
+
+    // 并发锁：同一角色同时只跑一个消化。链路长（审视→回填→整理），没有锁时
+    // 触发重叠会双倍烧钱 + digestedAt/门牌写入互相竞态。
+    if (digestionLocks.has(charId)) {
+        console.log(`🧠 [Digest] 跳过：该角色已有消化在进行`);
+        return null;
+    }
+    digestionLocks.add(charId);
+
+    // ⚠️ 进场即归零，而不是结束时归零。两个理由：
+    //  1. 消化链路可达分钟级，期间新聊天轮 increment 到 51/52…≥50 会再触发——
+    //     结束时归零挡不住这个风暴窗口；进场归零后，消化期间的轮数计入下一个50。
+    //  2. 中途任何异常逃逸都会跳过"结束时归零"，计数器卡死 → 每轮重触发烧钱
+    //     （用户"每聊一句弹一次门牌整理"的事故根因）。进场归零天然免疫。
+    //  失败的代价只是这一批材料等下一个 50 轮——lastDigestTs 只在成功结束时
+    //  推进（markDigested），回看窗口不会因失败而丢内容。
+    resetDigestRounds(charId);
+
+    try {
     // 收集材料
     const material = await gatherDigestMaterial(charId);
 
@@ -892,10 +914,7 @@ export async function runCognitiveDigestion(
         const plateUpdated: PlateRoom[] = await maybeBootstrapPlates(charId, charName, userName, llmConfig, onProgress);
         emptyResult.plateUpdated = plateUpdated;
         await saveDigestReport(charId, trigger, userName, null, emptyResult, {}, plateUpdated);
-        // ⚠️ 计数器必须归零：此前早退分支漏掉 resetDigestRounds，轮数卡在 ≥50，
-        // 之后**每一轮聊天**都re触发自动消化——用户看到"每聊一句就弹门牌整理浮窗"
-        // 的根因就是它（早退分支挂上门牌整理后，这个老 bug 从隐性变成每轮可见+烧钱）。
-        resetDigestRounds(charId);
+        // 计数器已在进场时归零（见函数开头），这里只推进 lastDigestTs
         markDigested(charId);
         return emptyResult;
     }
@@ -933,8 +952,7 @@ export async function runCognitiveDigestion(
     // 消化日志：这次到底消化了什么，可在记忆宫殿 App 回看
     await saveDigestReport(charId, trigger, userName, material, result, plateSubmissions, plateUpdated);
 
-    // 重置轮数计数器 & 标记时间
-    resetDigestRounds(charId);
+    // 标记时间（计数器已在进场时归零）
     markDigested(charId);
 
     const total = result.resolved.length + result.deepened.length + result.faded.length +
@@ -946,6 +964,9 @@ export async function runCognitiveDigestion(
     }
 
     return result;
+    } finally {
+        digestionLocks.delete(charId);
+    }
 }
 
 // ─── 人格风格自动推断 ────────────────────────────────

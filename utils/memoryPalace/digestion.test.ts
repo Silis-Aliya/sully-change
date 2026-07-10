@@ -26,4 +26,35 @@ describe('认知消化 — 轮数计数器', () => {
         expect(getDigestRoundCount(charId)).toBe(0);
         expect(incrementDigestRound(charId)).toBe(false);
     });
+
+    it('进场即归零：消化一开始计数器就清零，进行中的新轮次计入下一个50', async () => {
+        const charId = 'char_digest_entry_reset';
+        for (let i = 0; i < 50; i++) incrementDigestRound(charId);
+
+        const run = runCognitiveDigestion(
+            charId, '测试角色', '人设', { baseUrl: 'http://invalid.test', apiKey: 'k', model: 'm' },
+        );
+        // 消化刚启动（未 await 完成），计数器已经是 0——
+        // 这期间来的新聊天轮 increment 到 1/2/3…不会再次触发
+        expect(getDigestRoundCount(charId)).toBe(0);
+        expect(incrementDigestRound(charId)).toBe(false);
+        await run;
+    });
+
+    it('并发锁：同一角色的第二个消化直接返回 null，不重复跑', async () => {
+        const charId = 'char_digest_lock_test';
+        const first = runCognitiveDigestion(
+            charId, '测试角色', '人设', { baseUrl: 'http://invalid.test', apiKey: 'k', model: 'm' },
+        );
+        const second = await runCognitiveDigestion(
+            charId, '测试角色', '人设', { baseUrl: 'http://invalid.test', apiKey: 'k', model: 'm' },
+        );
+        expect(second).toBeNull();
+        expect(await first).not.toBeNull();
+        // 锁释放后可以再跑
+        const third = await runCognitiveDigestion(
+            charId, '测试角色', '人设', { baseUrl: 'http://invalid.test', apiKey: 'k', model: 'm' },
+        );
+        expect(third).not.toBeNull();
+    });
 });
