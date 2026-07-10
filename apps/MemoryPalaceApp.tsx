@@ -10,7 +10,8 @@ import {
     wipeAllMemoryPalace,
     exportMemoryPalace, importMemoryPalace, isMemoryPalaceExportFile,
     DigestReportDB, PLATE_TITLES,
-    bootstrapPlatesFromHistory, markPlateBootstrapDone, clearBootstrapResume,
+    bootstrapPlatesFromHistory, markPlateBootstrapDone,
+    getBootstrapResume, setBootstrapResume, clearBootstrapResume,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox, DigestReport } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -507,20 +508,26 @@ export default function MemoryPalaceApp() {
         setBootstrapping(true);
         setBootstrapStatus(null);
         try {
-            // 手动 = 从头全量重跑：清掉自动路径留下的续传进度
-            clearBootstrapResume(char.id);
+            // 每按一次只清一小段（断点续传）：上千条记忆的用户不会被一长串批次吓到，
+            // 也随时可以停——进度存在本地，下次按继续
+            const MANUAL_BATCHES_PER_PRESS = 5;
             const result = await bootstrapPlatesFromHistory(char.id, char.name, userProfile?.name, lightApi, {
+                startBatch: getBootstrapResume(char.id),
+                maxBatches: MANUAL_BATCHES_PER_PRESS,
                 onProgress: (done, total) => setBootstrapStatus(`正在整理第 ${done}/${total} 批历史记忆…（请留在本页）`),
             });
-            if (result.complete) {
+            if (result.totalLines === 0) {
+                setBootstrapStatus('记忆宫殿里还没有可立牌的历史');
+            } else if (result.complete) {
                 markPlateBootstrapDone(char.id);
                 clearBootstrapResume(char.id);
+                setBootstrapStatus(`[ok]历史全部整理完（共 ${result.neededBatches} 批），更新 ${result.updated.length} 块门牌——去神经链接「门牌」页看看`);
+            } else {
+                setBootstrapResume(char.id, result.nextBatch);
+                setBootstrapStatus(`[ok]本次整理了 ${result.batches} 批（总进度 ${result.nextBatch}/${result.neededBatches}），更新 ${result.updated.length} 块门牌。再按一次继续`);
             }
-            setBootstrapStatus(result.totalLines === 0
-                ? '记忆宫殿里还没有可立牌的历史'
-                : `[ok]扫过 ${result.totalLines} 条历史（${result.batches} 批），更新 ${result.updated.length} 块门牌——去神经链接「门牌」页看看`);
         } catch (err: any) {
-            setBootstrapStatus(`[err]回填失败：${err?.message || err}`);
+            setBootstrapStatus(`[err]整理失败：${err?.message || err}（可再按一次重试，已整理的部分不会重复计入）`);
         } finally {
             setBootstrapping(false);
         }
@@ -3857,7 +3864,7 @@ create table if not exists memory_vectors (
                             opacity: bootstrapping ? 0.6 : 1,
                         }}
                     >
-                        {bootstrapping ? '正在回填…' : '从历史记忆重建门牌（老用户补课）'}
+                        {bootstrapping ? '正在整理…' : '整理历史记忆到门牌（每次一小段，可分多次）'}
                     </button>
 
                     {/* 消化日志：每次消化到底审视了什么、改了什么、往门牌提交了什么 */}

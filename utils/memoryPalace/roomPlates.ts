@@ -254,7 +254,7 @@ ${roomBlocks}
                 stream: false,
             }),
         },
-        2, 0, { appName: '记忆宫殿', purpose: '门牌整理' }
+        2, 120_000, { appName: '记忆宫殿', purpose: '门牌整理' }
     );
 
     const reply = data.choices?.[0]?.message?.content || '';
@@ -492,16 +492,24 @@ export const BOOTSTRAP_MAX_LINES_PER_ROOM = 240;
  * 和知识真实积累的顺序一致。盒子 summary 按自身 createdAt 参与排序。
  * 超过上限时丢最旧的（保留最新 N 条），返回丢弃数供 log。
  */
+export function collectBootstrapNodes(
+    nodes: MemoryNode[],
+    room: PlateRoom,
+    maxLines: number = BOOTSTRAP_MAX_LINES_PER_ROOM,
+): { nodes: MemoryNode[]; dropped: number } {
+    const candidates = nodes
+        .filter(n => n.room === room && !n.archived)
+        .sort((a, b) => a.createdAt - b.createdAt);
+    const dropped = Math.max(0, candidates.length - maxLines);
+    return { nodes: dropped > 0 ? candidates.slice(dropped) : candidates, dropped };
+}
+
 export function collectBootstrapLines(
     nodes: MemoryNode[],
     room: PlateRoom,
     maxLines: number = BOOTSTRAP_MAX_LINES_PER_ROOM,
 ): { lines: string[]; dropped: number } {
-    const candidates = nodes
-        .filter(n => n.room === room && !n.archived)
-        .sort((a, b) => a.createdAt - b.createdAt);
-    const dropped = Math.max(0, candidates.length - maxLines);
-    const kept = dropped > 0 ? candidates.slice(dropped) : candidates;
+    const { nodes: kept, dropped } = collectBootstrapNodes(nodes, room, maxLines);
     return {
         lines: kept.map(n => n.content.replace(/\s+/g, ' ').trim().slice(0, MATERIAL_LINE_MAX_CHARS)),
         dropped,
@@ -534,15 +542,15 @@ export async function bootstrapPlatesFromHistory(
     } = {},
 ): Promise<{ updated: PlateRoom[]; batches: number; totalLines: number; neededBatches: number; nextBatch: number; complete: boolean }> {
     const allNodes = await MemoryNodeDB.getByCharId(charId);
-    const byRoom = new Map<PlateRoom, string[]>();
+    const byRoom = new Map<PlateRoom, MemoryNode[]>();
     let totalLines = 0;
     for (const room of PLATE_ROOMS) {
-        const { lines, dropped } = collectBootstrapLines(allNodes, room);
+        const { nodes: kept, dropped } = collectBootstrapNodes(allNodes, room);
         if (dropped > 0) {
             console.warn(`🚪 [Bootstrap] 「${PLATE_TITLES[room]}」历史超上限，丢弃最旧 ${dropped} 条（保留最新 ${BOOTSTRAP_MAX_LINES_PER_ROOM}）`);
         }
-        byRoom.set(room, lines);
-        totalLines += lines.length;
+        byRoom.set(room, kept);
+        totalLines += kept.length;
     }
     if (totalLines === 0 || totalLines < (options.minLines ?? 0)) {
         return { updated: [], batches: 0, totalLines, neededBatches: 0, nextBatch: 0, complete: false };
@@ -557,24 +565,38 @@ export async function bootstrapPlatesFromHistory(
         console.log(`🚪 [Bootstrap] 本次跑第 ${startBatch + 1}~${endBatch} 批（共 ${neededBatches} 批）——没跑完的部分下次续传`);
     }
 
+    const fmtLine = (n: MemoryNode) => n.content.replace(/\s+/g, ' ').trim().slice(0, MATERIAL_LINE_MAX_CHARS);
     const updatedSet = new Set<PlateRoom>();
     let ran = 0;
     let nextBatch = startBatch;
     for (let i = startBatch; i < endBatch; i++) {
+        const batchNodes = PLATE_ROOMS.flatMap(room =>
+            byRoom.get(room)!.slice(i * BOOTSTRAP_LINES_PER_BATCH, (i + 1) * BOOTSTRAP_LINES_PER_BATCH));
+        if (batchNodes.length === 0) { nextBatch = i + 1; continue; }
         const materials: PlateMaterial[] = PLATE_ROOMS.map(room => ({
             room,
-            lines: byRoom.get(room)!.slice(i * BOOTSTRAP_LINES_PER_BATCH, (i + 1) * BOOTSTRAP_LINES_PER_BATCH),
+            lines: byRoom.get(room)!.slice(i * BOOTSTRAP_LINES_PER_BATCH, (i + 1) * BOOTSTRAP_LINES_PER_BATCH).map(fmtLine),
         }));
-        if (materials.every(m => m.lines.length === 0)) { nextBatch = i + 1; continue; }
+        // 进度在批次**开始**时上报：慢批次跑着的时候用户看到的是"正在第 N 批"，
+        // 而不是上一批的旧数字挂着像死机（LLM 调用已有 120s/次硬超时兜底）
+        options.onProgress?.(i + 1, neededBatches);
         try {
             const { updated } = await consolidatePlates(charId, charName, userName || '用户', materials, llmConfig);
             updated.forEach(r => updatedSet.add(r));
         } catch (e: any) {
             console.warn(`🚪 [Bootstrap] 第 ${i + 1}/${neededBatches} 批整理失败（继续下一批）: ${e?.message || e}`);
         }
+        // 判过"该不该上门牌"的历史节点打标退场：不再进后续消化的送审候选，
+        // 也和续传指针语义一致（该批不会再被扫）。与批次成败无关——resume 同样跳过失败批。
+        const seenAt = Date.now();
+        for (const n of batchNodes) {
+            if (!n.digestedAt) {
+                n.digestedAt = seenAt;
+                try { await MemoryNodeDB.save(n); } catch { /* 单条失败无害，最多下轮多看一眼 */ }
+            }
+        }
         ran++;
         nextBatch = i + 1;
-        options.onProgress?.(i + 1, neededBatches);
     }
     const complete = nextBatch >= neededBatches;
     console.log(`🚪 [Bootstrap] 本次 ${ran} 批 / 进度 ${nextBatch}/${neededBatches}${complete ? '（已还清）' : ''} → 更新 ${[...updatedSet].length} 块门牌`);

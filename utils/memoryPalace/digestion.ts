@@ -115,47 +115,14 @@ export interface DigestResult {
 
 /** 每聊 N 轮自动触发一次消化（1轮 = 用户发 + AI 回复） */
 const AUTO_DIGEST_ROUNDS = 50;
+
+/** 消化并发锁：同一角色同时只跑一个消化（链路含多次 LLM 调用，重叠=双倍烧钱+写竞态） */
+const digestionLocks = new Set<string>();
 const ROUND_KEY = (charId: string) => `mp_digestRounds_${charId}`;
 const LAST_DIGEST_KEY = (charId: string) => `mp_lastDigest_${charId}`;
-/**
- * 老用户自动回填：历史欠账没还清（无完成标记）→ 消化尾声接着还。
- * 断点续传：每次限 10 批（后台成本护栏），进度存 localStorage，跑一半
- * 关页面/限批没跑完都能下次续上；全部批次跑完才打完成标记。
- * 不再以"门牌全空"为条件——部分回填后门牌已非空，剩余欠账仍要还。
- */
-async function maybeBootstrapPlates(
-    charId: string,
-    charName: string,
-    userName: string | undefined,
-    llmConfig: LightLLMConfig,
-    onProgress?: (stage: string) => void,
-): Promise<PlateRoom[]> {
-    try {
-        const {
-            bootstrapPlatesFromHistory, isPlateBootstrapDone, markPlateBootstrapDone,
-            getBootstrapResume, setBootstrapResume, clearBootstrapResume,
-        } = await import('./roomPlates');
-        if (isPlateBootstrapDone(charId)) return [];
-        // 历史 < 30 条不值得回填，常规整理够用（此时 batches=0 且不打标，等历史攒够）
-        const boot = await bootstrapPlatesFromHistory(charId, charName, userName, llmConfig, {
-            maxBatches: 10, minLines: 30,
-            startBatch: getBootstrapResume(charId),
-            onProgress: (done, total) => onProgress?.(`正在回填历史门牌（第 ${done}/${total} 批）…`),
-        });
-        if (boot.complete) {
-            markPlateBootstrapDone(charId);
-            clearBootstrapResume(charId);
-            console.log(`🚪 [Digest] 门牌历史回填已还清（共 ${boot.neededBatches} 批）`);
-        } else if (boot.batches > 0) {
-            setBootstrapResume(charId, boot.nextBatch);
-            console.log(`🚪 [Digest] 门牌回填进度 ${boot.nextBatch}/${boot.neededBatches}，下次消化续传`);
-        }
-        return boot.updated;
-    } catch (e: any) {
-        console.warn(`🚪 [Digest] 门牌自动回填失败（不影响消化）: ${e?.message || e}`);
-        return [];
-    }
-}
+// 老用户的门牌历史回填**只走手动**：记忆宫殿 App「整理历史记忆到门牌」按钮，
+// 每按一次清一小段（断点续传）。此前消化尾声会自动跑最多 10 批——上千条记忆的
+// 用户会在毫无预期时看到一长串"回填第 N 批"，吓人且失控，已撤掉。
 
 /** 获取当前已累积的轮数 */
 export function getDigestRoundCount(charId: string): number {
@@ -402,7 +369,7 @@ ${material.recentEpisodes.length > 0 ? `
                     stream: false,
                 }),
             },
-            2, 0, { appName: '记忆宫殿', purpose: '记忆消化' }
+            2, 120_000, { appName: '记忆宫殿', purpose: '记忆消化' }
         );
 
         const reply = data.choices?.[0]?.message?.content || '';
@@ -874,6 +841,25 @@ export async function runCognitiveDigestion(
     onProgress?: (stage: string) => void,
 ): Promise<DigestResult | null> {
     const trigger: 'auto' | 'manual' = manualTrigger ? 'manual' : 'auto';
+
+    // 并发锁：同一角色同时只跑一个消化。链路长（审视→回填→整理），没有锁时
+    // 触发重叠会双倍烧钱 + digestedAt/门牌写入互相竞态。
+    if (digestionLocks.has(charId)) {
+        console.log(`🧠 [Digest] 跳过：该角色已有消化在进行`);
+        return null;
+    }
+    digestionLocks.add(charId);
+
+    // ⚠️ 进场即归零，而不是结束时归零。两个理由：
+    //  1. 消化链路可达分钟级，期间新聊天轮 increment 到 51/52…≥50 会再触发——
+    //     结束时归零挡不住这个风暴窗口；进场归零后，消化期间的轮数计入下一个50。
+    //  2. 中途任何异常逃逸都会跳过"结束时归零"，计数器卡死 → 每轮重触发烧钱
+    //     （用户"每聊一句弹一次门牌整理"的事故根因）。进场归零天然免疫。
+    //  失败的代价只是这一批材料等下一个 50 轮——lastDigestTs 只在成功结束时
+    //  推进（markDigested），回看窗口不会因失败而丢内容。
+    resetDigestRounds(charId);
+
+    try {
     // 收集材料
     const material = await gatherDigestMaterial(charId);
 
@@ -887,15 +873,10 @@ export async function runCognitiveDigestion(
         if (embeddingConfig) await vectorizeOrphanedNodes(charId, embeddingConfig);
         const emptyResult: DigestResult = { resolved: [], deepened: [], faded: [], fulfilled: [], disappointed: [], internalized: [], synthesizedUser: [], selfInsights: [], selfConfused: [], worries: [], aspirations: [], distilled: [] };
         // 早退分支不跑门牌整理：回看窗口（客厅+卧室）都空 = 上次消化以来门牌房间
-        // 没有任何新节点，整理只会让 LLM 对着旧材料重排——纯烧钱。只做回填续传
-        // （它有自己的完成标记/进度护栏，欠账没还清时才会真正跑）。
-        const plateUpdated: PlateRoom[] = await maybeBootstrapPlates(charId, charName, userName, llmConfig, onProgress);
-        emptyResult.plateUpdated = plateUpdated;
-        await saveDigestReport(charId, trigger, userName, null, emptyResult, {}, plateUpdated);
-        // ⚠️ 计数器必须归零：此前早退分支漏掉 resetDigestRounds，轮数卡在 ≥50，
-        // 之后**每一轮聊天**都re触发自动消化——用户看到"每聊一句就弹门牌整理浮窗"
-        // 的根因就是它（早退分支挂上门牌整理后，这个老 bug 从隐性变成每轮可见+烧钱）。
-        resetDigestRounds(charId);
+        // 没有任何新节点，整理只会让 LLM 对着旧材料重排——纯烧钱。
+        emptyResult.plateUpdated = [];
+        await saveDigestReport(charId, trigger, userName, null, emptyResult, {}, []);
+        // 计数器已在进场时归零（见函数开头），这里只推进 lastDigestTs
         markDigested(charId);
         return emptyResult;
     }
@@ -909,13 +890,31 @@ export async function runCognitiveDigestion(
     // 执行动作：状态机改现有节点；概括类产出汇集为门牌蒸馏候选
     const { result, plateSubmissions } = await executeActions(actions, charId, material);
 
+    // 一次性评审：本轮送审过的书房/用户房/自我房候选**全部**打标退场——
+    // 被消费的在 executeActions 里已标，这里补上被判 keep 的：判过"该不该上门牌"
+    // 的记忆不再反复送审（keep = 看过了、不够格）。老积压因此每次消化自然消掉
+    // 一批（≤20/房），逐次清理。阁楼/窗台是状态机，必须反复出现直到有结局，不打标；
+    // 回看窗口按时间推进，天然不重复。
+    try {
+        const seenAt = Date.now();
+        const toMark = [...material.studyNodes, ...material.userRoomNodes, ...material.selfRoomNodes]
+            .filter(n => !n.digestedAt);
+        for (const n of toMark) {
+            n.digestedAt = seenAt;
+            await MemoryNodeDB.save(n);
+        }
+        if (toMark.length > 0) console.log(`🧠 [Digest] ${toMark.length} 条送审候选打标退场（含 keep）`);
+    } catch (e: any) {
+        console.warn(`🧠 [Digest] 候选打标失败（下轮会重新送审，无害）: ${e?.message || e}`);
+    }
+
     // 向量化本次新建的节点 + 任何历史遗留的孤儿节点
     if (embeddingConfig) await vectorizeOrphanedNodes(charId, embeddingConfig);
 
     // 门牌全量整理：消化是"独处反思"，正是把情景沉淀为语义的时机。
-    // 老用户：历史欠账没还清时先续传回填，再做常规整理。
     // 本次消化提炼的概括（plateSubmissions）作为高优先级原料一并送入。
-    let plateUpdated: PlateRoom[] = await maybeBootstrapPlates(charId, charName, userName, llmConfig, onProgress);
+    // （历史回填不在这里跑——只走记忆宫殿的手动按钮，每按一次清一小段）
+    let plateUpdated: PlateRoom[] = [];
     try {
         onProgress?.('正在整理门牌…');
         const { consolidateAllPlates } = await import('./roomPlates');
@@ -933,8 +932,7 @@ export async function runCognitiveDigestion(
     // 消化日志：这次到底消化了什么，可在记忆宫殿 App 回看
     await saveDigestReport(charId, trigger, userName, material, result, plateSubmissions, plateUpdated);
 
-    // 重置轮数计数器 & 标记时间
-    resetDigestRounds(charId);
+    // 标记时间（计数器已在进场时归零）
     markDigested(charId);
 
     const total = result.resolved.length + result.deepened.length + result.faded.length +
@@ -946,6 +944,9 @@ export async function runCognitiveDigestion(
     }
 
     return result;
+    } finally {
+        digestionLocks.delete(charId);
+    }
 }
 
 // ─── 人格风格自动推断 ────────────────────────────────
@@ -1022,7 +1023,7 @@ ${memoryContext}
                     stream: false,
                 }),
             },
-            2, 0, { appName: '记忆宫殿', charName, purpose: '人格审视' }
+            2, 120_000, { appName: '记忆宫殿', charName, purpose: '人格审视' }
         );
 
         const reply = data.choices?.[0]?.message?.content || '';
