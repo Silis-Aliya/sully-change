@@ -213,7 +213,7 @@ active(新建) → anchor(7天+，心理锚点) → fulfilled / disappointed
 
 **长期用户防灌爆**：消化候选池按时近取上限（书房/用户房/自我房各 20 条、阁楼按重要性 12 条）——prompt 不被老积压撑爆。
 
-**老用户历史回填（Bootstrap）**：老积压不白攒。门牌全空 + 历史 ≥30 条时，消化尾声自动跑一次回填（`bootstrapPlatesFromHistory`）：四个门牌房间的历史按**时间正序**分批（12 条/房/批）过整理 LLM——后面的批次带更新的事实，合并语义自然 supersede，与知识真实积累的顺序一致。自动路径限 10 批（成本护栏）+ `mp_plateBootstrapped_` 标记防重复；记忆宫殿 App「从历史记忆重建门牌」按钮可手动全量重跑（带进度）。每房间历史上限 240 条（超出丢最旧）。合并语义天然幂等，重复回填不会翻倍。
+**老用户历史回填（Bootstrap）**：老积压不白攒，但**只走手动**——记忆宫殿 App「整理历史记忆到门牌」按钮，**每按一次清一小段（5 批）**，进度存 localStorage（`mp_plateBootstrapBatch_`）断点续传，随时可停、下次接着清，全部清完打 `mp_plateBootstrapped_` 完成标记。不做自动触发：上千条记忆的用户不该在毫无预期时看到一长串回填批次。机制：四个门牌房间的历史按**时间正序**分批（12 条/房/批）过整理 LLM——后面的批次带更新的事实，合并语义自然 supersede。每房间历史上限 240 条（超出丢最旧）；合并幂等，重复回填不翻倍；每次 LLM 尝试 120s 硬超时。
 
 **注入**：`injectMemoryPalace` 每轮纯 IDB 读出 → `char.roomPlatesInjection` → `buildCoreContext` 在印象档案之后注入（受 `memoryPalaceEnabled` 把关防残留）。注入框架把门牌定位为 **constraint 而非 topic**："你早已知道的背景，不要主动提起，只在相关时自然影响反应"——对应人脑背景知识"常在但低激活"的状态。
 
