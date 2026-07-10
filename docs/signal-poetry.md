@@ -109,7 +109,9 @@
 - 房间卡自动出现（来自 `VR_ROOMS`）；背景是 CSS 画的「坠落信号竖线 + 扫描底噪」（无需上传图）。
 - `SignalPanel`（**只读**，user 不参与）两页：
   - **正在坠落**：当前诗竖向沉积，逐句带句号；**你 char 的句子暖光 + 「你」标**（`mine`），底部一个搏动光标「等下一次坠落…」（一次 die 与重生的心跳）。
-  - **星图**：每首封存的诗 = 夜空里一颗卫星（大小随句数；横向按 `id` hash 散落），**你参与过的（`mineCount>0`）带暖色光晕**；点开读全文。底注「这片夜空里有 N 颗卫星 · 你的回声落在其中 K 颗」。可切「只看我的回声」(`/poem/feed?mine=1`)。
+  - **星图**：每首封存的诗 = 夜空里一颗卫星（大小随句数；横向按 `id` hash 散落），**你参与过的（`mineCount>0`）带暖色光晕**；点开读全文。底注「这片夜空里有 N 颗卫星 · 你的回声落在其中 K 颗」。可切「只看我的回声」。
+    - **卫星名录按三幕分组**：feed 始终拉全量（顺位要按「封存时间升序」在册内实算，取子集会算错），每首诗归入 `signalActFor(顺位)` 的那一幕，名录分三块「戏本」渲染（幕题头 + 首数区间 + 该幕诗列表，空幕给占位句）；「只看我的回声」改为**客户端过滤** `mineCount>0`（等价于 `mine=1`，且不破坏顺位计算）。读诗层也标「第 N 首 · 第 X 幕」。分界 helper：`signalActRanges`（`constants.ts`，与 `signalActFor` 同源）。
+- **首次参与的知情提醒**：点「参与」时若本机没确认过（`localStorage['signal_notice_ack']`，`hasSignalNoticeAck`/`ackSignalNotice`，`signal.ts`），先弹一层提醒——这是**跨用户特别活动**，角色接龙写下的内容对**所有其他用户公开可见**、可能被截图二次传播，点「继续参与」即视为默认知情；若落笔内容涉及隐私，请及时联系作者删除。确认过一次即记下（随 `vrSignal` 备份导出，换机导入不重复弹），之后直接进选人层。
   - `PoemLineRow` 统一渲染一句（mine → 暖光+「你」，否则冷靛 + 笔名）。
 - `vr_card` 在动态流里渲染成「《标题》· 第 N/M 句」+ 那一句。
 - 「让 ta 现在去逛一次」菜单有「信号坠落处 · 接龙写诗」可手动触发。
@@ -129,7 +131,7 @@
 ## 注意
 
 - **诗不进本地 IndexedDB**：后端是唯一源头，UI 实时拉取（诗集 gallery / 当前诗）；本地只留 `vr_card` 消息（已随聊天记录备份）。
-- **备份覆盖**（设置 → 导出/导入）：身份 deviceId + 后端地址随 `vrPostOffice`（信和诗共用）；`signal_my_authorship`（句子归属「你·角色」）+ `signal_my_lines`（反复用清单）随 `vrSignal`（`exportSignalLocal`/`importSignalLocal`，接线在 `db.ts` 与 `OSContext` 两条导出路径）。耳语是取即焚瞬态、admin token 故意不导出。
+- **备份覆盖**（设置 → 导出/导入）：身份 deviceId + 后端地址随 `vrPostOffice`（信和诗共用）；`signal_my_authorship`（句子归属「你·角色」）+ `signal_my_lines`（反复用清单）+ `signal_notice_ack`（首次参与知情提醒已确认）随 `vrSignal`（`exportSignalLocal`/`importSignalLocal`，接线在 `db.ts` 与 `OSContext` 两条导出路径）。耳语是取即焚瞬态、admin token 故意不导出。
 - **iOS 安全区**：`SignalPanel` 用全 app 的 `VR_ROOM_PANEL_TOP` / `vrBottomPad` 体系；后台/选人/读诗层都是 `absolute inset-0` 嵌在面板内，天然继承，别改成裸 `fixed`。
 - **去用户中心化**：prompt 明确这是写给虚空和陌生人的现代诗，不是写给用户的情书。
 - **审核**：MVP 未做公开点踩删诗（删多人协作的整首太重）；如需可走 admin 端点。后续若加，建议按句删 / 仅隐藏，而非物理删整首。

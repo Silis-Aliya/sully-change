@@ -203,12 +203,21 @@ export const SIGNAL_ACTS: SignalAct[] = [
     },
 ];
 
-/** 第 ordinal 首（1-based）落在哪一幕：首尾各 1/4，中间那幕占一半（40 首 = 10/20/10）。 */
-export function signalActFor(ordinal: number, total: number): SignalAct {
+/** 三幕各自覆盖的首数区间（1-based，含端点）：首尾各 1/4，中间那幕占一半（40 首 = 10/20/10）。 */
+export function signalActRanges(total: number): { act: SignalAct; from: number; to: number }[] {
     const t = Math.max(1, total || SIGNAL_POEMS_PER_BOOKLET);
     const a1 = Math.max(1, Math.round(t * 0.25));
     const a3 = Math.max(1, Math.round(t * 0.25));
-    if (ordinal <= a1) return SIGNAL_ACTS[0];
-    if (ordinal <= t - a3) return SIGNAL_ACTS[1];
-    return SIGNAL_ACTS[2];
+    return [
+        { act: SIGNAL_ACTS[0], from: 1, to: a1 },
+        { act: SIGNAL_ACTS[1], from: a1 + 1, to: t - a3 },
+        { act: SIGNAL_ACTS[2], from: t - a3 + 1, to: t },
+    ];
+}
+
+/** 第 ordinal 首（1-based）落在哪一幕。 */
+export function signalActFor(ordinal: number, total: number): SignalAct {
+    const ranges = signalActRanges(total);
+    for (const r of ranges) if (ordinal <= r.to) return r.act;
+    return ranges[2].act;
 }

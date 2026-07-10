@@ -55,10 +55,20 @@ export function getMyRecentLines(charName: string): string[] {
     catch { return []; }
 }
 
+// ── 首次参与的知情提醒：这是跨用户特别活动，角色接龙写下的内容对所有其他用户
+// 公开可见、可能被截图二次传播；确认过一次即记下，之后参与不再弹。
+const NOTICE_ACK_KEY = 'signal_notice_ack';
+export function hasSignalNoticeAck(): boolean {
+    try { return localStorage.getItem(NOTICE_ACK_KEY) === '1'; } catch { return false; }
+}
+export function ackSignalNotice(): void {
+    try { localStorage.setItem(NOTICE_ACK_KEY, '1'); } catch { /* ignore */ }
+}
+
 // ── 备份用：把「你·角色」句子归属与反复用记录随「设置 → 导出/导入备份」带走 ──
 // deviceId/后端地址由邮局的 exportPostOfficeLocal 携带（信和诗共用身份），这里只补诗自己的本机记录。
 // 耳语（signal_whisper）是取即焚的瞬态，故意不进备份。
-const BACKUP_KEYS = [AUTHOR_KEY, MY_LINES_KEY] as const;
+const BACKUP_KEYS = [AUTHOR_KEY, MY_LINES_KEY, NOTICE_ACK_KEY] as const;
 export function exportSignalLocal(): Record<string, string> | undefined {
     try {
         const out: Record<string, string> = {};

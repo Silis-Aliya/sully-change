@@ -12,12 +12,12 @@ import { useMusic, type Song } from '../context/MusicContext';
 import { DB } from '../utils/db';
 import { useResilientAssetUrl, attachAudioMirrorFallback } from '../utils/assetUrl';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
-import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH, signalActFor } from '../utils/vrWorld/constants';
+import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH, signalActFor, signalActRanges, SIGNAL_POEMS_PER_BOOKLET } from '../utils/vrWorld/constants';
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeBytes } from '../utils/vrWorld/decodeText';
 import { stripLeakedAttrs } from '../utils/vrWorld/prompts';
 import { PostOffice, MAX_LETTER_CHARS, exportIdentity, importIdentity, getAdminToken, setAdminToken, type RemoteReply, type RemoteLetterStat, type RemoteAdminLetter } from '../utils/vrWorld/postOffice';
-import { Signal, getMyAuthorship, setSignalWhisper, type SignalState } from '../utils/vrWorld/signal';
+import { Signal, getMyAuthorship, setSignalWhisper, hasSignalNoticeAck, ackSignalNotice, type SignalState } from '../utils/vrWorld/signal';
 import type { SignalPoem, SignalBooklet } from '../types';
 import { getVRApi, setVRApi, getVRApiLog, clearVRApiLog, type VRApiCall } from '../utils/vrWorld/vrApi';
 import { safeResponseJson } from '../utils/safeApi';
@@ -1843,6 +1843,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
     const [openPoem, setOpenPoem] = useState<SignalPoem | null>(null);
     const [adminOpen, setAdminOpen] = useState(false);
     const [pickOpen, setPickOpen] = useState(false); // 参与：指定角色的选人层
+    const [noticeOpen, setNoticeOpen] = useState(false); // 首次参与：特别活动知情提醒（确认过一次就不再弹）
     const [whisper, setWhisper] = useState('');       // 用户的耳语（不进诗，随 prompt 给角色）
     const participate = (c: CharacterProfile) => {
         setPickOpen(false);
@@ -1857,16 +1858,18 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
         catch { setOffline(true); }
         finally { setLoading(false); }
     }, []);
-    const loadFeed = useCallback(async (mo: boolean) => {
-        try { setFeed(await Signal.feed(40, { mineOnly: mo })); } catch { /* 离线不影响 */ }
+    // 星图始终拉全量：分幕要按「每首在册子里的顺位」归幕，取子集会算错顺位；
+    // 「只看我的回声」改为客户端过滤（mineCount 已随本机 device 标注，结果等价）。
+    const loadFeed = useCallback(async () => {
+        try { setFeed(await Signal.feed(60)); } catch { /* 离线不影响 */ }
     }, []);
 
     useEffect(() => {
-        void load(); void loadFeed(mineOnly);
-        const h = () => { void load(); void loadFeed(mineOnly); };
+        void load(); void loadFeed();
+        const h = () => { void load(); void loadFeed(); };
         window.addEventListener('vr-session-done', h);
         return () => window.removeEventListener('vr-session-done', h);
-    }, [load, loadFeed, mineOnly]);
+    }, [load, loadFeed]);
 
     // 参与被打回（调 LLM 之前，零 token）→ 温柔提示
     useEffect(() => {
@@ -1884,6 +1887,24 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
     const bk = state?.booklet;
     const poem = state?.poem;
     const myEchoes = feed.filter(p => (p.mineCount || 0) > 0).length;
+    const visibleFeed = mineOnly ? feed.filter(p => (p.mineCount || 0) > 0) : feed;
+
+    // 每首封存诗在其册子里的顺位（按封存时间升序）→ 标「第 N 首」、按三幕归组
+    const ordinalOf = useMemo(() => {
+        const m = new Map<string, number>();
+        const byBooklet = new Map<string, SignalPoem[]>();
+        for (const p of feed) { const arr = byBooklet.get(p.bookletId); if (arr) arr.push(p); else byBooklet.set(p.bookletId, [p]); }
+        for (const arr of byBooklet.values()) {
+            arr.sort((a, b) => (a.sealedAt || a.createdAt) - (b.sealedAt || b.createdAt)).forEach((p, i) => m.set(p.id, i + 1));
+        }
+        return m;
+    }, [feed]);
+    // 这首诗落在第几首、哪一幕（旧册子的诗按默认篇目数归幕）
+    const poemAct = (p: SignalPoem) => {
+        const ord = ordinalOf.get(p.id);
+        if (!ord) return null;
+        return { ord, act: signalActFor(ord, (bk && p.bookletId === bk.id) ? bk.poemsTarget : SIGNAL_POEMS_PER_BOOKLET) };
+    };
 
     // BGM：按当前诗所处的幕（未加载/写完则无）随机放本幕一首。面板在场即播（进面板本身是用户手势，不触 autoplay 限制）。
     const bgmActNo = (bk && bk.status !== 'done') ? signalActFor((bk.poemCount || 0) + 1, bk.poemsTarget).no : null;
@@ -1937,8 +1958,8 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                         </button>
                     )}
                 </div>
-                {/* 参与：指定角色去接一句（黄铜压印质感） */}
-                <button onClick={() => setPickOpen(true)} disabled={!!state?.paused}
+                {/* 参与：指定角色去接一句（黄铜压印质感）。首次参与先过一道知情提醒 */}
+                <button onClick={() => (hasSignalNoticeAck() ? setPickOpen(true) : setNoticeOpen(true))} disabled={!!state?.paused}
                     className="mt-3 w-full rounded-md py-2 text-[12px] tracking-[0.16em] active:scale-[0.99] disabled:opacity-45"
                     style={{
                         fontFamily: `'Noto Serif SC',serif`, color: '#2a2012', fontWeight: 700,
@@ -1982,7 +2003,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                         )}
                     </div>
                 ) : (
-                    feed.length === 0 ? (
+                    visibleFeed.length === 0 ? (
                         <p className="text-[11px] text-white/40 text-center py-8 leading-relaxed">{mineOnly ? '你的回声还没落进任何一颗卫星。' : '还没有写完封存的诗。'}</p>
                     ) : (
                         // 轨道图：一颗「始终不开口的核心」，每首封存的诗是一颗绕核慢转的电子卫星。
@@ -1991,7 +2012,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                             // 由内向外逐环装填；环容量与半径
                             const CAPS = [6, 9, 12, 14];
                             const RADII = [48, 84, 120, 152];
-                            const placed = feed.slice(0, CAPS.reduce((a, b) => a + b, 0)).map((p, i) => {
+                            const placed = visibleFeed.slice(0, CAPS.reduce((a, b) => a + b, 0)).map((p, i) => {
                                 let ring = 0, idx = i;
                                 while (ring < CAPS.length - 1 && idx >= CAPS[ring]) { idx -= CAPS[ring]; ring += 1; }
                                 return { p, ring, idx };
@@ -2046,18 +2067,35 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                                             );
                                         })}
                                     </div>
-                                    {/* ── 卫星名录（点标题读全文） ── */}
-                                    <div className="mt-2 mx-1 rounded-lg overflow-hidden" style={{ border: '1px solid rgba(201,168,106,.14)' }}>
-                                        {feed.map((p, i) => {
-                                            const mine = (p.mineCount || 0) > 0;
+                                    {/* ── 卫星名录：按三幕分组（每幕一块「戏本」，点标题读全文） ── */}
+                                    <div className="mt-2 mx-1 space-y-2">
+                                        {signalActRanges(bk?.poemsTarget || SIGNAL_POEMS_PER_BOOKLET).map(({ act, from, to }) => {
+                                            if (from > to) return null;
+                                            const poems = visibleFeed
+                                                .filter(p => poemAct(p)?.act.no === act.no)
+                                                .sort((a, b) => (ordinalOf.get(a.id) || 0) - (ordinalOf.get(b.id) || 0));
                                             return (
-                                                <button key={p.id} onClick={() => setOpenPoem(p)}
-                                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left active:bg-white/5"
-                                                    style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(201,168,106,.08)' }}>
-                                                    <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: mine ? '#e6ce97' : 'rgba(151,129,90,.75)', boxShadow: mine ? '0 0 6px 1px rgba(230,206,151,.55)' : 'none' }} />
-                                                    <span className="text-[11.5px] truncate" style={{ fontFamily: `'Noto Serif SC',serif`, letterSpacing: '.04em', color: mine ? '#f0dca8' : 'rgba(224,208,176,.72)' }}>《{cleanTitle(p.title)}》</span>
-                                                    <span className="ml-auto text-[8.5px] tabular-nums shrink-0" style={{ fontFamily: `'Noto Serif SC',serif`, color: mine ? 'rgba(240,220,168,.6)' : 'rgba(201,168,106,.45)' }}>{p.lineCount} 句</span>
-                                                </button>
+                                                <div key={act.no} className="rounded-lg overflow-hidden" style={{ border: '1px solid rgba(201,168,106,.14)' }}>
+                                                    <div className="flex items-baseline gap-2 px-3 py-1.5" style={{ background: 'linear-gradient(180deg, rgba(201,168,106,.1), rgba(201,168,106,.02))', borderBottom: '1px solid rgba(201,168,106,.12)' }}>
+                                                        <span className="text-[10.5px] tracking-[0.18em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: '#e0c98f' }}>第{['一', '二', '三'][act.no - 1]}幕 · {act.title}</span>
+                                                        <span className="ml-auto text-[8.5px] tabular-nums shrink-0" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.45)' }}>第 {from}–{to} 首</span>
+                                                    </div>
+                                                    {poems.length === 0 ? (
+                                                        <p className="px-3 py-2 text-[9.5px] italic" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(224,208,176,.35)' }}>{mineOnly ? '你的回声还没落进这一幕。' : '这一幕还静默着，等信号坠落。'}</p>
+                                                    ) : poems.map((p, i) => {
+                                                        const mine = (p.mineCount || 0) > 0;
+                                                        return (
+                                                            <button key={p.id} onClick={() => setOpenPoem(p)}
+                                                                className="w-full flex items-center gap-2 px-3 py-1.5 text-left active:bg-white/5"
+                                                                style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(201,168,106,.08)' }}>
+                                                                <span className="text-[8.5px] tabular-nums shrink-0 w-4 text-right" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.4)' }}>{ordinalOf.get(p.id) || '—'}</span>
+                                                                <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: mine ? '#e6ce97' : 'rgba(151,129,90,.75)', boxShadow: mine ? '0 0 6px 1px rgba(230,206,151,.55)' : 'none' }} />
+                                                                <span className="text-[11.5px] truncate" style={{ fontFamily: `'Noto Serif SC',serif`, letterSpacing: '.04em', color: mine ? '#f0dca8' : 'rgba(224,208,176,.72)' }}>《{cleanTitle(p.title)}》</span>
+                                                                <span className="ml-auto text-[8.5px] tabular-nums shrink-0" style={{ fontFamily: `'Noto Serif SC',serif`, color: mine ? 'rgba(240,220,168,.6)' : 'rgba(201,168,106,.45)' }}>{p.lineCount} 句</span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
                                             );
                                         })}
                                     </div>
@@ -2086,6 +2124,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                                 <span className="inline-block h-px w-10" style={{ background: 'linear-gradient(90deg,transparent,rgba(201,168,106,.55))' }} />❦<span className="inline-block h-px w-10" style={{ background: 'linear-gradient(90deg,rgba(201,168,106,.55),transparent)' }} />
                             </div>
                             <div className="text-[9px] tracking-wider" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.55)' }}>{openPoem.lineCount} 句 · {(openPoem.mineCount || 0) > 0 ? <span style={{ color: '#f0dca8' }}>你的回声落在这里 {openPoem.mineCount} 句</span> : '一首陌生人合写的诗'}</div>
+                            {(() => { const pa = poemAct(openPoem); return pa && <div className="mt-1 text-[9px] tracking-[0.14em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.5)' }}>第 {pa.ord} 首 · 第{['一', '二', '三'][pa.act.no - 1]}幕「{pa.act.title}」</div>; })()}
                             {openPoem.brief && <div className="mt-1.5 text-[9.5px] italic max-w-xs mx-auto leading-relaxed" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.5)' }}>{openPoem.brief}</div>}
                         </div>
                         <div className="max-w-md mx-auto">
@@ -2093,6 +2132,30 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                         </div>
                     </div>
                     <button onClick={() => setOpenPoem(null)} className="relative shrink-0 mx-auto mb-4 mt-1 text-[11px] tracking-[0.2em] rounded-sm px-6 py-1.5" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(224,208,176,.75)', border: '1px solid rgba(201,168,106,.35)', marginBottom: vrBottomPad('1rem') }}>合 上</button>
+                </div>
+            )}
+
+            {/* 首次参与：特别活动知情提醒。确认过一次记在本地（随 vrSignal 备份），之后直接进选人层 */}
+            {noticeOpen && (
+                <div className="absolute inset-0 z-40 flex items-center justify-center px-6" style={{ background: 'rgba(6,4,10,0.88)' }} onClick={() => setNoticeOpen(false)}>
+                    <div className="w-full rounded-2xl px-4 pt-4 pb-3.5" onClick={e => e.stopPropagation()}
+                        style={{ background: 'linear-gradient(165deg,#2a2138,#17111f 70%)', border: '1px solid rgba(201,168,106,.4)', boxShadow: '0 12px 40px rgba(0,0,0,.6)' }}>
+                        <div className="text-center text-[13px] tracking-[0.2em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: '#e8d6ab' }}>参与前，请读这一页</div>
+                        <div className="my-2 flex items-center justify-center gap-2 text-[9px]" style={{ color: 'rgba(201,168,106,.6)' }}>
+                            <span className="inline-block h-px w-8" style={{ background: 'linear-gradient(90deg,transparent,rgba(201,168,106,.55))' }} />❦<span className="inline-block h-px w-8" style={{ background: 'linear-gradient(90deg,rgba(201,168,106,.55),transparent)' }} />
+                        </div>
+                        <div className="space-y-2 text-[11px] leading-relaxed" style={{ color: 'rgba(224,208,176,.78)' }}>
+                            <p>信号坠落处是<span style={{ color: '#f0dca8' }}>跨用户的特别活动</span>：所有用户的角色跨实例合写同一首诗。</p>
+                            <p>你的角色接龙写下的内容，会对<span style={{ color: '#f0dca8' }}>所有其他用户公开可见</span>，可能被截图、二次传播。点「继续参与」即视为默认知情。</p>
+                            <p>若发现落笔内容涉及隐私，请<span style={{ color: '#f0dca8' }}>及时联系作者删除</span>。</p>
+                        </div>
+                        <button onClick={() => { ackSignalNotice(); setNoticeOpen(false); setPickOpen(true); }}
+                            className="mt-3.5 w-full rounded-md py-2 text-[12px] tracking-[0.16em] active:scale-[0.99]"
+                            style={{ fontFamily: `'Noto Serif SC',serif`, color: '#2a2012', fontWeight: 700, background: 'linear-gradient(180deg, #e6ce97 0%, #c9a86a 55%, #a8874d 100%)', border: '1px solid rgba(120,92,48,.6)', boxShadow: '0 3px 12px rgba(120,92,48,.4), inset 0 1px 0 rgba(255,244,214,.7)' }}>
+                            我已知情 · 继续参与
+                        </button>
+                        <button onClick={() => setNoticeOpen(false)} className="mt-2 w-full py-1.5 text-[10.5px] tracking-[0.2em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(224,208,176,.5)' }}>再想想</button>
+                    </div>
                 </div>
             )}
 
@@ -2127,7 +2190,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
             )}
 
             {/* 后台（dev-only）：删诗/删句/暂停推入 */}
-            {adminOpen && <SignalAdminPanel onClose={() => { setAdminOpen(false); void load(); void loadFeed(mineOnly); }} addToast={addToast} />}
+            {adminOpen && <SignalAdminPanel onClose={() => { setAdminOpen(false); void load(); void loadFeed(); }} addToast={addToast} />}
         </div>
     );
 };
