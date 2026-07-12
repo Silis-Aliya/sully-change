@@ -3,17 +3,17 @@ import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallba
 import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, BubbleStyle, MemoryFragment, EmojiCategory } from '../types';
+import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, BubbleStyle, EmojiCategory } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
 import Modal from '../components/os/Modal';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
-import { processGroupNewMessages, deleteGroupMemoriesByGroupId, getGroupMemoryPalaceHighWaterMark, BUFFER_THRESHOLD_GROUP } from '../utils/memoryPalace/groupPipeline';
+import { deleteGroupMemoriesByGroupId } from '../utils/memoryPalace/groupPipeline';
 import { processImage } from '../utils/file';
 import { stickerNameFromUrl } from '../utils/messageFormat';
 import { DEFAULT_ARCHIVE_PROMPTS, PRESET_THEMES } from '../components/chat/ChatConstants';
 import { resolveChatTheme } from '../utils/groupChat/theme';
-import { parseDirectorActions, parseSummaryYaml, stripSkipMarker } from '../utils/groupChat/parse';
+import { parseDirectorActions, stripSkipMarker } from '../utils/groupChat/parse';
 import { GroupPacketMeta, PacketReceiptMeta, ClaimResult, claimPacket, effectivePacketStatus, makePacketMeta } from '../utils/groupChat/redpacket';
 import { messageLogText } from '../utils/groupChat/format';
 import { buildMemberTimeline, DEFAULT_MEMBER_TIMELINE_CAP } from '../utils/groupChat/timeline';
@@ -30,6 +30,15 @@ import WhiteboxSoundEditor from '../components/chat/WhiteboxSoundEditor';
 import HtmlCard from '../components/chat/HtmlCard';
 import { WhiteboxSound, parseWhiteboxSound, upsertWhiteboxSound, stripWhiteboxSoundDirective, resolveActiveSound, playWhiteboxSound, unlockWhiteboxAudio } from '../utils/whiteboxSound';
 import { buildHtmlPrompt } from '../utils/htmlPrompt';
+import {
+    buildGroupTopicContext,
+    buildGroupTopicPrompt,
+    GROUP_TOPIC_BUFFER_THRESHOLD,
+    GROUP_TOPIC_HOT_ZONE,
+    groupTopicPendingCount,
+    makeGroupTopicBox,
+    planGroupTopicBatch,
+} from '../utils/groupChat/topicBoxes';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
@@ -354,19 +363,21 @@ const GroupMessageItem = React.memo(({
 // --- Main Component ---
 
 const GroupChat: React.FC = () => {
-    const { closeApp, groups, createGroup, updateGroup, deleteGroup, characters, updateCharacter, apiConfig, addToast, userProfile, virtualTime, characterGroups, theme: osTheme, customThemes } = useOS();
+    const { closeApp, groups, createGroup, updateGroup, deleteGroup, characters, apiConfig, addToast, userProfile, virtualTime, characterGroups, theme: osTheme, customThemes } = useOS();
     const [view, setView] = useState<'list' | 'chat'>('list');
     const [activeGroup, setActiveGroup] = useState<GroupProfile | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
     const [totalMsgCount, setTotalMsgCount] = useState(0);
-    const [visibleCount, setVisibleCount] = useState(30);
+    const MESSAGE_PAGE_SIZE = 50;
+    const [visibleCount, setVisibleCount] = useState(MESSAGE_PAGE_SIZE);
+    // 0=最新一页；每次向前翻只渲染固定 50 条，避免加载历史后 DOM 无限增长。
+    const [historyOffset, setHistoryOffset] = useState(0);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
-    /** 群记忆宫殿"提取中"状态文本——非空时显示顶部胶囊状态条 */
+    /** 群公共话题盒整理状态——非空时显示顶部胶囊状态条 */
     const [groupPalaceStatus, setGroupPalaceStatus] = useState<string>('');
 
-    // ref 出最新 characters，让 finally 里跑的群记忆宫殿能读到"用户刚关掉某个成员宫殿"
-    // 的最新状态——闭包里的 characters 还是发消息那一刻捕获的旧值，会让关闭后还触发一次
+    // 公共成盒异步完成时使用最新角色名与成员资料，避免长回复期间闭包数据过期。
     const charactersRef = useRef(characters);
     charactersRef.current = characters;
 
@@ -390,9 +401,10 @@ const GroupChat: React.FC = () => {
     const [preserveContext, setPreserveContext] = useState(true);
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [summaryProgress, setSummaryProgress] = useState('');
-    // 成员记忆状态面板：群宫殿水位线位置（日期）+ 未整理条数；手动总结写给谁
-    const [memoryPanelStats, setMemoryPanelStats] = useState<{ hwm: number; hwmDateStr: string | null; pendingCount: number } | null>(null);
-    const [selectedSummaryMembers, setSelectedSummaryMembers] = useState<Set<string>>(new Set());
+    const [topicPendingCount, setTopicPendingCount] = useState(0);
+    const [editingTopicBoxId, setEditingTopicBoxId] = useState<string | null>(null);
+    const [topicTitleDraft, setTopicTitleDraft] = useState('');
+    const [topicSummaryDraft, setTopicSummaryDraft] = useState('');
 
     // Archive prompt selection (shared with Chat app)
     const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
@@ -438,6 +450,7 @@ const GroupChat: React.FC = () => {
     const groupAvatarInputRef = useRef<HTMLInputElement>(null);
     // 生成中的取消句柄：非空 = 正在生成，再点触发按钮 = 停止
     const abortRef = useRef<AbortController | null>(null);
+    const topicArchiveLockRef = useRef(false);
     // 白框提示音回合计时（对齐私聊 Chat.tsx 的 soundSyncRef 方案）
     const SOUND_ROUND_GAP_MS = 3000;
     const soundSyncRef = useRef<{ groupId: string | null; maxId: number | null; lastAt: number | null }>({ groupId: null, maxId: null, lastAt: null });
@@ -457,8 +470,9 @@ const GroupChat: React.FC = () => {
     // Initial Load
     useEffect(() => {
         if (activeGroup) {
-            setVisibleCount(30);
-            DB.getRecentGroupMessagesWithCount(activeGroup.id, 30).then(({ messages: msgs, totalCount }) => {
+            setVisibleCount(MESSAGE_PAGE_SIZE);
+            setHistoryOffset(0);
+            DB.getRecentGroupMessagesWithCount(activeGroup.id, MESSAGE_PAGE_SIZE).then(({ messages: msgs, totalCount }) => {
                 setMessages(msgs);
                 setTotalMsgCount(totalCount);
             });
@@ -472,10 +486,10 @@ const GroupChat: React.FC = () => {
 
     // Auto Scroll
     useLayoutEffect(() => {
-        if (scrollRef.current && !selectionMode) {
+        if (scrollRef.current && !selectionMode && historyOffset === 0) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages.length, activeGroup, showPanel, isTyping, selectionMode]);
+    }, [messages.length, activeGroup, showPanel, isTyping, selectionMode, historyOffset]);
 
     // 白框提示音：成员新发的消息成为群里最后一条时响一次（用户自己/翻旧消息不响）。
     // 逻辑对齐私聊 Chat.tsx——切群只记基线不播、回合内多气泡只响首条、基线只增不减。
@@ -501,7 +515,11 @@ const GroupChat: React.FC = () => {
         sync.maxId = sync.maxId == null ? lastId : Math.max(sync.maxId, lastId);
     }, [messages, activeGroup?.id, activeGroup?.chromeCustomCss, activeGroup?.chatSound, osTheme.chatChromeCustomCss, osTheme.chatSound]);
 
-    const displayMessages = useMemo(() => messages.slice(-visibleCount), [messages, visibleCount]);
+    const displayMessages = useMemo(() => {
+        const end = Math.max(0, messages.length - historyOffset);
+        const start = Math.max(0, end - MESSAGE_PAGE_SIZE);
+        return messages.slice(start, end);
+    }, [messages, historyOffset]);
 
     const canReroll = useMemo(() => {
         if (isTyping || messages.length === 0) return false;
@@ -554,14 +572,14 @@ const GroupChat: React.FC = () => {
 
     // --- Logic: Selection & Deletion ---
 
-    const handleMessageLongPress = (id: number) => {
-        const msg = messages.find(m => m.id === id);
+    const handleMessageLongPress = useCallback((id: number) => {
+        const msg = messagesRef.current.find(m => m.id === id);
         if (msg) {
             setSelectedMessage(msg);
             setModalType('message-options');
         }
         setShowPanel('none');
-    };
+    }, []);
 
     const handleCopyMessage = () => {
         if (!selectedMessage) return;
@@ -604,12 +622,14 @@ const GroupChat: React.FC = () => {
         addToast('消息已修改', 'success');
     };
 
-    const toggleMessageSelection = (id: number) => {
-        const next = new Set(selectedMsgIds);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        setSelectedMsgIds(next);
-    };
+    const toggleMessageSelection = useCallback((id: number) => {
+        setSelectedMsgIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
 
     const deleteSelectedMessages = async () => {
         if (selectedMsgIds.size === 0) return;
@@ -699,8 +719,7 @@ const GroupChat: React.FC = () => {
     };
 
     const handleDeleteGroup = async (id: string) => {
-        // 先清理群记忆宫殿数据（成员各自存的副本一并删），再删群
-        // 异常吞掉——清理失败不阻塞解散流程
+        // 清理旧版本可能留下的群记忆副本，以及公共话题盒投递到成员私聊的卡片。
         try {
             const result = await deleteGroupMemoriesByGroupId(id);
             if (result.deleted > 0) {
@@ -708,6 +727,15 @@ const GroupChat: React.FC = () => {
             }
         } catch (err) {
             console.warn('🗑️ [GroupChat] 清理群记忆失败（不影响解散）:', err);
+        }
+        const targetGroup = groups.find(g => g.id === id);
+        if (targetGroup) {
+            // 扫全部角色而非只扫当前成员：已经退群的人也可能留有早期成盒卡片。
+            await Promise.all(characters.map(async ({ id: memberId }) => {
+                const msgs = await DB.getMessagesByCharId(memberId, true);
+                const ids = msgs.filter(m => m.type === 'group_topic_card' && m.metadata?.groupTopicBox?.groupId === id).map(m => m.id);
+                if (ids.length) await DB.deleteMessages(ids);
+            }));
         }
         await deleteGroup(id);
         if (activeGroup?.id === id) setView('list');
@@ -746,163 +774,12 @@ const GroupChat: React.FC = () => {
 
     // --- Logic: Group Summary & Distribution ---
 
-    const handleGroupSummary = async () => {
-        if (!activeGroup || !apiConfig.apiKey) {
-            addToast('请先在设置里填好 API。', 'error');
-            return;
-        }
-
-        setIsSummarizing(true);
-        setSummaryProgress('正在读取记录...');
-
-        try {
-            // 总结必须覆盖全部历史——messages state 只是加载到界面的窗口（初始 30 条），
-            // 直接遍历它会静默漏掉没加载的老消息（对齐 handleClearHistory 的全量取法）
-            const allMsgs = await DB.getGroupMessages(activeGroup.id);
-            if (allMsgs.length === 0) {
-                addToast('暂无聊天记录', 'info');
-                return;
-            }
-
-            // Group messages by Date (YYYY-MM-DD)
-            const msgsByDate: Record<string, Message[]> = {};
-            allMsgs.forEach(m => {
-                const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', {year:'numeric', month:'2-digit', day:'2-digit'}).replace(/\//g, '-');
-                if (!msgsByDate[dateStr]) msgsByDate[dateStr] = [];
-                msgsByDate[dateStr].push(m);
-            });
-
-            const dates = Object.keys(msgsByDate).sort();
-
-            // 逐日累积、跑完统一写入：日循环里逐次 updateCharacter 会基于陈旧的
-            // characters 闭包互相覆盖，多日总结最终每个成员只剩最后一天
-            const pendingFragments: MemoryFragment[] = [];
-            const summarizedDates = new Set<string>();
-            const failedDates: string[] = [];
-
-            for (let i = 0; i < dates.length; i++) {
-                const date = dates[i];
-                setSummaryProgress(`正在归档 ${date} (${i+1}/${dates.length})`);
-
-                const dayMsgs = msgsByDate[date];
-                const logText = dayMsgs.map(m => {
-                    const sender = m.role === 'user'
-                        ? userProfile.name
-                        : (characters.find(c => c.id === m.charId)?.name || '未知成员');
-                    // 占位符替代原文：image 的 content 是 base64，内联会把 prompt 撑爆
-                    return `${sender}: ${messageLogText(m, url => stickerNameFromUrl(emojis, url))}`;
-                }).join('\n');
-
-                // Use selected prompt template or fall back to default group summary
-                const templateObj = archivePrompts.find(p => p.id === selectedPromptId);
-                let prompt: string;
-
-                if (templateObj) {
-                    // Adapt the chat prompt for group context - replace per-character variables
-                    const memberNames = activeGroup.members.map(id => characters.find(c => c.id === id)?.name || '未知').join('、');
-                    prompt = templateObj.content
-                        .replace(/\$\{dateStr\}/g, date)
-                        .replace(/\$\{char\.name\}/g, `群成员(${memberNames})`)
-                        .replace(/\$\{userProfile\.name\}/g, userProfile.name)
-                        .replace(/\$\{rawLog.*?\}/g, logText.substring(0, 10000));
-                    prompt = `[群聊: ${activeGroup.name}]\n${prompt}`;
-                } else {
-                    prompt = `
-### Task: Group Chat Summary
-Group: "${activeGroup.name}"
-Date: ${date}
-
-### Instructions
-Summarize the following chat log into a **concise, 3rd-person, YAML format**.
-- Focus on interactions, conflicts, and key topics.
-- Be objective (like a narrator).
-- **Strictly output valid YAML only.**
-
-### Example Output
-summary: "In [Group Name], [Char A] shared a photo of a cat. [Char B] made a joke about it, which caused a brief playful argument about pets."
-
-### Logs
-${logText.substring(0, 10000)}
-`;
-                }
-
-                // 单日失败不杀整轮：记下失败日期，继续归档下一天
-                try {
-                    const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                        body: JSON.stringify({
-                            model: apiConfig.model,
-                            messages: [{ role: "user", content: prompt }],
-                            temperature: 0.3
-                        })
-                    });
-
-                    if (!response.ok) {
-                        failedDates.push(date);
-                    } else {
-                        const data = await safeResponseJson(response);
-                        const summaryText = parseSummaryYaml(data.choices?.[0]?.message?.content ?? '');
-
-                        if (summaryText) {
-                            pendingFragments.push({
-                                id: `mem-${Date.now()}-${Math.random()}`,
-                                date: date,
-                                summary: `[群聊归档: ${activeGroup.name}] ${summaryText}`,
-                                mood: 'group'
-                            });
-                            summarizedDates.add(date);
-                        } else {
-                            failedDates.push(date);
-                        }
-                    }
-                } catch (err) {
-                    console.warn(`[GroupChat] 归档 ${date} 失败:`, err);
-                    failedDates.push(date);
-                }
-
-                await new Promise(r => setTimeout(r, 500)); // Rate limit buffer
-            }
-
-            // 统一写入：只写勾选的成员（默认全选；开宫殿的成员已有自动记忆，可取消勾选避免双份）。
-            // 重跑同日期 = 替换旧归档（按日期 + 前缀匹配；改过群名的旧归档匹配不到前缀，不会被去重——可接受）
-            let writtenCount = 0;
-            if (pendingFragments.length > 0) {
-                const archivePrefix = `[群聊归档: ${activeGroup.name}]`;
-                for (const memberId of activeGroup.members) {
-                    if (!selectedSummaryMembers.has(memberId)) continue;
-                    const member = charactersRef.current.find(c => c.id === memberId);
-                    if (!member) continue;
-                    const kept = (member.memories || []).filter(
-                        f => !(summarizedDates.has(f.date) && f.summary.startsWith(archivePrefix))
-                    );
-                    updateCharacter(memberId, { memories: [...kept, ...pendingFragments] });
-                    writtenCount++;
-                }
-            }
-
-            if (failedDates.length > 0) {
-                addToast(`归档完成：成功 ${summarizedDates.size} 天 × ${writtenCount} 位成员，失败 ${failedDates.join('、')}`, 'error');
-            } else {
-                addToast(`群聊记忆已写入 ${writtenCount} 位成员`, 'success');
-            }
-            // 面板留着不关：让「上次归档到…」状态当场刷新可见
-            void loadMemoryPanelStats(activeGroup);
-
-        } catch (e: any) {
-            console.error(e);
-            addToast(`归档失败: ${e.message}`, 'error');
-        } finally {
-            setIsSummarizing(false);
-            setSummaryProgress('');
-        }
-    };
-
     // --- Logic: Messaging ---
 
     const handleSendMessage = async (content: string, type: MessageType = 'text', metadata?: any) => {
         if (!activeGroup) return;
         if (type === 'text' && !content.trim()) return;
+        setHistoryOffset(0);
         // 借用户"发送"手势解锁音频上下文（移动端自动播放策略），稍后 AI 回复时提示音才响得了
         unlockWhiteboxAudio();
         
@@ -987,6 +864,9 @@ ${logText.substring(0, 10000)}
         setModalType('packet-detail');
     }, []);
 
+    const handleGroupImageClick = useCallback((url: string) => window.open(url, '_blank'), []);
+    const handleGroupReply = useCallback((target: Message) => setReplyTarget(target), []);
+
     // 用户抢/收/退：updater 内重跑状态机（以库内最新 claims 判重，防与 AI 派发并发双写）
     const handleUserPacketAction = async (msg: Message, action: 'claim' | 'return') => {
         if (!activeGroup) return;
@@ -1054,30 +934,13 @@ ${logText.substring(0, 10000)}
         return e.categoryId === activeEmojiCategory;
     }), [emojis, activeEmojiCategory]);
 
-    // 群宫殿水位线 → 日期/未整理条数（成员记忆状态面板用）
-    const loadMemoryPanelStats = async (group: GroupProfile) => {
+    const loadTopicBoxStats = async (group: GroupProfile) => {
         try {
-            const hwm = getGroupMemoryPalaceHighWaterMark(group.id);
             const allMsgs = await DB.getGroupMessages(group.id);
-            const hwmMsg = hwm > 0 ? allMsgs.find(m => m.id === hwm) : undefined;
-            const hwmDateStr = hwmMsg
-                ? new Date(hwmMsg.timestamp).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })
-                : null;
-            const pendingCount = allMsgs.filter(m => m.id > hwm).length;
-            setMemoryPanelStats({ hwm, hwmDateStr, pendingCount });
+            setTopicPendingCount(groupTopicPendingCount(allMsgs, group.archivedThroughMessageId || 0));
         } catch {
-            setMemoryPanelStats(null);
+            setTopicPendingCount(0);
         }
-    };
-
-    /** 未开宫殿成员的手动归档进度：扫 memories 里本群归档前缀的最新日期 */
-    const latestGroupArchiveDate = (member: CharacterProfile, groupName: string): string | null => {
-        const prefix = `[群聊归档: ${groupName}]`;
-        let latest: string | null = null;
-        for (const f of member.memories || []) {
-            if (f.summary?.startsWith(prefix) && f.date && (!latest || f.date > latest)) latest = f.date;
-        }
-        return latest;
     };
 
     const openGroupSettings = () => {
@@ -1087,9 +950,7 @@ ${logText.substring(0, 10000)}
         setTempReplyMode(activeGroup?.replyMode ?? 'director');
         setTempMemberBubbleIndependent(activeGroup?.memberBubbleIndependent ?? false);
         setTempUserBubbleThemeId(activeGroup?.userBubbleThemeId ?? '');
-        setSelectedSummaryMembers(new Set(activeGroup?.members || []));
-        setMemoryPanelStats(null);
-        if (activeGroup) void loadMemoryPanelStats(activeGroup);
+        if (activeGroup) void loadTopicBoxStats(activeGroup);
         setModalType('settings');
         setShowPanel('none');
     };
@@ -1125,14 +986,15 @@ ${logText.substring(0, 10000)}
         const lastMsg = currentMsgs[currentMsgs.length - 1];
         const timeGapInfo = lastMsg ? getTimeGapHint(lastMsg.timestamp) : "这是群聊的第一条消息。";
         const currentTimeStr = `${virtualTime.hours.toString().padStart(2, '0')}:${virtualTime.minutes.toString().padStart(2, '0')}`;
-        const sharedScene = ContextBuilder.buildGroupSharedScene(groupMembers, userProfile, currentMsgs);
+        const liveMsgs = currentMsgs.filter(m => m.id > (activeGroup?.archivedThroughMessageId || 0));
+        const sharedScene = ContextBuilder.buildGroupSharedScene(groupMembers, userProfile, liveMsgs);
 
         const header = `【系统：群聊模拟器配置】
 当前群名: "${activeGroup?.name}"
 当前系统时间: ${currentTimeStr}
 时间流逝感知: ${timeGapInfo}
 
-${sharedScene.text}`;
+${sharedScene.text}${activeGroup ? buildGroupTopicContext(activeGroup) : ''}`;
         return { header, sharedScene };
     };
 
@@ -1145,7 +1007,8 @@ ${sharedScene.text}`;
         const timelineCap = activeGroup?.memberTimelineCap ?? DEFAULT_MEMBER_TIMELINE_CAP;
         // 记忆宫殿检索源用当前群线程（滤掉媒体消息，base64 不能进 embedding query）：
         // 角色应召回与"群里正聊的话题"相关的记忆，而不是私聊近况（旧行为，召回跑偏）
-        const palaceQueryMsgs = currentMsgs.slice(-30).filter(m => !m.type || m.type === 'text');
+        const liveGroupMsgs = currentMsgs.filter(m => m.id > (activeGroup?.archivedThroughMessageId || 0));
+        const palaceQueryMsgs = liveGroupMsgs.slice(-30).filter(m => !m.type || m.type === 'text');
         await injectMemoryPalace(member, palaceQueryMsgs, undefined, userProfile.name);
         // 角色块：跳过共享场景已包含的部分（用户档案 / 共有 worldview / 共有世界书）
         const coreContext = ContextBuilder.buildCoreContext(member, userProfile, true, undefined, {
@@ -1153,7 +1016,7 @@ ${sharedScene.text}`;
             skipWorldview: sharedScene.worldviewIsShared,
             skipWorldbookIds: sharedScene.sharedWorldbookIds,
             headerOverride: `[Group Member Profile: ${member.name}]`,
-        }, { worldbookMessages: currentMsgs });
+        }, { worldbookMessages: liveGroupMsgs });
         // Get private gap string
         const privateGapInfo = await getPrivateTimeGap(member.id);
 
@@ -1162,7 +1025,7 @@ ${sharedScene.text}`;
         const privateMsgs = await DB.getRecentMessagesByCharId(member.id, timelineCap, true);
         const memberTimeline = buildMemberTimeline({
             privateMsgs,
-            groupMsgs: currentMsgs,
+            groupMsgs: liveGroupMsgs,
             cap: timelineCap,
             resolveSpeaker: (m) => m.charId === member.id
                 ? '我'
@@ -1221,43 +1084,124 @@ ${memberTimeline || '(暂无互动记录)'}
               ]
             : prompt;
 
-    // 群记忆宫殿触发（两种模式的 finally 共用）：fire-and-forget，
-    // 水位线/阈值/异常都在内部 swallow，不影响主流程
-    const runGroupMemoryPalace = () => {
-        if (!activeGroup) return;
-        const groupForPalace = activeGroup;
-        // 读 ref 拿最新 characters，否则群里有成员在回复中途被用户关掉 palace
-        // 时，下面这一次还是会按"那时还有人启用"的旧状态去触发 LLM 提取
-        const liveCharacters = charactersRef.current;
-        const membersForPalace = liveCharacters.filter(c => groupForPalace.members.includes(c.id));
-        const hasAnyEnabled = membersForPalace.some(m => m.memoryPalaceEnabled);
-        if (!hasAnyEnabled) return;
-        processGroupNewMessages(
-            groupForPalace,
-            membersForPalace,
-            userProfile?.name || '',
-            (stage) => setGroupPalaceStatus(stage),
-        )
-            .then(result => {
-                setGroupPalaceStatus('');
-                if (!result) return;
-                // 真有产出（不是 skip 路径）才提示
-                if (result.stored > 0) {
-                    const enabledCount = Object.keys(result.perMemberStored).length;
-                    addToast(
-                        `🏰 【${groupForPalace.name}】群记忆整理完成：${result.processedMessageCount ?? '?'} 条消息 → ${result.extracted ?? '?'} 条记忆 × ${enabledCount} 位成员入库 ${result.stored} 条（含去重跳过）`,
-                        'success',
-                    );
-                    console.log(`🏰 [GroupChat] 群记忆整理完成`, result);
-                } else if (result.extracted === 0 && !result.reason) {
-                    addToast(`🏰 【${groupForPalace.name}】这段群聊没提到值得记的事，跳过`, 'info');
-                }
-                // hot_zone / threshold / lock / no_config / no_enabled_member —— 静默 skip
-            })
-            .catch(err => {
-                setGroupPalaceStatus('');
-                console.warn('🏰 [GroupChat] processGroupNewMessages 异常（已吞）:', err);
+    const parseTopicBoxResponse = (raw: string): { title: string; summary: string } | null => {
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        try {
+            const parsed = JSON.parse(cleaned);
+            if (parsed?.summary) return { title: String(parsed.title || '一段群聊回忆'), summary: String(parsed.summary) };
+        } catch {}
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (match) {
+            try {
+                const parsed = JSON.parse(match[0]);
+                if (parsed?.summary) return { title: String(parsed.title || '一段群聊回忆'), summary: String(parsed.summary) };
+            } catch {}
+        }
+        return null;
+    };
+
+    /** 群公共话题盒：每群只调用一次总结 API，不再按开启记忆宫殿的成员分别复制。 */
+    const createNextGroupTopicBox = async (force: boolean = false): Promise<boolean> => {
+        if (!activeGroup || topicArchiveLockRef.current || !apiConfig.apiKey) return false;
+        const groupForArchive = activeGroup;
+        topicArchiveLockRef.current = true;
+        if (force) setIsSummarizing(true);
+        try {
+            const allMsgs = await DB.getGroupMessages(groupForArchive.id);
+            const batchPlan = planGroupTopicBatch(allMsgs, groupForArchive.archivedThroughMessageId || 0, force);
+            setTopicPendingCount(groupTopicPendingCount(allMsgs, groupForArchive.archivedThroughMessageId || 0));
+            if (!batchPlan) {
+                if (force) addToast(`最近 ${GROUP_TOPIC_HOT_ZONE} 条会保留原文；热区以前暂无可整理记录`, 'info');
+                return false;
+            }
+            setGroupPalaceStatus(`正在把 ${batchPlan.messages.length} 条旧群聊整理成公共话题盒…`);
+            setSummaryProgress(`正在整理 ${batchPlan.messages.length} 条旧群聊…`);
+            const stylePrompt = archivePrompts.find(p => p.id === selectedPromptId)?.content;
+            const prompt = buildGroupTopicPrompt(groupForArchive, batchPlan.messages, charactersRef.current, userProfile.name, stylePrompt);
+            const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 2000 }),
             });
+            if (!response.ok) throw new Error(`API 返回 ${response.status}`);
+            const data = await safeResponseJson(response);
+            const parsed = parseTopicBoxResponse(data.choices?.[0]?.message?.content || '');
+            if (!parsed) throw new Error('总结格式无法解析');
+
+            const box = makeGroupTopicBox(groupForArchive, batchPlan.messages, parsed.title, parsed.summary);
+            const updatedGroup: GroupProfile = {
+                ...groupForArchive,
+                topicBoxes: [...(groupForArchive.topicBoxes || []), box],
+                archivedThroughMessageId: box.sourceEndMessageId,
+            };
+            await updateGroup(groupForArchive.id, {
+                topicBoxes: updatedGroup.topicBoxes,
+                archivedThroughMessageId: updatedGroup.archivedThroughMessageId,
+            });
+            setActiveGroup(updatedGroup);
+
+            // 成盒时给所有当前成员一张私聊卡。正文可被私聊上下文/归档正常解析；
+            // metadata 保留引用，后续编辑/删除公共盒时同步这些卡片。
+            await Promise.all(groupForArchive.members.map(memberId => DB.saveMessage({
+                charId: memberId,
+                role: 'system',
+                type: 'group_topic_card',
+                content: `[群聊公共话题盒：${groupForArchive.name}｜${box.title}]\n${box.summary}`,
+                metadata: { groupTopicBox: { ...box, groupName: groupForArchive.name } },
+            })));
+            const remaining = groupTopicPendingCount(allMsgs, box.sourceEndMessageId);
+            setTopicPendingCount(remaining);
+            addToast(`「${box.title}」已成盒，并送达 ${groupForArchive.members.length} 位成员私聊`, 'success');
+            return true;
+        } catch (err: any) {
+            console.warn('[GroupChat] 公共话题盒整理失败:', err);
+            if (force) addToast(`话题盒整理失败：${err.message || err}`, 'error');
+            return false;
+        } finally {
+            topicArchiveLockRef.current = false;
+            setGroupPalaceStatus('');
+            setSummaryProgress('');
+            if (force) setIsSummarizing(false);
+        }
+    };
+
+    const runGroupTopicArchive = () => { void createNextGroupTopicBox(false); };
+
+    const saveTopicBoxEdit = async (boxId: string) => {
+        if (!activeGroup || !topicTitleDraft.trim() || !topicSummaryDraft.trim()) return;
+        const now = Date.now();
+        const nextBoxes = (activeGroup.topicBoxes || []).map(box => box.id === boxId
+            ? { ...box, title: topicTitleDraft.trim(), summary: topicSummaryDraft.trim(), updatedAt: now }
+            : box);
+        const updated = { ...activeGroup, topicBoxes: nextBoxes };
+        await updateGroup(activeGroup.id, { topicBoxes: nextBoxes });
+        setActiveGroup(updated);
+        const edited = nextBoxes.find(box => box.id === boxId)!;
+        const deliveredIds = (activeGroup.topicBoxes || []).find(box => box.id === boxId)?.deliveredMemberIds || activeGroup.members;
+        await Promise.all(deliveredIds.map(async memberId => {
+            const msgs = await DB.getMessagesByCharId(memberId, true);
+            const cards = msgs.filter(m => m.type === 'group_topic_card' && m.metadata?.groupTopicBox?.id === boxId);
+            await Promise.all(cards.map(async card => {
+                await DB.updateMessage(card.id, `[群聊公共话题盒：${activeGroup.name}｜${edited.title}]\n${edited.summary}`);
+                await DB.updateMessageMetadata(card.id, prev => ({ ...(prev || {}), groupTopicBox: { ...edited, groupName: activeGroup.name } }));
+            }));
+        }));
+        setEditingTopicBoxId(null);
+        addToast('话题盒已更新，成员私聊卡片同步完成', 'success');
+    };
+
+    const deleteTopicBox = async (boxId: string) => {
+        if (!activeGroup) return;
+        const nextBoxes = (activeGroup.topicBoxes || []).filter(box => box.id !== boxId);
+        await updateGroup(activeGroup.id, { topicBoxes: nextBoxes });
+        setActiveGroup({ ...activeGroup, topicBoxes: nextBoxes });
+        const deliveredIds = (activeGroup.topicBoxes || []).find(box => box.id === boxId)?.deliveredMemberIds || activeGroup.members;
+        await Promise.all(deliveredIds.map(async memberId => {
+            const msgs = await DB.getMessagesByCharId(memberId, true);
+            const ids = msgs.filter(m => m.type === 'group_topic_card' && m.metadata?.groupTopicBox?.id === boxId).map(m => m.id);
+            if (ids.length) await DB.deleteMessages(ids);
+        }));
+        addToast('话题盒和成员私聊卡片已删除', 'success');
     };
 
     const triggerDirector = async (currentMsgs: Message[]) => {
@@ -1283,7 +1227,8 @@ ${memberTimeline || '(暂无互动记录)'}
             }
 
             // 3. Group History + 导演任务指令（模板原文照搬进 utils/groupChat/prompts.ts）
-            const history = buildGroupHistoryBlock(currentMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
+            const liveHistoryMsgs = currentMsgs.filter(m => m.id > (activeGroup.archivedThroughMessageId || 0));
+            const history = buildGroupHistoryBlock(liveHistoryMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
             const emojiContextStr = buildEmojiContextStr(emojis, categories, activeGroup.members);
             // HTML 模块模式：群开关开启时追加提示词。导演模式输出的是 JSON 数组，
             // 额外强调 [html] 块写在角色 content 字符串内部且 HTML 属性用单引号，避免破坏外层 JSON
@@ -1354,7 +1299,7 @@ ${memberTimeline || '(暂无互动记录)'}
         } finally {
             setIsTyping(false);
             abortRef.current = null;
-            runGroupMemoryPalace();
+            runGroupTopicArchive();
         }
     };
 
@@ -1385,7 +1330,8 @@ ${memberTimeline || '(暂无互动记录)'}
                     // 每位成员基于"此刻"的群历史构建上下文——包含本轮先发言成员的新消息
                     const { header, sharedScene } = buildGroupSystemHeader(roundMsgs, groupMembers);
                     const memberBlock = await buildMemberBlock(member, roundMsgs, sharedScene);
-                    const history = buildGroupHistoryBlock(roundMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
+                    const liveRoundMsgs = roundMsgs.filter(m => m.id > (activeGroup.archivedThroughMessageId || 0));
+                    const history = buildGroupHistoryBlock(liveRoundMsgs.slice(-contextLimit), characters, emojis, userProfile.name);
                     const emojiContextStr = buildEmojiContextStr(emojis, categories, activeGroup.members);
                     const htmlPromptExt = activeGroup.htmlModeEnabled
                         ? `\n\n${buildHtmlPrompt(activeGroup.htmlModeCustomPrompt)}`
@@ -1465,21 +1411,26 @@ ${memberTimeline || '(暂无互动记录)'}
         } finally {
             setIsTyping(false);
             abortRef.current = null;
-            runGroupMemoryPalace();
+            runGroupTopicArchive();
         }
     };
 
     // 触发入口：按群设置分发到导演/轮询；生成中再点 = 停止
-    const triggerGroupAI = (msgs: Message[]) => {
+    const triggerGroupAI = async (_msgs?: Message[]) => {
         unlockWhiteboxAudio();
         if (isTyping) {
             abortRef.current?.abort();
             return;
         }
+        if (!activeGroup) return;
+        // UI 固定只渲染 50 条，但模型仍应拿到完整近期热区；生成前独立读取，
+        // 避免“用户没点加载历史 → AI 也只能看见 50 条”的耦合。
+        const promptCap = Math.max(contextLimit, activeGroup.memberTimelineCap ?? DEFAULT_MEMBER_TIMELINE_CAP, GROUP_TOPIC_HOT_ZONE);
+        const { messages: freshMsgs } = await DB.getRecentGroupMessagesWithCount(activeGroup.id, promptCap);
         if (activeGroup?.replyMode === 'roundRobin') {
-            triggerRoundRobin(msgs);
+            triggerRoundRobin(freshMsgs);
         } else {
-            triggerDirector(msgs);
+            triggerDirector(freshMsgs);
         }
     };
 
@@ -1571,7 +1522,7 @@ ${memberTimeline || '(暂无互动记录)'}
             {(osTheme.chatChromeCustomCss || activeGroup?.chromeCustomCss) && (
                 <style>{`.sully-chat-back{visibility:visible!important;opacity:1!important;pointer-events:auto!important;}`}</style>
             )}
-            {/* 群记忆宫殿"提取中"浮动胶囊 — 不阻塞交互 */}
+            {/* 公共话题盒整理状态 — 不阻塞交互 */}
             {groupPalaceStatus && (
                 <div
                     className="absolute top-[100px] left-1/2 z-[150] animate-fade-in"
@@ -1595,7 +1546,7 @@ ${memberTimeline || '(暂无互动记录)'}
                             style={{ borderTopColor: '#8b5cf6', animationDuration: '0.9s' }}
                         />
                         <span className="text-[11px] font-semibold text-slate-700 whitespace-nowrap">
-                            群记忆整理中
+                            公共话题成盒中
                         </span>
                         <span className="text-[10px] text-slate-400 truncate">{groupPalaceStatus}</span>
                     </div>
@@ -1636,18 +1587,35 @@ ${memberTimeline || '(暂无互动记录)'}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 no-scrollbar space-y-2 bg-[#f0f4f8]" ref={scrollRef}>
-                {totalMsgCount > messages.length && activeGroup && (
-                    <div className="flex justify-center mb-4">
+                <div className="sticky top-0 z-20 flex justify-center gap-2 mb-4 pointer-events-none">
+                    {(totalMsgCount > messages.length || historyOffset > 0) && activeGroup && (
                         <button onClick={async () => {
-                            const { messages: moreMsgs, totalCount } = await DB.getRecentGroupMessagesWithCount(activeGroup.id, messages.length + 30);
+                            if (historyOffset + MESSAGE_PAGE_SIZE < messages.length) {
+                                setHistoryOffset(prev => prev + MESSAGE_PAGE_SIZE);
+                                return;
+                            }
+                            const oldLength = messages.length;
+                            const { messages: moreMsgs, totalCount } = await DB.getRecentGroupMessagesWithCount(activeGroup.id, oldLength + MESSAGE_PAGE_SIZE);
+                            const added = Math.max(0, moreMsgs.length - oldLength);
                             setMessages(moreMsgs);
                             setTotalMsgCount(totalCount);
-                            setVisibleCount(moreMsgs.length);
-                        }} className="px-4 py-2 bg-white/50 backdrop-blur-sm rounded-full text-xs text-slate-500 shadow-sm border border-white hover:bg-white transition-colors">
-                            加载历史消息 ({totalMsgCount - messages.length})
+                            setHistoryOffset(prev => prev + added);
+                            requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; });
+                        }} className="pointer-events-auto px-3.5 py-2 bg-white/85 backdrop-blur-sm rounded-full text-xs text-slate-500 shadow-sm border border-white hover:bg-white transition-colors">
+                            ← 更早一页
                         </button>
-                    </div>
-                )}
+                    )}
+                    {historyOffset > 0 && (
+                        <button onClick={() => setHistoryOffset(prev => Math.max(0, prev - MESSAGE_PAGE_SIZE))} className="pointer-events-auto px-3.5 py-2 bg-violet-500 text-white rounded-full text-xs shadow-sm">
+                            更新一页 →
+                        </button>
+                    )}
+                    {historyOffset > 0 && (
+                        <button onClick={() => setHistoryOffset(0)} className="pointer-events-auto px-3.5 py-2 bg-white/85 text-violet-600 rounded-full text-xs shadow-sm border border-violet-100">
+                            回到最新
+                        </button>
+                    )}
+                </div>
                 {displayMessages.map((m, i) => {
                     const isUser = m.role === 'user';
                     const char = characters.find(c => c.id === m.charId);
@@ -1659,12 +1627,12 @@ ${memberTimeline || '(暂无互动记录)'}
                             isUser={isUser}
                             char={char}
                             userAvatar={userProfile.avatar}
-                            onImageClick={(url) => window.open(url, '_blank')}
+                            onImageClick={handleGroupImageClick}
                             selectionMode={selectionMode}
                             isSelected={selectedMsgIds.has(m.id)}
                             onToggleSelect={toggleMessageSelection}
                             onLongPress={handleMessageLongPress}
-                            onReply={(target) => setReplyTarget(target)}
+                            onReply={handleGroupReply}
                             nameOf={nameOf}
                             onPacketClick={openPacketDetail}
                             styleConfig={isUser ? userBubble : (memberBubbles.get(m.charId) || PRESET_THEME_GROUP.ai)}
@@ -1882,84 +1850,76 @@ ${memberTimeline || '(暂无互动记录)'}
                         <p className="text-[9px] text-slate-400 mt-1 leading-tight">群里发言时，每位成员参考的"私聊+群聊合并时间线"条数。这条时间线让角色在群里的感情与私聊衔接。</p>
                     </div>
 
-                    {/* Memory & Context Management — 成员记忆状态面板 + 可选归档 */}
-                    <div className="pt-2 border-t border-slate-100">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 block">群聊记忆 (Neural Link)</label>
-
-                        {/* 双轨制引导 banner */}
-                        <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100 mb-3 space-y-1">
-                            <p className="text-[10px] text-indigo-600 leading-relaxed">🏰 <b>记忆宫殿</b>（自动）：开了宫殿的成员会随聊天自动整理群记忆（第三人称向量记忆），无需手动操作。</p>
-                            <p className="text-[10px] text-indigo-600 leading-relaxed">📖 <b>手动总结</b>：按日期总结群聊，写进下方勾选成员的记忆日历——之后在「角色档案 → 记忆」页可以看到。</p>
+                    {/* 公共话题盒：一次总结，全群共享，并在成盒时送达所有成员私聊。 */}
+                    <div className="pt-2 border-t border-slate-100 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">群聊总结 · 公共话题盒</label>
+                            <span className="text-[10px] text-violet-500 font-bold">{activeGroup?.topicBoxes?.length || 0} 个盒子</span>
+                        </div>
+                        <div className="rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-indigo-50 p-3.5 space-y-2">
+                            <p className="text-[11px] font-bold text-violet-700">一份总结，全群共同记住</p>
+                            <p className="text-[10px] leading-5 text-violet-600/80">
+                                最近 {GROUP_TOPIC_HOT_ZONE} 条始终保留原文；更早的记录累计 {GROUP_TOPIC_BUFFER_THRESHOLD} 条后自动整理成公共话题盒。
+                                盒子只属于本群，同时会作为卡片送到每位成员私聊，之后可被各自的私聊上下文与归档正常理解。
+                            </p>
+                            <div className="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2 text-[10px]">
+                                <span className="text-slate-500">热区以前待整理</span>
+                                <span className={`font-bold ${topicPendingCount >= GROUP_TOPIC_BUFFER_THRESHOLD ? 'text-amber-500' : 'text-slate-500'}`}>{topicPendingCount} / {GROUP_TOPIC_BUFFER_THRESHOLD} 条</span>
+                            </div>
                         </div>
 
-                        {/* 成员记忆状态面板 */}
-                        <div className="space-y-2 mb-3">
-                            {(activeGroup?.members || []).map(mid => {
-                                const member = characters.find(c => c.id === mid);
-                                if (!member || !activeGroup) return null;
-                                const hasPalace = !!member.memoryPalaceEnabled;
-                                const checked = selectedSummaryMembers.has(mid);
-                                const stats = memoryPanelStats;
-                                const palaceStatus = stats
-                                    ? (stats.hwm > 0 && stats.hwmDateStr
-                                        ? `已自动整理至 ${stats.hwmDateStr} · 还有 ${stats.pendingCount} 条未整理（满 ${BUFFER_THRESHOLD_GROUP} 条自动触发）`
-                                        : `尚未自动整理 · 已累计 ${stats.pendingCount} 条（满 ${BUFFER_THRESHOLD_GROUP} 条自动触发）`)
-                                    : '统计中…';
-                                const manualDate = latestGroupArchiveDate(member, activeGroup.name);
-                                const manualStatus = manualDate ? `上次归档到 ${manualDate}` : '从未归档';
+                        <div className="bg-white border border-slate-100 rounded-2xl p-3">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase mb-2 block">总结风格</label>
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                                {archivePrompts.map(p => (
+                                    <button key={p.id} onClick={() => setSelectedPromptId(p.id)} className={`shrink-0 px-3 py-2 rounded-xl border text-[10px] font-bold ${selectedPromptId === p.id ? 'bg-violet-50 border-violet-300 text-violet-700' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
+                                        {p.name}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <button onClick={() => void createNextGroupTopicBox(true)} disabled={isSummarizing || topicPendingCount === 0} className={`w-full py-3 rounded-2xl border font-bold text-xs flex items-center justify-center gap-2 ${topicPendingCount === 0 ? 'bg-slate-50 border-slate-100 text-slate-300' : 'bg-violet-500 border-violet-500 text-white shadow-lg shadow-violet-200'}`}>
+                            {isSummarizing ? <><span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />{summaryProgress || '正在成盒…'}</> : '立即整理当前可归档内容'}
+                        </button>
+
+                        <div className="space-y-2">
+                            {(activeGroup?.topicBoxes || []).slice().reverse().map(box => {
+                                const editing = editingTopicBoxId === box.id;
                                 return (
-                                    <div key={mid} className="flex items-center gap-2.5 bg-white border border-slate-100 rounded-xl px-3 py-2">
-                                        <div className="relative shrink-0">
-                                            <img src={member.avatar} className="w-9 h-9 rounded-full object-cover" />
-                                            {hasPalace && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 border-2 border-white" title="记忆宫殿已开启" />}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="text-xs font-bold text-slate-700 truncate">{member.name}</span>
-                                                <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold shrink-0 ${hasPalace ? 'bg-violet-50 text-violet-500 border border-violet-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>
-                                                    {hasPalace ? '全自动' : '仅手动'}
-                                                </span>
+                                    <div key={box.id} className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
+                                        {editing ? (
+                                            <div className="space-y-2">
+                                                <input value={topicTitleDraft} onChange={e => setTopicTitleDraft(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold" placeholder="话题盒标题" />
+                                                <textarea value={topicSummaryDraft} onChange={e => setTopicSummaryDraft(e.target.value)} className="w-full min-h-28 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs leading-5 resize-y" placeholder="共同回忆总结" />
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setEditingTopicBoxId(null)} className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-500 text-[11px] font-bold">取消</button>
+                                                    <button onClick={() => void saveTopicBoxEdit(box.id)} className="flex-1 py-2 rounded-xl bg-violet-500 text-white text-[11px] font-bold">保存并同步卡片</button>
+                                                </div>
                                             </div>
-                                            <p className="text-[9px] text-slate-400 leading-tight mt-0.5 truncate">{hasPalace ? palaceStatus : manualStatus}</p>
-                                            {hasPalace && <p className="text-[8px] text-slate-300 leading-tight">已有自动记忆，手动归档为可选补充</p>}
-                                        </div>
-                                        {/* 手动总结写给谁 */}
-                                        <div
-                                            onClick={() => setSelectedSummaryMembers(prev => {
-                                                const next = new Set(prev);
-                                                if (next.has(mid)) next.delete(mid); else next.add(mid);
-                                                return next;
-                                            })}
-                                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center cursor-pointer shrink-0 transition-colors ${checked ? 'bg-indigo-500 border-indigo-500' : 'border-slate-300 bg-white'}`}
-                                        >
-                                            {checked && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
-                                        </div>
+                                        ) : (
+                                            <>
+                                                <div className="flex items-start gap-2">
+                                                    <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">💬</div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="text-xs font-bold text-slate-700">{box.title}</div>
+                                                        <div className="text-[9px] text-slate-400 mt-0.5">归档 {box.messageCount} 条 · {new Date(box.createdAt).toLocaleDateString('zh-CN')}</div>
+                                                    </div>
+                                                </div>
+                                                <p className="mt-2.5 text-[11px] leading-5 text-slate-600 whitespace-pre-wrap">{box.summary}</p>
+                                                <div className="mt-3 flex gap-2 justify-end">
+                                                    <button onClick={() => { setEditingTopicBoxId(box.id); setTopicTitleDraft(box.title); setTopicSummaryDraft(box.summary); }} className="px-3 py-1.5 rounded-lg bg-violet-50 text-violet-600 text-[10px] font-bold">修改</button>
+                                                    <button onClick={() => void deleteTopicBox(box.id)} className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-500 text-[10px] font-bold">删除</button>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                 );
                             })}
-                        </div>
-
-                        {/* Prompt Selection */}
-                        <div className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 mb-3">
-                            <label className="text-[9px] font-bold text-indigo-400 uppercase mb-2 block">选择总结提示词</label>
-                            <div className="flex flex-col gap-1.5">
-                                {archivePrompts.map(p => (
-                                    <div key={p.id} onClick={() => setSelectedPromptId(p.id)} className={`px-3 py-2 rounded-lg border cursor-pointer text-xs font-bold transition-all ${selectedPromptId === p.id ? 'bg-white border-indigo-400 text-indigo-700 shadow-sm' : 'bg-white/50 border-indigo-100 text-slate-500 hover:bg-white'}`}>
-                                        {p.name}
-                                    </div>
-                                ))}
-                            </div>
-                            <p className="text-[8px] text-indigo-300 mt-2 leading-tight">提示词与聊天-归档共享，可在聊天设置中自定义。</p>
-                        </div>
-
-                        <button onClick={handleGroupSummary} disabled={isSummarizing || selectedSummaryMembers.size === 0} className={`w-full py-3 font-bold rounded-2xl border active:scale-95 transition-transform flex items-center justify-center gap-2 mb-2 ${selectedSummaryMembers.size === 0 ? 'bg-slate-50 text-slate-300 border-slate-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                            {isSummarizing ? (
-                                <><div className="w-4 h-4 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div><span className="text-xs">{summaryProgress || '处理中...'}</span></>
-                            ) : (
-                                <><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" /></svg> 生成总结并写入选中成员（{selectedSummaryMembers.size}）</>
+                            {(activeGroup?.topicBoxes?.length || 0) === 0 && (
+                                <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-center text-[10px] text-slate-400">聊天还在近期热区里。内容足够多后，会自动出现第一只公共话题盒。</div>
                             )}
-                        </button>
-                        <p className="text-[9px] text-slate-400 leading-tight px-1">使用选中的提示词风格按日期生成群聊总结，写进勾选成员的记忆日历。重跑同一天会替换旧归档，不会重复。</p>
+                        </div>
                     </div>
 
                     {/* Danger Zone */}

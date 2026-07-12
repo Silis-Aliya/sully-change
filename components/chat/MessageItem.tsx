@@ -2325,6 +2325,29 @@ const MessageItem = React.memo(({
         return commonLayout(card);
     }
 
+    if (m.type === 'group_topic_card') {
+        const box: any = m.metadata?.groupTopicBox || {};
+        const card = (
+            <div className="w-72 rounded-2xl overflow-hidden border border-violet-200/70 bg-gradient-to-br from-violet-50 via-white to-indigo-50 shadow-sm">
+                <div className="px-4 pt-3 pb-2 border-b border-violet-100 flex items-center gap-2">
+                    <span className="w-8 h-8 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center">💬</span>
+                    <div className="min-w-0 flex-1">
+                        <div className="text-[9px] font-bold tracking-[0.18em] text-violet-400 uppercase">群聊公共话题盒</div>
+                        <div className="text-[13px] font-bold text-slate-700 truncate">{box.title || '一段群聊回忆'}</div>
+                    </div>
+                </div>
+                <div className="px-4 py-3">
+                    <p className="text-[12px] leading-6 text-slate-600 whitespace-pre-wrap max-h-48 overflow-y-auto no-scrollbar">{box.summary || m.content}</p>
+                </div>
+                <div className="px-4 py-2 border-t border-violet-100 text-[9px] text-violet-400 flex justify-between">
+                    <span>{box.groupName || '群聊'} · 共同经历</span>
+                    <span>{box.messageCount ? `${box.messageCount} 条原文` : ''}</span>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
+    }
+
     if (m.type === 'phone_card') {
         const pc: any = m.metadata?.phoneCard || {};
         const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
