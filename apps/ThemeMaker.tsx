@@ -435,7 +435,7 @@ const PREVIEW_SCENES: PreviewScene[] = [
 ];
 
 const ThemeMaker: React.FC = () => {
-    const { closeApp, addCustomTheme, addToast, characters, updateCharacter } = useOS();
+    const { closeApp, addCustomTheme, addToast, characters, updateCharacter, customThemes } = useOS();
     const [initialThemeId] = useState(() => `theme-${Date.now()}`);
     const [editingTheme, setEditingTheme] = useState<ChatTheme>({ ...DEFAULT_THEME, id: initialThemeId });
     const [activeTab, setActiveTab] = useState<'user' | 'ai' | 'css'>('user');
@@ -519,6 +519,31 @@ const ThemeMaker: React.FC = () => {
     };
 
     const requestClose = () => withDiscardGuard(() => closeApp());
+
+    const editSavedTheme = (theme: ChatTheme) => withDiscardGuard(() => {
+        const copy = cloneTheme(theme);
+        setEditingTheme(copy);
+        setLastSavedTheme(cloneTheme(copy));
+        setIsDirty(false);
+        setIsAppliedToPreview(true);
+        setUndoStack([]);
+        setRedoStack([]);
+        setPaddingVal(extractPaddingFromCss(copy.customCss || ''));
+        addToast(`正在修改「${theme.name}」`, 'info');
+    });
+
+    const exportSavedTheme = (theme: ChatTheme) => {
+        const blob = new Blob([JSON.stringify({ kind: 'sullyos-chat-theme', version: 1, theme }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${(theme.name || '自定义气泡').replace(/[\\/:*?\"<>|]/g, '_')}.sully-bubble.json`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        addToast(`已导出「${theme.name}」`, 'success');
+    };
 
     // Initialize padding state from CSS on load
     useEffect(() => {
@@ -921,6 +946,40 @@ const ThemeMaker: React.FC = () => {
                 </div>
             </div>
             </div>
+
+            {/* 用户作品区：保存后的气泡可回到工坊继续编辑，也可单独导出分享。 */}
+            <section className="shrink-0 bg-white/80 border-b border-slate-100 px-4 py-3">
+                <div className="flex items-center justify-between mb-2">
+                    <div>
+                        <h2 className="text-xs font-bold text-slate-600">我的自定义气泡</h2>
+                        <p className="text-[10px] text-slate-400 mt-0.5">导出作品，或载入后再次修改</p>
+                    </div>
+                    <span className="text-[10px] text-slate-400">{customThemes.length} 套</span>
+                </div>
+                {customThemes.length > 0 ? (
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                        {customThemes.map((theme: ChatTheme) => (
+                            <div key={theme.id} className={`min-w-[176px] rounded-2xl border p-2.5 ${editingTheme.id === theme.id ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'}`}>
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span className="flex -space-x-1 shrink-0">
+                                        <span className="w-5 h-5 rounded-full border-2 border-white shadow-sm" style={{ background: theme.user?.backgroundColor || '#6366f1' }} />
+                                        <span className="w-5 h-5 rounded-full border-2 border-white shadow-sm" style={{ background: theme.ai?.backgroundColor || '#fff' }} />
+                                    </span>
+                                    <span className="text-xs font-bold text-slate-700 truncate">{theme.name}</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-1.5 mt-2.5">
+                                    <button onClick={() => editSavedTheme(theme)} className="py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-[11px] font-bold">再次修改</button>
+                                    <button onClick={() => exportSavedTheme(theme)} className="py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-bold">导出</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 px-3 py-2.5 text-[11px] text-slate-400">
+                        还没有作品。完成设计并保存后，会陈列在这里。
+                    </div>
+                )}
+            </section>
 
             {/* Preview Area (Realistic Chat Row) */}
             <div className={`${isPreviewFullscreen ? 'fixed inset-0 z-[120]' : 'flex-1'} relative overflow-hidden flex flex-col p-4 justify-center items-center gap-4 ${isPreviewDark ? 'bg-slate-900' : 'bg-slate-100'}`}>

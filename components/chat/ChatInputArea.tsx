@@ -86,6 +86,8 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     const [actionsPage, setActionsPage] = useState<0 | 1>(0);
     // 气泡样式面板：搜索 + 两步确认删除（防止 hover 小 × 误删）
     const [bubbleSearch, setBubbleSearch] = useState('');
+    // 会话面板的主要用途仍是切换聊天；气泡选择作为次级工具默认收起。
+    const [isBubbleSectionOpen, setIsBubbleSectionOpen] = useState(false);
     const [pendingDeleteThemeId, setPendingDeleteThemeId] = useState<string | null>(null);
     const [emojiSelectionMode, setEmojiSelectionMode] = useState(false);
     const [selectedEmojis, setSelectedEmojis] = useState<any[]>([]);
@@ -826,8 +828,20 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                      {showPanel === 'chars' && (
                         <div className="p-5 space-y-6 overflow-y-auto no-scrollbar">
                             <div>
-                                <div className="flex items-baseline justify-between px-1 mb-3">
-                                    <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">气泡样式 · 当前角色</h3>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsBubbleSectionOpen(prev => !prev)}
+                                    aria-expanded={isBubbleSectionOpen}
+                                    className="w-full flex items-center justify-between gap-3 px-1 py-1 text-left"
+                                >
+                                    <span>
+                                        <span className="block text-xs font-bold text-slate-400 tracking-wider uppercase">气泡样式 · 当前角色</span>
+                                        <span className="block mt-1 text-[10px] text-slate-400">{isBubbleSectionOpen ? '选择或管理当前角色的气泡' : '已折叠 · 点此展开'}</span>
+                                    </span>
+                                    <span className={`text-slate-400 transition-transform ${isBubbleSectionOpen ? 'rotate-180' : ''}`} aria-hidden>⌄</span>
+                                </button>
+                                {isBubbleSectionOpen && <div className="mt-3">
+                                <div className="flex justify-end px-1 mb-2">
                                     <span className="text-[10px] text-slate-400">新气泡去「气泡工坊」App 制作</span>
                                 </div>
                                 {customThemes.length > 6 && (
@@ -895,6 +909,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                         <div className="text-[11px] text-slate-400 px-1 py-2">没有叫「{bubbleSearch.trim()}」的气泡～</div>
                                     )}
                                 </div>
+                                </div>}
                             </div>
                             <div>
                                 <h3 className="text-xs font-bold text-slate-400 px-1 tracking-wider uppercase mb-3">切换会话</h3>
