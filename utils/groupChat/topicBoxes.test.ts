@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GroupProfile, Message } from '../../types';
 import {
+    buildGroupTopicPrompt,
     buildGroupTopicContext,
     GROUP_TOPIC_HOT_ZONE,
     groupTopicPendingCount,
@@ -46,5 +47,17 @@ describe('群公共话题盒批处理', () => {
         expect(text).toContain('一起聊旅行');
         expect(text).toContain('A和B商量了周末出行');
         expect(text).not.toContain('消息1');
+    });
+
+    it('内置总结提示词包含全体成员语义资料，不依赖私聊归档风格', () => {
+        const chars: any[] = [
+            { id: 'a', name: 'A', description: '冷静', systemPrompt: '说话简洁', worldview: '现代', writerPersona: '克制', refinedMemories: { core: '认识B' } },
+            { id: 'b', name: 'B', description: '活泼', systemPrompt: '爱开玩笑', memories: [] },
+        ];
+        const prompt = buildGroupTopicPrompt(group, messages(2), chars, '用户');
+        expect(prompt).toContain('全体成员资料');
+        expect(prompt).toContain('说话简洁');
+        expect(prompt).toContain('爱开玩笑');
+        expect(prompt).toContain('客观视角');
     });
 });

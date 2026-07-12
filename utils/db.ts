@@ -873,6 +873,28 @@ export const DB = {
       });
   },
 
+  /** 群聊历史分页：只取 beforeId 之前最近的 limit 条，避免“查看更多”把全部旧消息留在内存和 DOM。 */
+  getGroupMessagesBefore: async (groupId: string, beforeId: number, limit: number): Promise<Message[]> => {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_MESSAGES, 'readonly');
+          const index = transaction.objectStore(STORE_MESSAGES).index('groupId');
+          const collected: Message[] = [];
+          const request = index.openCursor(IDBKeyRange.only(groupId), 'prev');
+          request.onsuccess = () => {
+              const cursor = request.result;
+              if (!cursor || collected.length >= limit) {
+                  resolve(collected.reverse());
+                  return;
+              }
+              const message = cursor.value as Message;
+              if (message.id < beforeId) collected.push(message);
+              cursor.continue();
+          };
+          request.onerror = () => reject(request.error);
+      });
+  },
+
   getSocialPosts: async (): Promise<SocialPost[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_SOCIAL_POSTS)) return [];

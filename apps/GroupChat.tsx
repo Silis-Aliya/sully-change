@@ -11,7 +11,7 @@ import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { deleteGroupMemoriesByGroupId } from '../utils/memoryPalace/groupPipeline';
 import { processImage } from '../utils/file';
 import { stickerNameFromUrl } from '../utils/messageFormat';
-import { DEFAULT_ARCHIVE_PROMPTS, PRESET_THEMES } from '../components/chat/ChatConstants';
+import { PRESET_THEMES } from '../components/chat/ChatConstants';
 import { resolveChatTheme } from '../utils/groupChat/theme';
 import { parseDirectorActions, stripSkipMarker } from '../utils/groupChat/parse';
 import { GroupPacketMeta, PacketReceiptMeta, ClaimResult, claimPacket, effectivePacketStatus, makePacketMeta } from '../utils/groupChat/redpacket';
@@ -302,7 +302,7 @@ const GroupMessageItem = React.memo(({
 
     return (
         <div
-            className={`flex gap-3 mb-4 w-full animate-fade-in relative ${isUser ? 'justify-end' : 'justify-start'} ${selectionMode ? 'pl-8' : ''}`}
+            className={`flex gap-3 mb-4 w-full relative ${isUser ? 'justify-end' : 'justify-start'} ${selectionMode ? 'pl-8' : ''}`}
             style={{
                 transform: `translateX(${replyOffset}px)`,
                 transition: isReplyGestureActive ? 'none' : 'transform 0.2s ease-out',
@@ -369,9 +369,8 @@ const GroupChat: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [totalMsgCount, setTotalMsgCount] = useState(0);
     const MESSAGE_PAGE_SIZE = 50;
-    const [visibleCount, setVisibleCount] = useState(MESSAGE_PAGE_SIZE);
-    // 0=最新一页；每次向前翻只渲染固定 50 条，避免加载历史后 DOM 无限增长。
-    const [historyOffset, setHistoryOffset] = useState(0);
+    const [isViewingHistory, setIsViewingHistory] = useState(false);
+    const [olderRemaining, setOlderRemaining] = useState(0);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     /** 群公共话题盒整理状态——非空时显示顶部胶囊状态条 */
@@ -405,10 +404,6 @@ const GroupChat: React.FC = () => {
     const [editingTopicBoxId, setEditingTopicBoxId] = useState<string | null>(null);
     const [topicTitleDraft, setTopicTitleDraft] = useState('');
     const [topicSummaryDraft, setTopicSummaryDraft] = useState('');
-
-    // Archive prompt selection (shared with Chat app)
-    const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
-    const [selectedPromptId, setSelectedPromptId] = useState<string>('preset_rational');
 
     // Context limit (like Chat app's settingsContextLimit)
     const [contextLimit, setContextLimit] = useState<number>(() => {
@@ -455,26 +450,14 @@ const GroupChat: React.FC = () => {
     const SOUND_ROUND_GAP_MS = 3000;
     const soundSyncRef = useRef<{ groupId: string | null; maxId: number | null; lastAt: number | null }>({ groupId: null, maxId: null, lastAt: null });
 
-    // Load shared archive prompts from localStorage (same key as Chat app)
-    useEffect(() => {
-        const savedPrompts = localStorage.getItem('chat_archive_prompts');
-        if (savedPrompts) {
-            try {
-                const parsed = JSON.parse(savedPrompts);
-                const merged = [...DEFAULT_ARCHIVE_PROMPTS, ...parsed.filter((p: any) => !p.id.startsWith('preset_'))];
-                setArchivePrompts(merged);
-            } catch(e) {}
-        }
-    }, []);
-
     // Initial Load
     useEffect(() => {
         if (activeGroup) {
-            setVisibleCount(MESSAGE_PAGE_SIZE);
-            setHistoryOffset(0);
+            setIsViewingHistory(false);
             DB.getRecentGroupMessagesWithCount(activeGroup.id, MESSAGE_PAGE_SIZE).then(({ messages: msgs, totalCount }) => {
                 setMessages(msgs);
                 setTotalMsgCount(totalCount);
+                setOlderRemaining(Math.max(0, totalCount - msgs.length));
             });
             // Fetch emojis AND categories
             Promise.all([DB.getEmojis(), DB.getEmojiCategories()]).then(([es, cats]) => {
@@ -486,10 +469,10 @@ const GroupChat: React.FC = () => {
 
     // Auto Scroll
     useLayoutEffect(() => {
-        if (scrollRef.current && !selectionMode && historyOffset === 0) {
+        if (scrollRef.current && !selectionMode && !isViewingHistory) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages.length, activeGroup, showPanel, isTyping, selectionMode, historyOffset]);
+    }, [messages.length, activeGroup, showPanel, isTyping, selectionMode, isViewingHistory]);
 
     // 白框提示音：成员新发的消息成为群里最后一条时响一次（用户自己/翻旧消息不响）。
     // 逻辑对齐私聊 Chat.tsx——切群只记基线不播、回合内多气泡只响首条、基线只增不减。
@@ -515,11 +498,7 @@ const GroupChat: React.FC = () => {
         sync.maxId = sync.maxId == null ? lastId : Math.max(sync.maxId, lastId);
     }, [messages, activeGroup?.id, activeGroup?.chromeCustomCss, activeGroup?.chatSound, osTheme.chatChromeCustomCss, osTheme.chatSound]);
 
-    const displayMessages = useMemo(() => {
-        const end = Math.max(0, messages.length - historyOffset);
-        const start = Math.max(0, end - MESSAGE_PAGE_SIZE);
-        return messages.slice(start, end);
-    }, [messages, historyOffset]);
+    const displayMessages = useMemo(() => messages.slice(-MESSAGE_PAGE_SIZE), [messages]);
 
     const canReroll = useMemo(() => {
         if (isTyping || messages.length === 0) return false;
@@ -563,10 +542,11 @@ const GroupChat: React.FC = () => {
     // 之前每条气泡都 getGroupMessages 全表读，且 totalMsgCount 不更新，
     // 导致发送后"加载历史消息"按钮的计数失真（甚至消失）
     const refreshMessages = async (groupId: string) => {
-        const limit = Math.max(messagesRef.current.length + 1, visibleCount);
-        const { messages: msgs, totalCount } = await DB.getRecentGroupMessagesWithCount(groupId, limit);
+        const { messages: msgs, totalCount } = await DB.getRecentGroupMessagesWithCount(groupId, MESSAGE_PAGE_SIZE);
         setMessages(msgs);
         setTotalMsgCount(totalCount);
+        setOlderRemaining(Math.max(0, totalCount - msgs.length));
+        setIsViewingHistory(false);
         return msgs;
     };
 
@@ -779,7 +759,7 @@ const GroupChat: React.FC = () => {
     const handleSendMessage = async (content: string, type: MessageType = 'text', metadata?: any) => {
         if (!activeGroup) return;
         if (type === 'text' && !content.trim()) return;
-        setHistoryOffset(0);
+        setIsViewingHistory(false);
         // 借用户"发送"手势解锁音频上下文（移动端自动播放策略），稍后 AI 回复时提示音才响得了
         unlockWhiteboxAudio();
         
@@ -1116,8 +1096,7 @@ ${memberTimeline || '(暂无互动记录)'}
             }
             setGroupPalaceStatus(`正在把 ${batchPlan.messages.length} 条旧群聊整理成公共话题盒…`);
             setSummaryProgress(`正在整理 ${batchPlan.messages.length} 条旧群聊…`);
-            const stylePrompt = archivePrompts.find(p => p.id === selectedPromptId)?.content;
-            const prompt = buildGroupTopicPrompt(groupForArchive, batchPlan.messages, charactersRef.current, userProfile.name, stylePrompt);
+            const prompt = buildGroupTopicPrompt(groupForArchive, batchPlan.messages, charactersRef.current, userProfile.name);
             const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
@@ -1587,34 +1566,36 @@ ${memberTimeline || '(暂无互动记录)'}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 no-scrollbar space-y-2 bg-[#f0f4f8]" ref={scrollRef}>
-                <div className="sticky top-0 z-20 flex justify-center gap-2 mb-4 pointer-events-none">
-                    {(totalMsgCount > messages.length || historyOffset > 0) && activeGroup && (
-                        <button onClick={async () => {
-                            if (historyOffset + MESSAGE_PAGE_SIZE < messages.length) {
-                                setHistoryOffset(prev => prev + MESSAGE_PAGE_SIZE);
-                                return;
-                            }
-                            const oldLength = messages.length;
-                            const { messages: moreMsgs, totalCount } = await DB.getRecentGroupMessagesWithCount(activeGroup.id, oldLength + MESSAGE_PAGE_SIZE);
-                            const added = Math.max(0, moreMsgs.length - oldLength);
-                            setMessages(moreMsgs);
-                            setTotalMsgCount(totalCount);
-                            setHistoryOffset(prev => prev + added);
-                            requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; });
-                        }} className="pointer-events-auto px-3.5 py-2 bg-white/85 backdrop-blur-sm rounded-full text-xs text-slate-500 shadow-sm border border-white hover:bg-white transition-colors">
-                            ← 更早一页
-                        </button>
-                    )}
-                    {historyOffset > 0 && (
-                        <button onClick={() => setHistoryOffset(prev => Math.max(0, prev - MESSAGE_PAGE_SIZE))} className="pointer-events-auto px-3.5 py-2 bg-violet-500 text-white rounded-full text-xs shadow-sm">
-                            更新一页 →
-                        </button>
-                    )}
-                    {historyOffset > 0 && (
-                        <button onClick={() => setHistoryOffset(0)} className="pointer-events-auto px-3.5 py-2 bg-white/85 text-violet-600 rounded-full text-xs shadow-sm border border-violet-100">
-                            回到最新
-                        </button>
-                    )}
+                <div className="sticky top-0 z-20 flex flex-col items-center gap-1.5 mb-4 pointer-events-none">
+                    <div className="pointer-events-auto px-3 py-1.5 rounded-full bg-white/80 backdrop-blur text-[10px] text-slate-400 border border-white shadow-sm">
+                        界面固定渲染 50 条 · 已归档原文仍可查看，但不会重复进入 AI 上下文
+                    </div>
+                    <div className="flex justify-center gap-2">
+                        {olderRemaining > 0 && activeGroup && (
+                            <button onClick={async () => {
+                                const beforeId = messages[0]?.id ?? Number.MAX_SAFE_INTEGER;
+                                const older = await DB.getGroupMessagesBefore(activeGroup.id, beforeId, MESSAGE_PAGE_SIZE);
+                                if (!older.length) { setOlderRemaining(0); return; }
+                                setMessages(older);
+                                setOlderRemaining(prev => Math.max(0, prev - older.length));
+                                setIsViewingHistory(true);
+                                requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; });
+                            }} className="pointer-events-auto px-4 py-2 bg-white/90 backdrop-blur-sm rounded-full text-xs text-slate-500 shadow-sm border border-white hover:bg-white transition-colors">
+                                显示更多消息（还有 {olderRemaining} 条）
+                            </button>
+                        )}
+                        {isViewingHistory && activeGroup && (
+                            <button onClick={async () => {
+                                const { messages: latest, totalCount } = await DB.getRecentGroupMessagesWithCount(activeGroup.id, MESSAGE_PAGE_SIZE);
+                                setMessages(latest);
+                                setTotalMsgCount(totalCount);
+                                setOlderRemaining(Math.max(0, totalCount - latest.length));
+                                setIsViewingHistory(false);
+                            }} className="pointer-events-auto px-4 py-2 bg-violet-500 text-white rounded-full text-xs shadow-sm">
+                                回到最新消息
+                            </button>
+                        )}
+                    </div>
                 </div>
                 {displayMessages.map((m, i) => {
                     const isUser = m.role === 'user';
@@ -1868,14 +1849,11 @@ ${memberTimeline || '(暂无互动记录)'}
                             </div>
                         </div>
 
-                        <div className="bg-white border border-slate-100 rounded-2xl p-3">
-                            <label className="text-[9px] font-bold text-slate-400 uppercase mb-2 block">总结风格</label>
-                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-                                {archivePrompts.map(p => (
-                                    <button key={p.id} onClick={() => setSelectedPromptId(p.id)} className={`shrink-0 px-3 py-2 rounded-xl border text-[10px] font-bold ${selectedPromptId === p.id ? 'bg-violet-50 border-violet-300 text-violet-700' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
-                                        {p.name}
-                                    </button>
-                                ))}
+                        <div className="bg-white border border-slate-100 rounded-2xl p-3 flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center">✦</div>
+                            <div>
+                                <div className="text-[10px] font-bold text-slate-600">内置 · 群聊共同记忆总结</div>
+                                <p className="text-[9px] text-slate-400 mt-0.5 leading-4">总结机会读取全体成员的简介、核心设定、世界观、写作人格与核心记忆，不再复用私聊归档风格。</p>
                             </div>
                         </div>
 

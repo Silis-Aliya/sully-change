@@ -50,12 +50,16 @@ export function buildGroupTopicPrompt(
     batch: Message[],
     characters: CharacterProfile[],
     userName: string,
-    stylePrompt?: string,
 ): string {
     const nameOf = (m: Message) => m.role === 'user'
         ? userName
         : (characters.find(c => c.id === m.charId)?.name || '未知成员');
     const participants = group.members.map(id => characters.find(c => c.id === id)?.name).filter(Boolean).join('、');
+    // 只给总结机角色语义资料，不传头像/立绘/房间图片等媒体字段，避免 base64 撑爆请求。
+    const memberProfiles = group.members.map(id => characters.find(c => c.id === id)).filter(Boolean).map(char => {
+        const c = char as CharacterProfile;
+        return `### ${c.name}（${c.id}）\n角色简介：${c.description || '无'}\n核心设定：${c.systemPrompt || '无'}\n世界观：${c.worldview || '无'}\n写作人格：${c.writerPersona || '无'}\n核心记忆：${c.refinedMemories ? JSON.stringify(c.refinedMemories) : '无'}`;
+    }).join('\n\n');
     const logs = batch.map(m => {
         const time = new Date(m.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         return `[${time}] ${nameOf(m)}: ${messageLogText(m)}`;
@@ -66,13 +70,16 @@ export function buildGroupTopicPrompt(
 成员：${participants}
 用户：${userName}
 
+## 全体成员资料
+这些资料只用于准确理解每个人的身份、关系和说话含义；总结仍必须保持群体共享的客观视角。
+${memberProfiles}
+
 要求：
 1. 使用客观第三人称，准确区分每个发言者，不站在任何单一角色视角。
 2. 保留关键话题、约定、冲突、共同经历、群内梗和情绪变化；不要逐句复述。
 3. 标题 6–18 字；总结 100–500 字。琐碎内容可以简短，但不能编造。
 4. 这张盒子会同时进入本群长期上下文，并作为卡片送到每位成员私聊。
 5. 严格只输出 JSON：{"title":"...","summary":"..."}
-${stylePrompt ? `\n用户选择的总结风格，仅参考其写作要求，不要照搬其中变量或输出格式：\n${stylePrompt.slice(0, 2000)}\n` : ''}
 群聊原文：
 ${logs.slice(0, 30000)}`;
 }
