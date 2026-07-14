@@ -762,11 +762,9 @@ export const useChatAI = ({
                     ? { ...char.emotionConfig!.api!, stream: (char.emotionConfig!.api as any).stream ?? evalStream }
                     : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model, stream: evalStream })
                 : null;
-            // 本地路径的情绪评估不在这里立刻发射，改为「主请求发出 ~1.5s 后」再发（见下方
-            // 主 fetch 前的 setTimeout）。原因（2026-07 实测日志）：便宜中转普遍按 key 串行/
-            // 低并发，评估这个同样几万 token 的大请求和主回复同时发射时谁先入队是随机的——
-            // 评估抢跑那几轮，主回复 headers 从 ~10s 恶化到 34s（被压后整整一个评估时长）。
-            // 错开 1.5s 保证主回复永远先到中转队列；评估结果只作用于下一轮，晚这一点零损失。
+            // 本地路径的情绪评估：主 fetch 发出后立即发射（见下方调用点）。
+            // 历史备注：曾为串行中转做过 1.5s 错峰（评估抢跑会把主回复压后一个评估时长），
+            // 用户侧已排查确认当前渠道无该并发问题，2026-07 应用户要求取消延迟。
             // instant 模式不受影响：worker 端本来就是主回复跑完才跑评估（天然串行）。
             const fireLocalEmotionEval = (emotionEvalEnabled && !instantOn && emotionApi) ? () => {
                 setEmotionStatus('evaluating');
@@ -966,9 +964,8 @@ export const useChatAI = ({
                 },
             } : undefined;
 
-            // 主请求即将发出 → 1.5s 后发射情绪评估（保证主回复先进中转队列，见上方定义处注释）。
-            // 不随主请求失败取消：旧行为里评估本来就无条件发射，保持一致。
-            if (fireLocalEmotionEval) setTimeout(fireLocalEmotionEval, 1500);
+            // 主请求即将发出 → 立即并行发射情绪评估（错峰延迟已按用户要求取消，见定义处注释）。
+            fireLocalEmotionEval?.();
 
             let data: any;
             try {

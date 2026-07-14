@@ -95,6 +95,11 @@ class SseAssembler {
     // tool_calls 流式分片: OpenAI 约定按 index 分组, id/name 在首片, arguments 逐片拼接。
     // 不拼的话开了 stream 的工具模式(瑞幸/MCP)会静默丢掉全部工具调用。
     private toolCalls: any[] = [];
+    // 思考通道: DeepSeek/Gemini 系走 delta.reasoning_content, OpenRouter 走 delta.reasoning。
+    // 丢掉它 = 开思考链的角色"不出思维链"(后处理从 message.reasoning_content 抽取),
+    // 且 extractContent / extractAssistantText 的 reasoning 兜底全部失效(思考模型把全部
+    // 输出塞进 reasoning 时表现为空回复→重试→巨慢)。2026-07 全局流式上线后被放大成必现。
+    private reasoning = '';
 
     /** 喂一行 SSE 文本，返回本行带来的正文增量（无正文则空串） */
     feedLine(line: string): string {
@@ -121,6 +126,8 @@ class SseAssembler {
                 delta = choice.delta.content;
                 this.content += delta;
             }
+            const dr = choice.delta.reasoning_content ?? choice.delta.reasoning;
+            if (typeof dr === 'string') this.reasoning += dr;
             if (choice.delta.role) this.role = choice.delta.role;
             if (Array.isArray(choice.delta.tool_calls)) {
                 for (const frag of choice.delta.tool_calls) {
@@ -139,6 +146,8 @@ class SseAssembler {
                 delta = choice.message.content;
                 this.content += delta;
             }
+            const mr = choice.message.reasoning_content ?? choice.message.reasoning;
+            if (typeof mr === 'string') this.reasoning += mr;
             if (choice.message.role) this.role = choice.message.role;
             if (Array.isArray(choice.message.tool_calls)) this.toolCalls.push(...choice.message.tool_calls);
         }
@@ -159,6 +168,7 @@ class SseAssembler {
                 message: {
                     role: this.role,
                     content: this.content,
+                    ...(this.reasoning ? { reasoning_content: this.reasoning } : {}),
                     ...(this.toolCalls.length ? {
                         tool_calls: this.toolCalls.filter(Boolean).map((tc, i) => ({ ...tc, id: tc.id || `call_sse_${i}` })),
                     } : {}),
