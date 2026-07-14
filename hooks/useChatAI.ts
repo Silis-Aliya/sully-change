@@ -329,6 +329,10 @@ export async function evaluateEmotionBackground(
             })
         }, 2, 0, { appName: '消息', charId: charData.id, charName: charData.name, purpose: '情绪评估' });
 
+        // 排查贩子降级路由用：把评估实际落到的后端和 token 计数打出来，
+        // 和主聊天的 🔢 [Token Usage] 一对比就能看出哪个请求被挤进了备用渠道。
+        console.log(`🎭 [Emotion] backend=${data?.model || '?'} | prompt=${data?.usage?.prompt_tokens ?? '?'} completion=${data?.usage?.completion_tokens ?? '?'}`);
+
         // content 可能是分块数组 / 空 content + reasoning_content (个别 Claude 兼容代理), 统一走兜底提取
         const raw = extractAssistantText(data.choices?.[0]?.message);
         if (!raw) {
