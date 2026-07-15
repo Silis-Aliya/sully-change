@@ -1697,6 +1697,9 @@ const MessageItem = React.memo(({
     }
 
     const showPendingDots = isUser && isPending && pendingIndicator;
+    // HTML 卡片（280px 定宽模块）默认位置就是"视觉居中"的约定：包装层打上 sully-html-wrap，
+    // 让「聊天细节微调」的贴边/缩进规则 :not() 绕开它——美化怎么开卡片都不挪窝。
+    const isHtmlCard = m.type === 'html_card';
     const commonLayout = (content: React.ReactNode) => (
             <div className={`flex items-end ${isUser ? 'justify-end' : 'justify-start'} ${marginBottom} px-3 group select-none relative transition-[padding] duration-300 ${selectionMode ? 'pl-12' : ''}`}>
                 {selectionMode && (
@@ -1731,7 +1734,7 @@ const MessageItem = React.memo(({
                     Added min-w-0 to prevent flexbox overflow issues.
                     Added explicit margins to clear absolute avatars.
                 */}
-                <div className={`relative max-w-[72%] min-w-0 ${!isUser ? 'ml-12' : 'mr-12'}`}>
+                <div className={`relative max-w-[72%] min-w-0 ${!isUser ? 'ml-12' : 'mr-12'} ${isHtmlCard ? 'sully-html-wrap' : ''}`}>
                     <div
                         aria-hidden="true"
                         className={`absolute -right-10 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center pointer-events-none transition-all duration-150 ${isReplyReady ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-white/90 text-slate-400 shadow-sm'}`}

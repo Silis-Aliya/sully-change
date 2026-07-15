@@ -13,8 +13,15 @@ describe('buildChatFineTuneCss', () => {
         const css = buildChatFineTuneCss({ chatAvatarVisibility: 'hide_ai', chatSnapToEdge: true });
         expect(css).toContain('.group.justify-start > [class~="absolute"][class~="z-0"] { display: none');
         expect(css).not.toContain('.group.justify-end > [class~="absolute"][class~="z-0"] { display: none');
-        expect(css).toContain('.ml-12 { margin-left: 0 !important; }');
+        expect(css).toContain('.ml-12:not(.sully-html-wrap) { margin-left: 0 !important; }');
         expect(css).not.toContain('margin-right: 0');
+    });
+
+    it('贴边/缩进的选择器都 :not() 绕开 HTML 卡片包装（卡片不随美化挪窝）', () => {
+        const css = buildChatFineTuneCss({ chatAvatarVisibility: 'hide_both', chatSnapToEdge: true, chatBubbleIndent: 60 });
+        const wrapRules = css.split('\n').filter(line => line.includes('.ml-12') || line.includes('.mr-12'));
+        expect(wrapRules.length).toBeGreaterThan(0);
+        for (const rule of wrapRules) expect(rule).toContain(':not(.sully-html-wrap)');
     });
 
     it('顶部对齐 + 垂直微调', () => {

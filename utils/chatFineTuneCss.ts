@@ -43,8 +43,10 @@ const AI_AVATAR = '.sully-chat-root .group.justify-start > [class~="absolute"][c
 const USER_AVATAR = '.sully-chat-root .group.justify-end > [class~="absolute"][class~="z-0"]';
 const AI_BODY = '.sully-chat-root .sully-bubble-ai > div[class~="select-text"]';
 const USER_BODY = '.sully-chat-root .sully-bubble-user > div[class~="select-text"]';
-const AI_WRAP = '.sully-chat-root .group.justify-start [class~="max-w-[72%]"].ml-12';
-const USER_WRAP = '.sully-chat-root .group.justify-end [class~="max-w-[72%]"].mr-12';
+// 贴边/缩进只该动普通气泡：HTML 卡片（280px 定宽模块，包装层带 .sully-html-wrap）
+// 的默认位置就是"视觉居中"的约定，:not() 绕开让它不随美化挪窝。
+const AI_WRAP = '.sully-chat-root .group.justify-start [class~="max-w-[72%]"].ml-12:not(.sully-html-wrap)';
+const USER_WRAP = '.sully-chat-root .group.justify-end [class~="max-w-[72%]"].mr-12:not(.sully-html-wrap)';
 
 const hideRule = (sel: string) =>
     `${sel} { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
