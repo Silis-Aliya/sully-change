@@ -91,12 +91,21 @@ describe('getEmbeddings 分批 / 并行保序', () => {
 });
 
 describe('getEmbeddings 长文本防线（防 400 code 20015）', () => {
-    it('单条超长输入被截到 4000 字符（防单条超 8192 token）', async () => {
-        const long = '0' + 'x'.repeat(10000);
-        const out = await getEmbeddings([long], config);
-        expect(out).toHaveLength(1);
-        expect(out[0][0]).toBe(0);
-        expect(batchInputs[0][0].length).toBe(4000);
+    it('单条超长输入被截到 4000 字符（防单条超 8192 token），且日志面板有提示', async () => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const long = '0' + 'x'.repeat(10000);
+            const out = await getEmbeddings([long], config);
+            expect(out).toHaveLength(1);
+            expect(out[0][0]).toBe(0);
+            expect(batchInputs[0][0].length).toBe(4000);
+            // 截断不能静默：日志面板（只抓 console.error）必须能看到截了哪条
+            const logged = errorSpy.mock.calls.map(c => c.join(' ')).join('\n');
+            expect(logged).toContain('已截断');
+            expect(logged).toContain('第1条');
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 
     it('多条长文本按批内字符预算(6000)切批，仍严格保序', async () => {
@@ -141,11 +150,19 @@ describe('getEmbeddings 批量 400 自动降级为逐条', () => {
             } as any;
         }) as any;
 
-        const out = await getEmbeddings(['0', '1', '2'], config);
-        expect(out).toHaveLength(3);
-        out.forEach((v, i) => expect(v[0]).toBe(i));
-        // 1 次批量(400) + 3 次单条——批量 400 没有被重试第二遍
-        expect(batchSizes).toEqual([3, 1, 1, 1]);
+        const errorSpy = vi.spyOn(console, 'error');
+        try {
+            const out = await getEmbeddings(['0', '1', '2'], config);
+            expect(out).toHaveLength(3);
+            out.forEach((v, i) => expect(v[0]).toBe(i));
+            // 1 次批量(400) + 3 次单条——批量 400 没有被重试第二遍
+            expect(batchSizes).toEqual([3, 1, 1, 1]);
+            // 降级成功必须在日志面板昭告"已恢复、结果完整"，否则用户只看到 400 会以为记忆丢了
+            const logged = errorSpy.mock.calls.map(c => c.join(' ')).join('\n');
+            expect(logged).toContain('全部成功');
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 
     it('降级后单条仍 400 → 报错里带上第几条、多长、内容开头（可定位坏输入）', async () => {

@@ -43,7 +43,20 @@ export async function getEmbeddings(texts: string[], config: EmbeddingConfig): P
     // 服务商限流 / 429。检索通常就 1~2 批 → 全并行 ≈ 1 个往返。
     const MAX_CONCURRENCY = 5;
 
-    const safeTexts = texts.map(t => (t.length > MAX_ITEM_CHARS ? t.slice(0, MAX_ITEM_CHARS) : t));
+    const truncatedNotes: string[] = [];
+    const safeTexts = texts.map((t, i) => {
+        if (t.length <= MAX_ITEM_CHARS) return t;
+        truncatedNotes.push(`第${i + 1}条(${t.length}字, 开头"${t.slice(0, 30).replace(/\n/g, ' ')}")`);
+        return t.slice(0, MAX_ITEM_CHARS);
+    });
+    // 正常聊天 query（≤2000 字）和记忆内容（LLM 总结, 几百字）都够不着这条线，
+    // 触发说明有异常超长输入混了进来。走 console.error——设置里的日志面板只
+    // 捕获 error 通道，保证用户能看到"发生了截断、截的是哪条"。
+    if (truncatedNotes.length > 0) {
+        console.error(
+            `⚠️ [Embedding] ${truncatedNotes.length} 条输入超 ${MAX_ITEM_CHARS} 字上限，已截断出向量（内容本体不受影响，仅按前 ${MAX_ITEM_CHARS} 字建索引）：${truncatedNotes.join('；')}`,
+        );
+    }
 
     // 先按顺序切块：条数 ≤ BATCH_SIZE 且批内字符总量 ≤ BATCH_CHAR_BUDGET
     // （顺序很重要：调用方按下标取向量）。单条超预算时独占一批。
@@ -170,6 +183,12 @@ async function callEmbeddingAPI(
                     );
                 }
             }
+            // 降级成功也走 error 通道昭告一声：日志面板里紧挨着上面那条 400，
+            // 用户才知道"报了 400 但已自动恢复、结果完整"，不然只看到 400 会
+            // 以为这轮记忆丢了。频繁出现则说明有异常输入或服务商校验变严。
+            console.error(
+                `⚠️ [Embedding] 上面的批量 400 已自动降级为逐条向量化并全部成功，本次结果完整无缺。若频繁出现，请把日志里 400 那条的完整响应反馈给开发者`,
+            );
             return results;
         }
         throw err;
