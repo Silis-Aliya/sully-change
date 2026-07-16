@@ -40,6 +40,12 @@ export interface DevDebugFlags {
     skipPromptBuild: boolean;
     skipEmotionEval: boolean;
     /**
+     * 把聊天请求里的多条 role:system 合并成开头一条再发送（utils/systemMessageMerge.ts）。
+     * 排查逆向中转对「历史后 system」重复拼接导致 prompt_tokens 膨胀的兼容问题；
+     * 会削弱易变尾段的 recency 注入并破坏前缀缓存，仅作临时 A/B 对照用。
+     */
+    mergeSystemMessages: boolean;
+    /**
      * 日志总开关：关掉时无论勾了哪些类别都不抓，默认关。
      * 跟 captureLogs 配合——是否抓 = captureEnabled && captureLogs.includes(category)。
      */
@@ -81,6 +87,7 @@ const DEV_DEBUG_AVAILABILITY_EVENT = 'sullyos-dev-debug-availability';
 export const DEFAULT_DEV_DEBUG_FLAGS: DevDebugFlags = {
     skipPromptBuild: false,
     skipEmotionEval: false,
+    mergeSystemMessages: false,
     captureEnabled: false,
     captureLogs: [],
     exposeLogDetail: false,
@@ -133,6 +140,7 @@ function normalizeFlags(value: unknown): DevDebugFlags {
     return {
         skipPromptBuild: source.skipPromptBuild === true,
         skipEmotionEval: source.skipEmotionEval === true,
+        mergeSystemMessages: source.mergeSystemMessages === true,
         captureEnabled: source.captureEnabled === true || legacyHasCapture,
         captureLogs,
         exposeLogDetail: source.exposeLogDetail === true,
@@ -251,6 +259,10 @@ export function isPromptBuildSkipped(): boolean {
 
 export function isEmotionEvalSkipped(): boolean {
     return readDevDebugFlags().skipEmotionEval;
+}
+
+export function isSystemMessageMergeEnabled(): boolean {
+    return readDevDebugFlags().mergeSystemMessages;
 }
 
 export function isCaptureEnabled(category: DevDebugCaptureCategory): boolean {

@@ -24,7 +24,8 @@ import type { LuckinMiniAppSnapshot, LuckinChatState } from './luckinToolBridge'
 import { isMcpChatAvailable } from './mcpClient';
 import { buildMcpSystemBlock, MCP_TAIL_REMINDER } from './mcpToolBridge';
 import type { MusicCfg, Song, LyricLine, MusicPlaybackSnapshot } from '../context/MusicContext';
-import { isPromptBuildSkipped } from './devDebug';
+import { isPromptBuildSkipped, isSystemMessageMergeEnabled } from './devDebug';
+import { mergeSystemMessages } from './systemMessageMerge';
 import { injectWorldbookDepthEntries, resolveWorldbookEntries } from './worldbook';
 import { normalizeTranslationLangLabel } from './translationLang';
 
@@ -356,12 +357,19 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         fullMessages.push({ role: 'system', content: MCP_TAIL_REMINDER });
     }
 
+    // Dev 开关：多条 system 合并成开头一条，A/B 对照中转适配层对多 system 的计量行为。
+    let finalMessages = fullMessages;
+    if (isSystemMessageMergeEnabled()) {
+        finalMessages = mergeSystemMessages(fullMessages);
+        console.warn(`[DevDebug] Merge system messages: ${fullMessages.length} → ${finalMessages.length} messages (system ${fullMessages.length - finalMessages.length + 1} → 1).`);
+    }
+
     return {
         // 返回给情绪评估 / 调试查看器的仍是"完整拼接"——信息与主 API 完全一致，
         // 只是主 API 的实际消息结构把易变尾段放在历史之后（见上）。
         systemPrompt: systemPrompt + volatileTail,
         cleanedApiMessages: messagesWithWorldbookDepth,
-        fullMessages,
+        fullMessages: finalMessages,
         flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, mcpChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
     };
 }
