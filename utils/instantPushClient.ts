@@ -5,6 +5,7 @@ import { appendDevDebugInstantPushLog, appendDevDebugLog, makeDebugLogger } from
 import {
   SUBSCRIBE_SETTLE_MS,
   bytesToB64u,
+  describePushCapabilityGap,
   isDeadPushEndpoint,
   subscribeWithRetry,
 } from './pushSubscribeShared';
@@ -565,8 +566,9 @@ export async function getOrCreateInstantSubscription(
   if (pub.length < 60) {
     return { sub: null, reason: 'VAPID 公钥未配置, 请到 Settings → Instant Push 生成并保存' };
   }
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    return { sub: null, reason: '当前浏览器不支持 Service Worker 或 Push API' };
+  const capabilityGap = describePushCapabilityGap();
+  if (capabilityGap) {
+    return { sub: null, reason: capabilityGap };
   }
 
   const reg = await navigator.serviceWorker.ready;

@@ -634,9 +634,11 @@ export const useChatAI = ({
         onInstantPosted?: () => void,
         opts?: { skipEmotionInjection?: boolean },
     ) => {
-        if (isTyping || !char) return;
+        // 早退路径也要熄「发送准备中」灯: caller (Chat.tsx) 是先 setInstantSendingActive(true)
+        // 再调 triggerAI 的, 这里 return 掉而不通知的话指示灯会永远亮着。
+        if (isTyping || !char) { onInstantPosted?.(); return; }
         const effectiveApi = overrideApiConfig || apiConfig;
-        if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); return; }
+        if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); onInstantPosted?.(); return; }
 
         // 重 roll（回溯重生）时不带入上一轮的情绪余波：清掉 buff 注入（buffInjection/activeBuffs）和
         // 意识流（innerState/evolvedNarrative），让主回复与情绪评估两边都从干净状态独立重新生成——
@@ -1510,6 +1512,11 @@ export const useChatAI = ({
         } finally {
             KeepAlive.stop();
             setIsTyping(false);
+            // 兜底熄「发送准备中」灯 (幂等, 正常路径 deliver() 前已熄过)。不加的话
+            // config-missing / subscription-failed / 拼 context 阶段 throw 这些没走到
+            // POST 的路径都不会调 onInstantPosted, 头部「发送中…」徽章会卡死到刷新
+            // —— 2026-07 安卓用户实测: 订阅失败弹了错, 但三个小点到角色回复了都不消失。
+            onInstantPosted?.();
             setStreamingBubbles([]);  // 错误/中断路径兜底清预览
             setStreamingThinking('');
             setRecallStatus('');
