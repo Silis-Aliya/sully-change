@@ -1228,6 +1228,8 @@ interface MessageItemProps {
     bubbleVariant?: 'modern' | 'flat' | 'outline' | 'shadow' | 'wechat' | 'ios';
     messageSpacing?: 'compact' | 'default' | 'spacious';
     showTimestamp?: 'always' | 'hover' | 'never';
+    /** HTML 卡片 / 心象卡片的出现位置（聊天细节微调 chatModuleAlign，全局+角色覆盖合并后的生效值） */
+    moduleAlign?: 'default' | 'center';
     /** 流式预览无缝接棒时，正式消息首帧已经可见，不应再次从透明态淡入。 */
     suppressEntranceAnimation?: boolean;
     /** Instant Push 准备中：在用户气泡左侧渲染 dot pulse */
@@ -1280,6 +1282,7 @@ const MessageItem = React.memo(({
     bubbleVariant = 'modern',
     messageSpacing = 'default',
     showTimestamp = 'always',
+    moduleAlign = 'default',
     suppressEntranceAnimation = false,
     isPending = false,
     pendingIndicator = true,
@@ -1703,7 +1706,39 @@ const MessageItem = React.memo(({
     // HTML 卡片（280px 定宽模块）默认位置就是"视觉居中"的约定：包装层打上 sully-html-wrap，
     // 让「聊天细节微调」的贴边/缩进规则 :not() 绕开它——美化怎么开卡片都不挪窝。
     const isHtmlCard = m.type === 'html_card';
+    // 聊天细节微调 chatModuleAlign='center'：HTML 卡片 / 心象卡片改为水平居中。
+    // 心象居中时抽出到气泡行上方的独立行（不带 .group 类，注入的钉位 CSS 自然不命中）。
+    const centerModules = moduleAlign === 'center';
+    // 心象卡片（思考链）：默认渲染在气泡包装层内、气泡上方；居中模式挪到独立行。
+    const thinkingChainNode = !isUser && m.metadata?.thinkingChain ? (
+        <div className={`relative w-full ${selectionMode ? 'pl-7' : ''}`}>
+            {selectionMode && onToggleThinkingSelect && (
+                <div
+                    className="absolute left-0 top-3 cursor-pointer z-20 pointer-events-auto"
+                    onClick={(e) => { e.stopPropagation(); onToggleThinkingSelect(m.id); }}
+                >
+                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isThinkingSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
+                        {isThinkingSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                    </div>
+                </div>
+            )}
+            <div className={selectionMode ? 'pointer-events-none' : ''}>
+                <ThinkingChainBlock
+                    chain={String(m.metadata!.thinkingChain)}
+                    styleId={thinkingChainOptions?.styleId}
+                    customColors={thinkingChainOptions?.customColors}
+                    onOpenSettings={thinkingChainOptions?.onOpenSettings}
+                />
+            </div>
+        </div>
+    ) : null;
     const commonLayout = (content: React.ReactNode) => (
+        <>
+            {centerModules && thinkingChainNode && (
+                <div className="px-3 flex justify-center">
+                    <div className="w-[72%] max-w-[72%]">{thinkingChainNode}</div>
+                </div>
+            )}
             <div className={`flex items-end ${isUser ? 'justify-end' : 'justify-start'} ${marginBottom} px-3 group select-none relative transition-[padding] duration-300 ${selectionMode ? 'pl-12' : ''}`}>
                 {selectionMode && (
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 cursor-pointer z-20" onClick={() => onToggleSelect(m.id)}>
@@ -1737,7 +1772,7 @@ const MessageItem = React.memo(({
                     Added min-w-0 to prevent flexbox overflow issues.
                     Added explicit margins to clear absolute avatars.
                 */}
-                <div className={`relative max-w-[72%] min-w-0 ${!isUser ? 'ml-12' : 'mr-12'} ${isHtmlCard ? 'sully-html-wrap' : ''}`}>
+                <div className={`relative max-w-[72%] min-w-0 ${isHtmlCard && centerModules ? 'mx-auto' : (!isUser ? 'ml-12' : 'mr-12')} ${isHtmlCard ? 'sully-html-wrap' : ''}`}>
                     <div
                         aria-hidden="true"
                         className={`absolute -right-10 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center pointer-events-none transition-all duration-150 ${isReplyReady ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-white/90 text-slate-400 shadow-sm'}`}
@@ -1763,28 +1798,7 @@ const MessageItem = React.memo(({
                         } as React.CSSProperties}
                         {...interactionProps}
                     >
-                    {!isUser && m.metadata?.thinkingChain && (
-                        <div className={`relative w-full ${selectionMode ? 'pl-7' : ''}`}>
-                            {selectionMode && onToggleThinkingSelect && (
-                                <div
-                                    className="absolute left-0 top-3 cursor-pointer z-20 pointer-events-auto"
-                                    onClick={(e) => { e.stopPropagation(); onToggleThinkingSelect(m.id); }}
-                                >
-                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isThinkingSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
-                                        {isThinkingSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
-                                    </div>
-                                </div>
-                            )}
-                            <div className={selectionMode ? 'pointer-events-none' : ''}>
-                                <ThinkingChainBlock
-                                    chain={String(m.metadata.thinkingChain)}
-                                    styleId={thinkingChainOptions?.styleId}
-                                    customColors={thinkingChainOptions?.customColors}
-                                    onOpenSettings={thinkingChainOptions?.onOpenSettings}
-                                />
-                            </div>
-                        </div>
-                    )}
+                    {!centerModules && thinkingChainNode}
                     <div className={selectionMode ? 'pointer-events-none' : ''}>
                         {content}
                     </div>
@@ -1801,6 +1815,7 @@ const MessageItem = React.memo(({
                     </div>
                 )}
             </div>
+        </>
     );
 
     // [New] Social Card Rendering
@@ -3518,6 +3533,7 @@ const MessageItem = React.memo(({
            prev.bubbleVariant === next.bubbleVariant &&
            prev.messageSpacing === next.messageSpacing &&
            prev.showTimestamp === next.showTimestamp &&
+           prev.moduleAlign === next.moduleAlign &&
            prev.suppressEntranceAnimation === next.suppressEntranceAnimation &&
            prev.voiceData?.url === next.voiceData?.url &&
            prev.voiceLoading === next.voiceLoading &&

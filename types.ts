@@ -111,6 +111,9 @@ export interface OSTheme {
   chatBubbleIndent?: number;
   /** 隐藏头像的一侧是否贴边（收回头像空位） */
   chatSnapToEdge?: boolean;
+  /** HTML 卡片 / 心象卡片的出现位置：默认（贴气泡列的头像位，不随贴边/缩进挪动）/ 水平居中。
+   *  经 MessageItem 布局属性生效（不走注入 CSS），同属聊天细节微调字段、可按角色覆盖 */
+  chatModuleAlign?: 'default' | 'center';
   chatBubbleStyle?: 'modern' | 'flat' | 'outline' | 'shadow' | 'wechat' | 'ios';
   chatMessageSpacing?: 'compact' | 'default' | 'spacious';
   chatShowTimestamp?: 'always' | 'hover' | 'never';
@@ -138,7 +141,8 @@ export interface OSTheme {
  *  与 OSTheme 同名字段一一对应，经 utils/chatFineTuneCss.ts 生成 CSS。 */
 export type ChatFineTuneFields = Pick<OSTheme,
   'chatAvatarVisibility' | 'chatAvatarAlign' | 'chatAvatarOffsetY' |
-  'chatBubbleFontSize' | 'chatBubbleLineHeight' | 'chatBubbleIndent' | 'chatSnapToEdge'>;
+  'chatBubbleFontSize' | 'chatBubbleLineHeight' | 'chatBubbleIndent' | 'chatSnapToEdge' |
+  'chatModuleAlign'>;
 
 /** 角色级「聊天装扮」覆盖：enabled=true 才生效；生效时已定义的字段逐个覆盖全局，
  *  未定义的字段跟随全局（合并规则见 utils/chatFineTuneCss.ts 的 mergeChatFineTune）。 */

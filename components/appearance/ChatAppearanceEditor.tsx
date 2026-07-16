@@ -24,6 +24,7 @@ const FINE_TUNE_DEFAULTS: Required<ChatFineTuneFields> = {
     chatBubbleLineHeight: 0,
     chatBubbleIndent: 0,
     chatSnapToEdge: false,
+    chatModuleAlign: 'default',
 };
 
 const presets: Array<{ name: string; desc: string; config: Partial<OSTheme> }> = [

@@ -114,4 +114,10 @@ describe('mergeChatFineTune', () => {
         expect(merged).toEqual({});
         expect(buildChatFineTuneCss(merged)).toBe('');
     });
+
+    it('chatModuleAlign 参与合并但不生成 CSS（经 MessageItem 布局属性生效）', () => {
+        const merged = mergeChatFineTune({ chatModuleAlign: 'default' }, { enabled: true, chatModuleAlign: 'center' });
+        expect(merged.chatModuleAlign).toBe('center');
+        expect(buildChatFineTuneCss({ chatModuleAlign: 'center' })).toBe('');
+    });
 });

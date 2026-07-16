@@ -79,6 +79,14 @@ export const ChatFineTunePanel: React.FC<Props> = ({ value, onChange }) => {
                     ))}
                 </div>
             </div>
+            <div>
+                <h3 className="text-[11px] font-bold text-slate-500 mb-2">HTML / 心象卡片位置</h3>
+                <div className="flex gap-2 flex-wrap">
+                    <OptionButton active={(value.chatModuleAlign || 'default') === 'default'} label="默认位置" desc="贴气泡列，不随贴边挪" onClick={() => onChange({ chatModuleAlign: 'default' })} />
+                    <OptionButton active={value.chatModuleAlign === 'center'} label="水平居中" desc="卡片类内容居中显示" onClick={() => onChange({ chatModuleAlign: 'center' })} />
+                </div>
+                <p className="mt-1.5 text-[10px] text-slate-400">角色发的 HTML 卡片和心象（思考链）卡片的横向位置。预览里看不到卡片，进聊天看效果。</p>
+            </div>
         </div>
     );
 };

@@ -14,12 +14,15 @@
  * 全部字段缺省时返回空串（一个 <style> 都不注入，现状零变化）。
  */
 
-import type { OSTheme, ChatFineTuneFields, ChatFineTuneOverride } from '../types';
+import type { ChatFineTuneFields, ChatFineTuneOverride } from '../types';
 
 /** 微调字段清单（合并 / 重置 / 快照都以这份为准，加字段只改这里一处）。 */
 export const CHAT_FINE_TUNE_KEYS = [
     'chatAvatarVisibility', 'chatAvatarAlign', 'chatAvatarOffsetY',
     'chatBubbleFontSize', 'chatBubbleLineHeight', 'chatBubbleIndent', 'chatSnapToEdge',
+    // chatModuleAlign 不生成 CSS（HTML/心象卡片位置经 MessageItem 布局属性生效），
+    // 但同属微调字段：合并/重置/角色覆盖/备份都跟这份清单走。
+    'chatModuleAlign',
 ] as const satisfies ReadonlyArray<keyof ChatFineTuneFields>;
 
 /**
@@ -55,10 +58,7 @@ const DEFAULT_WRAP_MARGIN = 48;
 const hideRule = (sel: string) =>
     `${sel} { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
 
-export function buildChatFineTuneCss(theme: Pick<OSTheme,
-    'chatAvatarVisibility' | 'chatAvatarAlign' | 'chatAvatarOffsetY' |
-    'chatBubbleFontSize' | 'chatBubbleLineHeight' | 'chatBubbleIndent' | 'chatSnapToEdge'
->): string {
+export function buildChatFineTuneCss(theme: ChatFineTuneFields): string {
     const rules: string[] = [];
     const vis = theme.chatAvatarVisibility || 'both';
     const hideAi = vis === 'hide_ai' || vis === 'hide_both';
