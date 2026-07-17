@@ -320,6 +320,7 @@ export const buildLifeRecordInjection = async (char: CharacterProfile, userName:
     if (tools.length > 0) {
         s += `**代记工具**：只有当 ${userName} 在对话中**明确说出**以下事实时，才单独起一行输出对应指令、帮 TA 顺手记一笔（一次一条）：\n${tools.join('\n')}\n`;
         s += `TA 只是暗示、开玩笑、或在说过去 / 别人的事时，一律不要记录。记录成功后系统会插入一张卡片，TA 可以确认或否决；被否决说明你理解错了。平时不要把这些指令挂在嘴边，也不要替 TA 补记你只是猜测的事。\n`;
+        s += `**一件事只记一次**：上面摘要里已经出现的状态（如「生理期第 N 天」「今日已练」「✓已服」、已列出的支出）都说明这件事**已经记过了**——不要再输出指令重复记，也不要因为翻到 TA 之前提过这件事就补记。聊天记录里出现过的 [生活记录：…] 卡片就是你之前记的。只有 TA 明确说**又**发生了新的一次（比如「晚上又跑了一次」），才再记一条。\n`;
     }
 
     // 否决反馈（一次性）：上次代记被用户否决 → 告诉角色它弄错了，注入后即清除
@@ -381,6 +382,11 @@ const findDuplicate = async (
     const eff = effective(records);
     switch (d.module) {
         case 'period': {
+            // 同日同类兜底（先于状态机）：今天已经有同类事件就绝不再写一条。
+            // 状态机有判不出重复的盲区——比如 start → 误记了同日 end → 模型下轮又发
+            // start，此时 inPeriod=false、旧逻辑放行 → 真重复入库（用户实报）。
+            const sameDay = eff.filter(r => r.module === 'period' && r.kind === d.kind && r.date === today).pop();
+            if (sameDay) return byName(sameDay);
             const settings = await DB.getLifeRecordSettings().catch(() => null);
             const st = computePeriodStatus(records, settings, today);
             if (d.kind === 'start' && st.inPeriod) {
@@ -414,9 +420,12 @@ const findDuplicate = async (
             return rec ? byName(rec) : { byName: '你自己' };
         }
         case 'exercise': {
+            // 只按「同日 + 同活动」判重，不再要求时长逐字一致——模型下一轮把「30分钟」
+            // 写成「半小时」或干脆省略是常态，旧判据一漏就真重复入库（用户实报）。
+            // 同一活动一天真练两次的场景走面板手动补记（卡片会说明已有记录）。
+            // 与药盒同口径：同日同名即重。
             const rec = eff.filter(r => r.module === 'exercise' && r.date === today
-                && r.payload.activity === d.payload.activity
-                && (r.payload.duration || '') === (d.payload.duration || '')).pop();
+                && r.payload.activity === d.payload.activity).pop();
             return rec ? byName(rec) : null;
         }
     }
