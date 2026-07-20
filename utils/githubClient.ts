@@ -357,11 +357,6 @@ const uploadOneAsset = async (
         xhr.onload = () => {
             onFraction?.(1);
             if (xhr.status === 201) resolve({ ok: true, message: '上传成功' });
-            else if (useProxy(config) && shouldRetryDirect(xhr.status)) {
-                console.warn(`[GitHubBackup] proxy asset upload returned ${xhr.status}; retrying direct GitHub upload`);
-                uploadOneAsset({ ...config, githubUseProxy: false }, releaseId, blob, assetName, onFraction)
-                    .then(resolve);
-            }
             else resolve({ ok: false, message: `上传失败 (${xhr.status}): ${(xhr.responseText || '').slice(0, 120)}` });
         };
         xhr.onerror = () => resolve({ ok: false, message: '上传失败: 网络错误（如果在国内，试试在高级设置里开启代理）' });

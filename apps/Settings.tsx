@@ -2502,7 +2502,11 @@ const Settings: React.FC = () => {
                           <input
                               type="checkbox"
                               checked={ghUseProxy}
-                              onChange={(e) => setGhUseProxy(e.target.checked)}
+                              onChange={(e) => {
+                                  const next = e.target.checked;
+                                  setGhUseProxy(next);
+                                  updateCloudBackupConfig({ githubUseProxy: next });
+                              }}
                               className="rounded"
                           />
                           <span>走 Cloudflare 代理（默认开，国内必需；能直连 GitHub 的可关掉提速）</span>
