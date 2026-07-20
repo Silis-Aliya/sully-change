@@ -4,7 +4,7 @@ import { useOS, DEFAULT_WALLPAPER } from '../context/OSContext';
 import { OSTheme, DesktopDecoration, AppearancePreset, Toast } from '../types';
 import { INSTALLED_APPS, Icons } from '../constants';
 import { processImage, processImageToBlob } from '../utils/file';
-import { putImageBlob } from '../utils/blobRef';
+import { putImageBlob, useBlobRefUrl } from '../utils/blobRef';
 import { DB } from '../utils/db';
 import { isStatusBarHidden } from '../utils/iosStandalone';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -13,6 +13,11 @@ import { ChatAppearanceEditor as ModularChatAppearanceEditor } from '../componen
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+
+const CustomIconImage: React.FC<{ value: string; alt: string }> = ({ value, alt }) => {
+    const url = useBlobRefUrl(value);
+    return url ? <img src={url} className="w-full h-full object-contain" alt={alt} /> : null;
+};
 
 // Touch-friendly long-press wrapper. `onContextMenu` alone misses iOS Safari /
 // Capacitor WebView, so we also wire pointer/touch timers to fire after ~550ms.
@@ -487,6 +492,8 @@ const Appearance: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'theme' | 'icons' | 'presets' | 'chat'>('theme');
   const wallpaperInputRef = useRef<HTMLInputElement>(null);
   const [wallpaperUrl, setWallpaperUrl] = useState('');
+  const lockWallpaperInputRef = useRef<HTMLInputElement>(null);
+  const [lockWallpaperUrl, setLockWallpaperUrl] = useState('');
   const widgetInputRef = useRef<HTMLInputElement>(null);
   const [activeWidgetSlot, setActiveWidgetSlot] = useState<string | null>(null);
   const iconInputRef = useRef<HTMLInputElement>(null);
@@ -606,6 +613,30 @@ const Appearance: React.FC = () => {
       addToast('壁纸已应用', 'success');
   };
 
+  const handleLockWallpaperUpload = async (file: File) => {
+      try {
+          addToast('正在处理锁屏壁纸 (原画质)...', 'info');
+          const blob = await processImageToBlob(file, { skipCompression: true });
+          const ref = await putImageBlob(blob);
+          updateTheme({ lockWallpaper: ref });
+          addToast('锁屏壁纸更新成功', 'success');
+      } catch (e: any) {
+          addToast(e.message, 'error');
+      }
+  };
+
+  const applyLockWallpaperUrl = () => {
+      const url = lockWallpaperUrl.trim();
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url) && !url.startsWith('data:') && !url.startsWith('blob:')) {
+          addToast('请填写以 http(s):// 开头的图片地址', 'error');
+          return;
+      }
+      updateTheme({ lockWallpaper: url });
+      setLockWallpaperUrl('');
+      addToast('锁屏壁纸已应用', 'success');
+  };
+
   const handleWidgetUpload = async (file: File) => {
       if (!activeWidgetSlot) return;
       try {
@@ -710,8 +741,9 @@ const Appearance: React.FC = () => {
   const handleIconUpload = async (file: File) => {
       if (!selectedAppId) return;
       try {
-          const dataUrl = await processImage(file);
-          setCustomIcon(selectedAppId, dataUrl);
+          const blob = await processImageToBlob(file, { maxWidth: 512, quality: 0.92 });
+          const ref = await putImageBlob(blob);
+          await setCustomIcon(selectedAppId, ref);
           addToast('应用图标已更新', 'success');
       } catch (e: any) {
           addToast(e.message, 'error');
@@ -926,7 +958,7 @@ const Appearance: React.FC = () => {
                     <div className="flex items-center justify-between">
                         <div>
                             <div className="text-sm font-medium text-slate-700">音乐卡片浅色系</div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">桌面第二页「正在播放」卡片改用浅色样式（默认深色玻璃）。仅默认皮肤生效。</div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">桌面第二页「正在播放」卡片改用浅色样式。仅默认皮肤生效。</div>
                         </div>
                         <button
                             onClick={() => updateTheme({ nowPlayingWidgetLight: !theme.nowPlayingWidgetLight })}
@@ -986,6 +1018,74 @@ const Appearance: React.FC = () => {
                             应用网络壁纸
                         </button>
                         <p className="text-[10px] text-slate-400">直接引用网络图片，不占用本地存储</p>
+                    </div>
+                </section>
+
+                {/* Lock Screen Wallpaper Section */}
+                <section className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+                    <div className="flex items-center justify-between mb-1">
+                        <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest">锁屏壁纸</h2>
+                        <span className="text-[9px] px-2 py-0.5 rounded-full bg-stone-100 text-stone-500 font-bold">
+                            {theme.lockWallpaper ? '独立设置' : '跟随桌面'}
+                        </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mb-4">单独设置锁屏画面，不会修改桌面壁纸。</p>
+                    <LongPressArea
+                        className="aspect-[9/16] w-1/2 mx-auto bg-slate-100 rounded-2xl overflow-hidden relative shadow-inner mb-4 group cursor-pointer"
+                        onClick={() => lockWallpaperInputRef.current?.click()}
+                        onLongPress={() => {
+                            if (!theme.lockWallpaper) {
+                                addToast('锁屏当前已跟随桌面壁纸', 'info');
+                                return;
+                            }
+                            updateTheme({ lockWallpaper: undefined });
+                            addToast('锁屏已恢复跟随桌面壁纸', 'success');
+                        }}
+                    >
+                        <div
+                            className="w-full h-full"
+                            style={{
+                                background: (() => {
+                                    const value = theme.lockWallpaper || theme.wallpaper;
+                                    if (!value) return '#e2e8f0';
+                                    return (value.startsWith('linear-gradient') || value.startsWith('radial-gradient') || value.startsWith('conic-gradient'))
+                                        ? value
+                                        : `url("${value}") center/cover`;
+                                })(),
+                            }}
+                        />
+                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <span className="text-white text-xs font-bold bg-black/20 px-3 py-1 rounded-full backdrop-blur-md">更换锁屏</span>
+                        </div>
+                    </LongPressArea>
+                    <input
+                        type="file"
+                        ref={lockWallpaperInputRef}
+                        className="hidden"
+                        accept="image/*"
+                        onChange={(e) => {
+                            if (e.target.files?.[0]) handleLockWallpaperUpload(e.target.files[0]);
+                            e.target.value = '';
+                        }}
+                    />
+                    <p className="text-center text-[10px] text-slate-400 mb-4">点击上传 / 长按恢复跟随桌面</p>
+
+                    <div className="border-t border-slate-100 pt-4 space-y-2">
+                        <p className="text-[11px] font-bold text-slate-500">从 URL 导入</p>
+                        <input
+                            value={lockWallpaperUrl}
+                            onChange={e => setLockWallpaperUrl(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') applyLockWallpaperUrl(); }}
+                            placeholder="输入锁屏图片地址 (https://...)"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs outline-none focus:border-primary transition-all"
+                        />
+                        <button
+                            onClick={applyLockWallpaperUrl}
+                            disabled={!lockWallpaperUrl.trim()}
+                            className="w-full py-2 bg-primary text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-transform disabled:opacity-40 disabled:active:scale-100"
+                        >
+                            应用网络锁屏壁纸
+                        </button>
                     </div>
                 </section>
 
@@ -1319,7 +1419,7 @@ const Appearance: React.FC = () => {
                                 onClick={() => { setSelectedAppId(app.id); iconInputRef.current?.click(); }}
                              >
                                  {customUrl ? (
-                                     <img src={customUrl} className="w-full h-full object-contain" alt={`${app.name} 自定义图标`} />
+                                     <CustomIconImage value={customUrl} alt={`${app.name} 自定义图标`} />
                                  ) : (
                                      <div className={`w-full h-full ${app.color} flex items-center justify-center text-white`}>
                                          <Icon className="w-8 h-8" />
