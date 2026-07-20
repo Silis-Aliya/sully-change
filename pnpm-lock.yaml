@@ -90,6 +90,9 @@ importers:
       '@capacitor/cli':
         specifier: ^6.0.0
         version: 6.2.1
+      '@types/node':
+        specifier: ^25.9.0
+        version: 25.9.0
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
