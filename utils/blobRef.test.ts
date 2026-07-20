@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
     isBlobRef, BLOBREF_PREFIX,
-    putImageBlob, getBlobForRef, deleteBlobRef,
+    putImageBlob, getBlobForRef, deleteBlobRef, deleteBlobRefIfUnreferenced,
     dataUrlToBlob, blobToDataUrl,
     migrateDataUrlToRef, resolveBlobRefsDeep,
 } from './blobRef';
+import { DB } from './db';
 
 // fake-indexeddb 已由 test-setup.ts 注入；本组用例锁住 base64 ⇄ Blob 迁移层的核心不变量：
 // 令牌识别、Blob 存取、data URL 互转无损、深度解析（备份导出前把令牌变回 data:image）。
@@ -50,6 +51,31 @@ describe('putImageBlob / getBlobForRef / deleteBlobRef', () => {
     it('非令牌一律返回 null', async () => {
         expect(await getBlobForRef('data:image/png;base64,AAAA')).toBeNull();
         expect(await getBlobForRef('https://x/y.png')).toBeNull();
+    });
+});
+
+describe('deleteBlobRefIfUnreferenced', () => {
+    it('外观预设仍引用时保留，引用移除后才删除', async () => {
+        const ref = await putImageBlob(dataUrlToBlob(TINY_PNG));
+        await DB.saveAsset('appearance_preset_blobref_test', JSON.stringify({ wallpaper: ref }));
+
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(false);
+        expect(await getBlobForRef(ref)).not.toBeNull();
+
+        await DB.deleteAsset('appearance_preset_blobref_test');
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(true);
+        expect(await getBlobForRef(ref)).toBeNull();
+    });
+
+    it('localStorage 皮肤备份仍引用时不会删除', async () => {
+        const ref = await putImageBlob(dataUrlToBlob(TINY_PNG));
+        localStorage.setItem('acnh_wallpaper_backup_test', ref);
+
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(false);
+        expect(await getBlobForRef(ref)).not.toBeNull();
+
+        localStorage.removeItem('acnh_wallpaper_backup_test');
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(true);
     });
 });
 

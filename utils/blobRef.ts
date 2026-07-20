@@ -62,6 +62,41 @@ export async function deleteBlobRef(ref: string | undefined | null): Promise<voi
     }
 }
 
+/**
+ * 仅在令牌已不再被持久化设置引用时删除 Blob。
+ *
+ * 壁纸、锁屏和外观预设可能共享同一令牌；直接在换图时 delete 会让预设或“切回默认”备份
+ * 变成死图。这里检查 assets（含 appearance_preset_* JSON）和 localStorage（含皮肤壁纸备份）
+ * 后再清理。读取引用表失败时宁可保留，也绝不冒险删图。
+ */
+export async function deleteBlobRefIfUnreferenced(ref: string | undefined | null): Promise<boolean> {
+    if (!ref || !isBlobRef(ref)) return false;
+
+    try {
+        const assets = await DB.getAllAssets();
+        if (assets.some(asset => typeof asset.data === 'string' && asset.data.includes(ref))) {
+            return false;
+        }
+    } catch {
+        return false;
+    }
+
+    try {
+        if (typeof localStorage !== 'undefined') {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (!key) continue;
+                if (localStorage.getItem(key)?.includes(ref)) return false;
+            }
+        }
+    } catch {
+        return false;
+    }
+
+    await deleteBlobRef(ref);
+    return true;
+}
+
 // ─── data URL ⇄ Blob 互转 ───────────────────────────────────────
 
 /** `data:<mime>;base64,xxxx` → Blob。非 base64 data URL 会抛错。 */
