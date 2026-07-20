@@ -1,10 +1,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../context/OSContext';
-import { useMusic, musicApi, normalizeCookie, toHttps, Song } from '../context/MusicContext';
+import { useMusic, musicApi, normalizeCookie, toHttps, Song, MUSIC_TOGETHER_LEFT_EVENT } from '../context/MusicContext';
 import { getProxyWorkerUrl } from '../utils/proxyWorker';
 import { DB } from '../utils/db';
-import { Gear, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon } from '@phosphor-icons/react';
+import { Check, Gear, Headphones, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon } from '@phosphor-icons/react';
 import {
   C, Sparkle, CrossStar, MizuHeader, SearchBar, SongRow, MiniPlayer,
   VinylDisc, GlassProgress, PlayControls, BokehBg,
@@ -12,6 +12,7 @@ import {
 } from './music/MusicUI';
 import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
+import { AppID } from '../types';
 
 // ------------------------- 工具 -------------------------
 const fmtTime = (s: number) => {
@@ -22,17 +23,31 @@ const fmtTime = (s: number) => {
 };
 
 type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char';
+const OPEN_PLAYER_EVENT = 'sully-music-open-player';
+const OPEN_PLAYER_REQUEST_KEY = 'sully.music.openPlayer.request';
+const OPEN_PLAYER_RETURN_APP_KEY = 'sully.music.openPlayer.returnApp';
+const avatarIsImage = (avatar?: string) => !!avatar && (avatar.startsWith('data:') || avatar.startsWith('http'));
+const avatarLabel = (avatar?: string, name?: string) => avatar && avatar.length <= 4 ? avatar : (name || '?').slice(0, 1);
+const fmtTogetherDuration = (ms: number) => {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    : `${m}:${s.toString().padStart(2, '0')}`;
+};
 
 // ========================= 主组件 =========================
 const MusicApp: React.FC = () => {
-  const { closeApp, addToast, characters, userProfile } = useOS();
+  const { closeApp, openApp, addToast, characters, userProfile } = useOS();
   const {
     cfg, setCfg,
     current, playing, progress, duration, loadingSong,
     lyric, tlyric, activeLyricIdx,
     profile, playSong, togglePlay, nextSong, prevSong, seek,
     liked, toggleLike, setToastHandler,
-    listeningTogetherWith, removeListeningPartner,
+    listeningTogetherWith, listeningTogetherStartedAt, removeListeningPartner,
     addLocalSong, removeLocalSong, localAlbumSongs,
     playMode, setPlayMode,
     regeneratingId, regeneratingStatus,
@@ -80,6 +95,43 @@ const MusicApp: React.FC = () => {
       .map(c => ({ id: c.id, name: c.name, avatar: c.avatar }));
   }, [listeningTogetherWith, characters]);
 
+  const primaryCompanion = companions[0];
+  const extraCompanionCount = Math.max(0, companions.length - 1);
+
+  useEffect(() => {
+    const onTogetherLeft = (event: Event) => {
+      const charId = (event as CustomEvent<{ charId?: string }>).detail?.charId;
+      if (!charId) return;
+      const char = characters.find(c => c.id === charId);
+      addToast(`${char?.name || 'TA'}退出了一起听`, 'info');
+    };
+    window.addEventListener(MUSIC_TOGETHER_LEFT_EVENT, onTogetherLeft);
+    return () => window.removeEventListener(MUSIC_TOGETHER_LEFT_EVENT, onTogetherLeft);
+  }, [characters, addToast]);
+
+  const renderTogetherAvatar = (
+    avatar: string | undefined,
+    name: string | undefined,
+    ring: string,
+    className = '',
+  ) => {
+    const baseClass = `w-9 h-9 rounded-full shrink-0 border-2 shadow-sm ${className}`;
+    const style = {
+      borderColor: ring,
+      boxShadow: `0 0 18px ${ring}55`,
+    };
+    return avatarIsImage(avatar) ? (
+      <img src={avatar} alt="" className={`${baseClass} object-cover bg-white`} style={style} />
+    ) : (
+      <div
+        className={`${baseClass} flex items-center justify-center text-sm bg-white/80`}
+        style={{ ...style, color: C.primary, fontFamily: 'Georgia, serif' }}
+      >
+        {avatarLabel(avatar, name)}
+      </div>
+    );
+  };
+
   // 当前歌在哪些 char 的歌单里（用于 MiniPlayer 的"也收藏"提示）
   const charsWithSong = useMemo(() => {
     if (!current) return [];
@@ -102,7 +154,143 @@ const MusicApp: React.FC = () => {
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<Song[]>([]);
   const [searching, setSearching] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteSelectedIds, setInviteSelectedIds] = useState<Set<string>>(new Set());
+  const [togetherNow, setTogetherNow] = useState(Date.now());
   const lyricBoxRef = useRef<HTMLDivElement | null>(null);
+  const floatingReturnAppRef = useRef<AppID | null>(null);
+  const floatingPlayerEntryRef = useRef(false);
+
+  useEffect(() => {
+    if (!listeningTogetherStartedAt) return;
+    setTogetherNow(Date.now());
+    const timer = window.setInterval(() => setTogetherNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [listeningTogetherStartedAt]);
+
+  const toggleInviteTarget = useCallback((charId: string) => {
+    setInviteSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(charId)) next.delete(charId);
+      else next.add(charId);
+      return next;
+    });
+  }, []);
+
+  const openInviteModal = useCallback(() => {
+    if (!current) {
+      addToast('先播放一首歌，再邀请 TA 一起听', 'info');
+      return;
+    }
+    setInviteSelectedIds(new Set(listeningTogetherWith));
+    setShowInviteModal(true);
+  }, [current, listeningTogetherWith, addToast]);
+
+  const confirmInviteTogether = useCallback(async () => {
+    if (!current) {
+      addToast('当前没有正在播放的歌', 'error');
+      return;
+    }
+    const targets = characters.filter(c => inviteSelectedIds.has(c.id));
+    const newTargets = targets.filter(c => !listeningTogetherWith.includes(c.id));
+    if (targets.length === 0) {
+      addToast('请选择至少一个联系人', 'info');
+      return;
+    }
+
+    const song = {
+      songId: current.id,
+      id: current.id,
+      name: current.name,
+      artists: current.artists,
+      album: current.album,
+      albumPic: current.albumPic,
+      duration: current.duration,
+      fee: current.fee,
+    };
+    const inviteSong = { id: current.id, name: current.name, artists: current.artists };
+
+    try {
+      await Promise.all(newTargets.map(async (target) => {
+        await DB.saveMessage({
+          charId: target.id,
+          role: 'user',
+          type: 'music_card',
+          content: '[邀请一起听]',
+          metadata: {
+            intent: 'join',
+            inviteFromUser: true,
+            inviteStatus: 'pending',
+            song,
+          },
+        } as any);
+      }));
+      try {
+        window.dispatchEvent(new CustomEvent('music-invite-request', {
+          detail: { charIds: newTargets.map(t => t.id), song: inviteSong },
+        }));
+      } catch {}
+      addToast(newTargets.length > 0 ? `已邀请 ${newTargets.length} 个联系人，等待 TA 回应` : 'TA 已经在一起听了', 'success');
+      setShowInviteModal(false);
+    } catch (e: any) {
+      addToast(`邀请失败：${e?.message || '未知错误'}`, 'error');
+    }
+  }, [current, characters, inviteSelectedIds, listeningTogetherWith, addToast]);
+
+  useEffect(() => {
+    const openPlayer = () => {
+      if (!current) return;
+      try {
+        const returnApp = sessionStorage.getItem(OPEN_PLAYER_RETURN_APP_KEY) as AppID | null;
+        floatingReturnAppRef.current = returnApp && returnApp !== AppID.Music ? returnApp : AppID.Launcher;
+      } catch {
+        floatingReturnAppRef.current = AppID.Launcher;
+      }
+      floatingPlayerEntryRef.current = true;
+      setVisitCharId(null);
+      setShowLyricSync(false);
+      setView('player');
+    };
+    try {
+      if (sessionStorage.getItem(OPEN_PLAYER_REQUEST_KEY) === '1') {
+        sessionStorage.removeItem(OPEN_PLAYER_REQUEST_KEY);
+        openPlayer();
+      }
+    } catch {}
+    window.addEventListener(OPEN_PLAYER_EVENT, openPlayer);
+    return () => window.removeEventListener(OPEN_PLAYER_EVENT, openPlayer);
+  }, [current]);
+
+  const handlePlayerBack = useCallback(() => {
+    let returnApp = floatingReturnAppRef.current;
+    if (!returnApp) {
+      try {
+        const stored = sessionStorage.getItem(OPEN_PLAYER_RETURN_APP_KEY) as AppID | null;
+        if (stored && stored !== AppID.Music) returnApp = stored;
+      } catch {}
+    }
+    if (returnApp) {
+      floatingReturnAppRef.current = null;
+      floatingPlayerEntryRef.current = false;
+      try {
+        sessionStorage.removeItem(OPEN_PLAYER_REQUEST_KEY);
+        sessionStorage.removeItem(OPEN_PLAYER_RETURN_APP_KEY);
+      } catch {}
+      if (returnApp === AppID.Launcher) closeApp();
+      else openApp(returnApp);
+      return;
+    }
+    if (floatingPlayerEntryRef.current) {
+      floatingPlayerEntryRef.current = false;
+      try {
+        sessionStorage.removeItem(OPEN_PLAYER_REQUEST_KEY);
+        sessionStorage.removeItem(OPEN_PLAYER_RETURN_APP_KEY);
+      } catch {}
+      closeApp();
+      return;
+    }
+    setView('search');
+  }, [closeApp, openApp]);
 
   // 歌词自动滚动：把 current line 对齐到滚动容器视觉中心
   // 注意 offsetTop 依赖 offsetParent，容器没 position:relative 时会跨到祖先节点、值偏大，
@@ -266,7 +454,7 @@ const MusicApp: React.FC = () => {
       <div className="flex flex-col h-full relative"
         style={{ background: `linear-gradient(180deg, #ffffff 0%, ${C.bg} 60%, ${C.bgDeep} 100%)` }}>
         <BokehBg />
-        <MizuHeader title="Now Playing" onBack={() => setView('search')} />
+        <MizuHeader title="Now Playing" onBack={handlePlayerBack} />
 
         <div className="flex-1 flex flex-col items-center px-5 pt-4 pb-3 relative z-10 overflow-hidden">
           <div className="shrink-0 mt-1 relative">
@@ -310,7 +498,54 @@ const MusicApp: React.FC = () => {
             </div>
           )}
 
-          <section className="mt-5 text-center space-y-1.5 shrink-0 px-2">
+          {primaryCompanion && (
+            <button
+              type="button"
+              onClick={openInviteModal}
+              className="mt-4 shrink-0 min-w-[218px] px-5 py-3 rounded-full flex flex-col items-center justify-center gap-2 transition-transform active:scale-95"
+              style={{
+                background: `linear-gradient(135deg, ${C.sakura}1f, ${C.lavender}28)`,
+                border: `1px solid ${C.glow}55`,
+                boxShadow: `0 8px 28px ${C.glow}22`,
+              }}
+            >
+              <div className="flex items-center justify-center gap-2.5 w-full">
+                {renderTogetherAvatar(userProfile?.avatar, userProfile?.name || '你', C.glow)}
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center"
+                  style={{
+                    color: C.sakura,
+                    background: 'rgba(255,255,255,0.62)',
+                    border: `1px solid ${C.glow}55`,
+                    boxShadow: `0 0 18px ${C.sakura}33`,
+                  }}
+                >
+                  ♥
+                </div>
+                {renderTogetherAvatar(primaryCompanion.avatar, primaryCompanion.name, C.sakura)}
+                {extraCompanionCount > 0 && (
+                  <div
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 bg-white/80"
+                    style={{ color: C.primary, borderColor: C.lavender, boxShadow: `0 0 18px ${C.lavender}44` }}
+                  >
+                    +{extraCompanionCount}
+                  </div>
+                )}
+              </div>
+              <div
+                className="w-full text-center text-[11px] leading-none tracking-[0.16em]"
+                style={{ color: C.muted, fontFamily: `'Noto Serif','Georgia',serif` }}
+              >
+                <span>{listeningTogetherStartedAt ? `一起听中 · ${fmtTogetherDuration(togetherNow - listeningTogetherStartedAt)}` : '一起听中'}</span>
+              </div>
+              <div className="hidden text-[10px] tracking-[0.22em]" style={{ color: 'transparent', fontFamily: 'Georgia, serif' }}>
+                <span style={{ color: C.muted }}>正在一起听{listeningTogetherStartedAt ? ` · ${fmtTogetherDuration(togetherNow - listeningTogetherStartedAt)}` : ''}</span>
+                正在一起听
+              </div>
+            </button>
+          )}
+
+          <section className={`${primaryCompanion ? 'mt-3' : 'mt-5'} text-center space-y-1.5 shrink-0 px-2`}>
             <h2 className="font-light tracking-tight leading-tight"
               style={{ color: C.primary, fontFamily: `'Noto Serif','Georgia',serif`, fontSize: '22px' }}>
               {current.name}
@@ -436,8 +671,83 @@ const MusicApp: React.FC = () => {
               onDownload={downloadCurrentLocal}
               playMode={playMode}
               onCyclePlayMode={cyclePlayMode}
+              onInvite={openInviteModal}
+              inviteActive={listeningTogetherWith.length > 0}
             />
           </div>
+          {showInviteModal && (
+            <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/20 backdrop-blur-sm">
+              <div className="w-full max-h-[78%] rounded-t-[28px] overflow-hidden shizuku-glass-strong" style={{ boxShadow: `0 -10px 40px ${C.glow}35` }}>
+                <div className="px-4 pt-4 pb-3 border-b" style={{ borderColor: `${C.faint}30` }}>
+                  <div className="flex items-center justify-between">
+                    <button onClick={() => setShowInviteModal(false)} className="text-[11px]" style={{ color: C.muted }}>取消</button>
+                    <div className="flex items-center gap-1.5">
+                      <Headphones size={14} weight="duotone" color={C.primary} />
+                      <span className="text-[12px] tracking-[0.22em]" style={{ color: C.primary, fontFamily: 'Georgia, serif' }}>邀请 TA 一起听</span>
+                    </div>
+                    <button onClick={confirmInviteTogether} className="text-[11px] font-semibold" style={{ color: C.accent }}>确定</button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 rounded-2xl p-2 shizuku-glass">
+                    {current.albumPic ? (
+                      <img src={current.albumPic} alt="" className="w-10 h-10 rounded-xl object-cover" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: 'white' }}>♪</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] truncate" style={{ color: C.text }}>{current.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>{current.artists}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="overflow-y-auto px-3 py-3 shizuku-scrollbar" style={{ maxHeight: 'calc(78vh - 124px)' }}>
+                  {characters.length === 0 ? (
+                    <div className="text-center text-[11px] py-8" style={{ color: C.faint }}>神经链接里还没有联系人</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {characters.map(ch => {
+                        const selected = inviteSelectedIds.has(ch.id);
+                        return (
+                          <button
+                            key={ch.id}
+                            onClick={() => toggleInviteTarget(ch.id)}
+                            className="w-full flex items-center gap-3 rounded-2xl p-2.5 text-left transition-all"
+                            style={{
+                              background: selected ? `linear-gradient(135deg, ${C.sakura}22, ${C.lavender}20)` : 'rgba(255,255,255,0.32)',
+                              border: `1px solid ${selected ? C.sakura + '66' : C.faint + '28'}`,
+                            }}
+                          >
+                            {avatarIsImage(ch.avatar) ? (
+                              <img src={ch.avatar} alt="" className="w-11 h-11 rounded-full object-cover shrink-0" />
+                            ) : (
+                              <div className="w-11 h-11 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0" style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.lavender})` }}>
+                                {ch.avatar || ch.name.slice(0, 1)}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm truncate" style={{ color: C.text }}>{ch.name}</div>
+                              <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                                {listeningTogetherWith.includes(ch.id) ? '已经在一起听' : '发送邀请卡片'}
+                              </div>
+                            </div>
+                            <div
+                              className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+                              style={{
+                                background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(255,255,255,0.4)',
+                                color: selected ? 'white' : C.faint,
+                                border: `1px solid ${selected ? 'transparent' : C.faint + '40'}`,
+                              }}
+                            >
+                              {selected && <Check size={13} weight="bold" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

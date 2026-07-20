@@ -151,8 +151,12 @@ export function normalizeMessageContent(
         const song = msg.metadata?.song as { name?: string; artists?: string } | undefined;
         const intent = msg.metadata?.intent as 'join' | 'add' | 'join_and_add' | undefined;
         const addedTo = msg.metadata?.addedToPlaylistTitle as string | undefined;
+        const inviteFromUser = !!msg.metadata?.inviteFromUser;
         if (song?.name) {
             const songDesc = song.artists ? `《${song.name}》— ${song.artists}` : `《${song.name}》`;
+            if (inviteFromUser || msg.role === 'user') {
+                return `[音乐卡片] ${userName}邀请${charName}一起听：${songDesc}`;
+            }
             const action =
                 intent === 'join' ? `决定和${userName}一起听这首`
                 : intent === 'add' ? `把这首收进了自己的歌单${addedTo ? `《${addedTo}》` : ''}`

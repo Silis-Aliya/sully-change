@@ -234,7 +234,12 @@ export interface PostProcessMusicHooks {
         duration: number;
         fee: number;
     } | null;
+    isListeningTogether?: (charId: string) => boolean;
     joinListeningTogether: (charId: string) => void;
+    leaveListeningTogether?: (charId: string) => void;
+    nextSong?: () => void;
+    setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
+    pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
     addSongToCharPlaylist: (
         charId: string,
         song: any,
@@ -1732,7 +1737,18 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
 
     // ─── Step 3: ChatParser.parseAndExecuteActions ───
+    const musicLeaveRequested = /\[\[MUSIC_ACTION:leave(?:\||\]\])/.test(aiContent);
+    const wasListeningTogether = musicLeaveRequested && !!musicHooks?.isListeningTogether?.(char.id);
     aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks);
+    if (musicLeaveRequested && wasListeningTogether) {
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'assistant',
+            type: 'text',
+            content: `${char.name} 退出了一起听`,
+            metadata: { musicTogetherStatus: 'left', hiddenSystemStyle: true, charName: char.name },
+        });
+    }
 
     // ─── Step 4: thinking chain 抽取 (本轮末尾展示用) ───
     // 跑过二轮 (data !== initialData) → 取二轮 data 的 reasoning; 没跑二轮 → 取一轮 (round1ThinkingChain,

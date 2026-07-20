@@ -34,6 +34,7 @@ export interface UserListeningContext {
     artists: string;
     lyricWindow: string[];
     activeIdx: number;
+    changeSummary?: string;
 }
 
 export interface BuildChatPayloadInput {
@@ -114,7 +115,11 @@ function deriveListeningFromSnapshot(
     charId: string,
 ): { userListeningContext: UserListeningContext | null; isListeningTogether: boolean; musicCfg?: MusicCfg } {
     if (!snap) return { userListeningContext: null, isListeningTogether: false };
-    const { current, playing, lyric, activeLyricIdx, listeningTogetherWith, cfg } = snap;
+    const { current, playing, lyric, activeLyricIdx, listeningTogetherWith, cfg, listeningTogetherChangeCount, listeningTogetherPreviousSong } = snap;
+    const isListeningTogether = listeningTogetherWith.includes(charId);
+    if (!isListeningTogether) {
+        return { userListeningContext: null, isListeningTogether: false, musicCfg: cfg };
+    }
     let userListeningContext: UserListeningContext | null = null;
     if (current && playing && lyric.length > 0) {
         const idx = activeLyricIdx;
@@ -128,6 +133,9 @@ function deriveListeningFromSnapshot(
                 artists: current.artists,
                 lyricWindow: window,
                 activeIdx,
+                changeSummary: listeningTogetherChangeCount > 0
+                    ? `从一起听开始后，用户切过 ${listeningTogetherChangeCount} 首歌；上一首是《${listeningTogetherPreviousSong?.name || '未知'}》— ${listeningTogetherPreviousSong?.artists || '未知'}，当前是《${current.name}》— ${current.artists}。`
+                    : undefined,
             };
         }
     } else if (current && playing) {
@@ -136,10 +144,12 @@ function deriveListeningFromSnapshot(
             artists: current.artists,
             lyricWindow: [],
             activeIdx: -1,
+            changeSummary: listeningTogetherChangeCount > 0
+                ? `从一起听开始后，用户切过 ${listeningTogetherChangeCount} 首歌；上一首是《${listeningTogetherPreviousSong?.name || '未知'}》— ${listeningTogetherPreviousSong?.artists || '未知'}，当前是《${current.name}》— ${current.artists}。`
+                : undefined,
         };
     }
-    const isListeningTogether = !!(userListeningContext && listeningTogetherWith.includes(charId));
-    return { userListeningContext, isListeningTogether, musicCfg: cfg };
+    return { userListeningContext, isListeningTogether: !!userListeningContext, musicCfg: cfg };
 }
 
 /**
@@ -253,6 +263,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         userListeningContext ?? null,
         !!isListeningTogether,
         musicCfg,
+        input.musicSnapshot ?? null,
     );
     let systemPrompt = parts.stable;
     let volatileTail = parts.volatileState;

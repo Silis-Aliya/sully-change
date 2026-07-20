@@ -6,7 +6,7 @@ import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
 import { normalizeMessageContent, stickerNameFromUrl, theaterWhenPhrase } from './messageFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
-import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
+import { MusicCfg, loadMusicCfgStandalone, type MusicPlaybackSnapshot } from '../context/MusicContext';
 import { RealtimeContextManager, NotionManager, FeishuManager, defaultRealtimeConfig } from './realtimeContext';
 import { isScheduleFeatureOn } from './scheduleGenerator';
 import { VOICE_ACTING_GUIDE } from './minimaxTts';
@@ -152,10 +152,11 @@ export const ChatPrompts = {
         } | null,
         isListeningTogether?: boolean,
         musicCfg?: MusicCfg,
+        musicSnapshot?: MusicPlaybackSnapshot | null,
     ): Promise<string> => {
         const parts = await ChatPrompts.buildSystemPromptParts(
             char, userProfile, groups, emojis, categories, currentMsgs,
-            realtimeConfig, evolvedNarrative, userListeningContext, isListeningTogether, musicCfg,
+            realtimeConfig, evolvedNarrative, userListeningContext, isListeningTogether, musicCfg, musicSnapshot,
         );
         return parts.stable + parts.volatileState + parts.recencyTail;
     },
@@ -193,6 +194,7 @@ export const ChatPrompts = {
         // MusicContext 的 cfg —— 用来给 char 自己的"此刻在听"拉稳定的歌词片段。
         // 不传也能用，只是 char 的 block 2 只有歌名 + 艺人，没有歌词。
         musicCfg?: MusicCfg,
+        musicSnapshot?: MusicPlaybackSnapshot | null,
     ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
         // ── 分段计时（定位瓶颈用）──
         const perfT0 = performance.now();
@@ -411,7 +413,7 @@ export const ChatPrompts = {
             if (musicBlock) {
                 volatileState += `\n${musicBlock}\n`;
                 if (userListeningContext) {
-                    volatileState += `\n${ContextBuilder.buildMusicActionGuide(isListeningTogether)}\n`;
+                    volatileState += `\n${ContextBuilder.buildMusicActionGuide(isListeningTogether, char, musicSnapshot, userProfile.name)}\n`;
                 }
             }
         } catch (e) {

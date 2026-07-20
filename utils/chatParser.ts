@@ -32,7 +32,12 @@ export interface MusicActionHooks {
     /** 返回 user 此刻正在听的歌快照（chatParser 自己不去碰 MusicContext） */
     getListeningSnapshot: () => MusicActionSnapshot | null;
     /** 将 charId 加入"一起听"名单（chatParser 不维护状态，只通知） */
+    isListeningTogether?: (charId: string) => boolean;
     joinListeningTogether: (charId: string) => void;
+    leaveListeningTogether?: (charId: string) => void;
+    nextSong?: () => void;
+    setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
+    pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
     /**
      * 把 song 加到 char 的歌单。
      * 返回 { playlistTitle, created } —— created=true 表示这次是新建了歌单。
@@ -100,29 +105,76 @@ export const ChatParser = {
             content = content.replace(/\[\[ACTION:TRANSFER_RETURN\]\]/g, '').trim();
         }
 
-        // MUSIC_ACTION — char 对 user 正在听的歌表态（只处理第一次出现，每条消息最多一次插卡）
+        // MUSIC_ACTION — char 对 user 正在听的歌表态 / 一起听播放器操作
         // 支持的格式（后两种是为了让 char 自己挑歌单 / 新建歌单）：
         //   [[MUSIC_ACTION:join]]
+        //   [[MUSIC_ACTION:reject]]
         //   [[MUSIC_ACTION:add]]                              → 默认放第一个歌单
         //   [[MUSIC_ACTION:add|歌单标题]]                      → 放进现有歌单（标题匹配）
         //   [[MUSIC_ACTION:add_new|新歌单标题|可选描述]]        → 新建歌单
         //   [[MUSIC_ACTION:join_and_add(|...)]]              → 同 add 一套
         //   [[MUSIC_ACTION:join_and_add_new|新歌单标题|描述]]  → 同 add_new
         // 用 | 分隔参数，避免和 : 冲突（标题里很容易出现 :)
-        const MUSIC_TAG_RE = /\[\[MUSIC_ACTION:(join|add|add_new|join_and_add|join_and_add_new)(?:\|([^\]]*))?\]\]/;
-        const MUSIC_TAG_GLOBAL_RE = /\[\[MUSIC_ACTION:(?:join|add|add_new|join_and_add|join_and_add_new)(?:\|[^\]]*)?\]\]/g;
-        const musicMatch = content.match(MUSIC_TAG_RE);
-        if (musicMatch && musicHooks) {
-            const verb = musicMatch[1] as 'join' | 'add' | 'add_new' | 'join_and_add' | 'join_and_add_new';
-            const argsRaw = (musicMatch[2] || '').trim();
+        const MUSIC_TAG_RE = /\[\[MUSIC_ACTION:(join|reject|add|add_new|join_and_add|join_and_add_new|leave|next_song|pick_song|set_mode)(?:\|([^\]]*))?\]\]/g;
+        const MUSIC_TAG_GLOBAL_RE = /\[\[MUSIC_ACTION:(?:join|reject|add|add_new|join_and_add|join_and_add_new|leave|next_song|pick_song|set_mode)(?:\|[^\]]*)?\]\]/g;
+        const musicMatches = [...content.matchAll(MUSIC_TAG_RE)];
+        const musicMatch = musicMatches[0];
+        if (musicMatches.length && musicHooks) {
+            type MusicVerb = 'join' | 'reject' | 'add' | 'add_new' | 'join_and_add' | 'join_and_add_new' | 'leave' | 'next_song' | 'pick_song' | 'set_mode';
+            const findVerb = (verbs: MusicVerb[]) => musicMatches.find(m => verbs.includes(m[1] as MusicVerb));
+            if (findVerb(['reject'])) {
+                content = content.replace(MUSIC_TAG_GLOBAL_RE, '').trim();
+                return content;
+            }
+            if (findVerb(['leave'])) {
+                musicHooks.leaveListeningTogether?.(charId);
+                content = content.replace(MUSIC_TAG_GLOBAL_RE, '').trim();
+                return content;
+            }
+
+            const modeMatch = findVerb(['set_mode']);
+            if (modeMatch) {
+                const mode = (modeMatch[2] || '').trim() as 'loop' | 'shuffle' | 'single';
+                if (mode === 'loop' || mode === 'shuffle' || mode === 'single') {
+                    musicHooks.setPlayMode?.(mode);
+                    const label = mode === 'shuffle' ? '随机播放' : mode === 'single' ? '单曲循环' : '列表循环';
+                    addToast(`${charName} 切换到${label}`, 'info');
+                }
+            }
+
+            const targetMatch = musicMatches.find(m => m[1] === 'next_song' || m[1] === 'pick_song');
+            if (targetMatch?.[1] === 'pick_song') {
+                const rawIdx = Number.parseInt((targetMatch[2] || '').trim(), 10);
+                if (Number.isInteger(rawIdx)) {
+                    const picked = await musicHooks.pickSong?.(rawIdx, charId);
+                    if (picked) addToast(`${charName} 点了《${picked.songName}》`, 'info');
+                }
+            } else if (targetMatch?.[1] === 'next_song') {
+                musicHooks.nextSong?.();
+                addToast(`${charName} 切到下一首`, 'info');
+            }
+
+            const cardMatch = musicMatches.find(m =>
+                ['join', 'add', 'add_new', 'join_and_add', 'join_and_add_new'].includes(m[1]));
+            if (!cardMatch) {
+                content = content.replace(MUSIC_TAG_GLOBAL_RE, '').trim();
+                return content;
+            }
+
+            const verb = cardMatch[1] as 'join' | 'add' | 'add_new' | 'join_and_add' | 'join_and_add_new';
+            const argsRaw = (cardMatch[2] || '').trim();
             const args = argsRaw ? argsRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
             // 卡片元数据里只用 join / add / join_and_add 三种意图，把 _new 折叠回 add 系
-            const intent: 'join' | 'add' | 'join_and_add' =
+            let intent: 'join' | 'add' | 'join_and_add' =
                 verb === 'join' ? 'join'
                 : (verb === 'add' || verb === 'add_new') ? 'add'
                 : 'join_and_add';
             const wantsJoin = verb === 'join' || verb === 'join_and_add' || verb === 'join_and_add_new';
             const wantsAdd = verb !== 'join';
+            const alreadyListeningTogether = wantsJoin && !!musicHooks.isListeningTogether?.(charId);
+            if (alreadyListeningTogether && wantsAdd) {
+                intent = 'add';
+            }
 
             let target: AddSongTarget | undefined;
             if (wantsAdd) {
@@ -138,7 +190,7 @@ export const ChatParser = {
             if (snap) {
                 let addedToPlaylistTitle: string | undefined;
                 let playlistCreated = false;
-                if (wantsJoin) {
+                if (wantsJoin && !alreadyListeningTogether) {
                     musicHooks.joinListeningTogether(charId);
                 }
                 if (wantsAdd) {
@@ -161,6 +213,7 @@ export const ChatParser = {
                         }
                     } catch { /* 忽略 */ }
                 }
+                if (!(alreadyListeningTogether && !wantsAdd)) {
                 await DB.saveMessage({
                     charId,
                     role: 'assistant',
@@ -182,11 +235,11 @@ export const ChatParser = {
                     `${charName} 和你一起听，也加到了${playlistSuffix || '歌单'}`,
                     'info'
                 );
+                }
             }
-            content = content.replace(musicMatch[0], '').trim();
             // 同类 tag 全清，防止 LLM 一条消息里插多次
             content = content.replace(MUSIC_TAG_GLOBAL_RE, '').trim();
-        } else if (musicMatch) {
+        } else if (musicMatches.length) {
             // 没有 hooks（无音乐上下文）— 静默丢弃
             content = content.replace(MUSIC_TAG_GLOBAL_RE, '').trim();
         }

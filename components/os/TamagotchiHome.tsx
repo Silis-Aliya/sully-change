@@ -966,7 +966,7 @@ const TamagotchiHome: React.FC = () => {
     useEffect(() => {
         if (!isDataLoaded || !char) { setStat({ msgCount: 0, pokeLines: [], recent: [] }); return; }
         DB.getMessagesByCharId(char.id).then(msgs => {
-            const visible = msgs.filter(m => m.role !== 'system');
+            const visible = msgs.filter(m => m.role !== 'system' && !m.metadata?.hidden);
             const lines = visible
                 .filter(m => m.role === 'assistant')
                 .map(m => m.content.replace(/\[.*?\]/g, '').trim())

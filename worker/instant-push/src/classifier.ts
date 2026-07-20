@@ -166,7 +166,7 @@ const SIDE_EFFECT_TAGS: SideEffectSpec[] = [
   },
   // [[MUSIC_ACTION:verb]] 或 [[MUSIC_ACTION:verb|arg1|arg2]]
   {
-    re: /\[\[MUSIC_ACTION:(join|add|add_new|join_and_add|join_and_add_new)(?:\|([^\]]*))?\]\]/g,
+    re: /\[\[MUSIC_ACTION:(join|reject|add|add_new|join_and_add|join_and_add_new|leave|next_song|pick_song|set_mode)(?:\|([^\]]*))?\]\]/g,
     toDirective: (m) => ({
       type: 'music_action',
       verb: m[1],

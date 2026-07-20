@@ -618,8 +618,9 @@ const Chat: React.FC = () => {
             // 不在视觉层过滤 hideBeforeMessageId —— 用户能往上滚回看，
             // 上下文截断仅作用于发给 LLM 的 prompt（在 chatPrompts.ts 里处理）。
             const chatScopeMsgs = recent
+                .filter(m => !m.metadata?.hidden)
                 .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
-                .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card'));
+                .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card' && m.type !== 'music_invite_result'));
             setTotalMsgCount(totalCount);
             setMessages(chatScopeMsgs.slice(-requestedVisibleCount));
         };

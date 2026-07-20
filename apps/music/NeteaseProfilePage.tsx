@@ -6,10 +6,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { useMusic, musicApi, toHttps, Song } from '../../context/MusicContext';
+import { DB } from '../../utils/db';
 import {
   C, Sparkle, MizuHeader, BokehBg, MiniPlayer,
 } from './MusicUI';
-import { MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
+import { Check, Headphones, MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
 import NeteaseLoginPanel from './NeteaseLoginPanel';
 
 interface Playlist {
@@ -149,6 +150,8 @@ const LocalAlbumCard: React.FC<LocalAlbumCardProps> = ({ songs, expanded, setExp
   </div>
 );
 
+const avatarIsImage = (avatar?: string) => !!avatar && (avatar.startsWith('data:') || avatar.startsWith('http'));
+
 const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar }) => {
   const { addToast, characters, userProfile } = useOS();
   const {
@@ -160,6 +163,8 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   } = useMusic();
   const [localAlbumExpanded, setLocalAlbumExpanded] = useState(false);
   const [showNeteaseLogin, setShowNeteaseLogin] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteSelectedIds, setInviteSelectedIds] = useState<Set<string>>(new Set());
 
   // 伴听 char 名单（MiniPlayer 徽章用）—— 带头像
   const companions = useMemo(() => {
@@ -179,6 +184,75 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   const [signedIn, setSignedIn] = useState(false);
 
   const uid = profile?.userId;
+
+  const toggleInviteTarget = useCallback((charId: string) => {
+    setInviteSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(charId)) next.delete(charId);
+      else next.add(charId);
+      return next;
+    });
+  }, []);
+
+  const openInviteModal = useCallback(() => {
+    if (!current) {
+      addToast('先播放一首歌，再邀请 TA 一起听', 'info');
+      return;
+    }
+    setInviteSelectedIds(new Set(listeningTogetherWith));
+    setShowInviteModal(true);
+  }, [current, listeningTogetherWith, addToast]);
+
+  const confirmInviteTogether = useCallback(async () => {
+    if (!current) {
+      addToast('当前没有正在播放的歌', 'error');
+      return;
+    }
+    const targets = characters.filter(c => inviteSelectedIds.has(c.id));
+    const newTargets = targets.filter(c => !listeningTogetherWith.includes(c.id));
+    if (targets.length === 0) {
+      addToast('请选择至少一个联系人', 'info');
+      return;
+    }
+
+    const song = {
+      songId: current.id,
+      id: current.id,
+      name: current.name,
+      artists: current.artists,
+      album: current.album,
+      albumPic: current.albumPic,
+      duration: current.duration,
+      fee: current.fee,
+    };
+    const inviteSong = { id: current.id, name: current.name, artists: current.artists };
+
+    try {
+      await Promise.all(newTargets.map(async (target) => {
+        await DB.saveMessage({
+          charId: target.id,
+          role: 'user',
+          type: 'music_card',
+          content: '[邀请一起听]',
+          metadata: {
+            intent: 'join',
+            inviteFromUser: true,
+            inviteStatus: 'pending',
+            song,
+          },
+        } as any);
+      }));
+      try {
+        window.dispatchEvent(new CustomEvent('music-invite-request', {
+          detail: { charIds: newTargets.map(t => t.id), song: inviteSong },
+        }));
+      } catch {}
+      addToast(newTargets.length > 0 ? `已邀请 ${newTargets.length} 个联系人，等待 TA 回应` : 'TA 已经在一起听了', 'success');
+      setShowInviteModal(false);
+    } catch (e: any) {
+      addToast(`邀请失败：${e?.message || '未知错误'}`, 'error');
+    }
+  }, [current, characters, inviteSelectedIds, listeningTogetherWith, addToast]);
 
   // 把不稳定的引用（每秒重建的 addToast 和 cfg 对象）收到 ref 里，
   // 否则 reload 的 deps 会爆炸 → useEffect 循环触发。
@@ -399,6 +473,14 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                 <MagnifyingGlass size={16} weight="bold" />
               </button>
             )}
+            <button
+              onClick={openInviteModal}
+              className="p-1.5 rounded-full transition-all"
+              style={{ color: listeningTogetherWith.length > 0 ? C.sakura : C.primary }}
+              title="邀请一起听"
+            >
+              <Headphones size={16} weight={listeningTogetherWith.length > 0 ? 'fill' : 'bold'} />
+            </button>
             {onOpenSettings && (
               <button
                 onClick={onOpenSettings}
@@ -756,6 +838,96 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           onKickCompanion={removeListeningPartner}
           regenStatus={current.id === regeneratingId ? regeneratingStatus : undefined}
         />
+      )}
+
+      {showInviteModal && (
+        <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/20 backdrop-blur-sm">
+          <div
+            className="w-full max-h-[78%] rounded-t-[28px] overflow-hidden shizuku-glass-strong"
+            style={{ boxShadow: `0 -10px 40px ${C.glow}35` }}
+          >
+            <div className="px-4 pt-4 pb-3 border-b" style={{ borderColor: `${C.faint}30` }}>
+              <div className="flex items-center justify-between">
+                <button onClick={() => setShowInviteModal(false)} className="text-[11px]" style={{ color: C.muted }}>
+                  取消
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <Headphones size={14} weight="duotone" color={C.primary} />
+                  <span className="text-[12px] tracking-[0.22em]" style={{ color: C.primary, fontFamily: 'Georgia, serif' }}>
+                    邀请 TA 一起听
+                  </span>
+                </div>
+                <button onClick={confirmInviteTogether} className="text-[11px] font-semibold" style={{ color: C.accent }}>
+                  确定
+                </button>
+              </div>
+              {current && (
+                <div className="mt-3 flex items-center gap-2 rounded-2xl p-2 shizuku-glass">
+                  {current.albumPic ? (
+                    <img src={current.albumPic} alt="" className="w-10 h-10 rounded-xl object-cover" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: 'white' }}>♪</div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[12px] truncate" style={{ color: C.text }}>{current.name}</div>
+                    <div className="text-[10px] truncate" style={{ color: C.muted }}>{current.artists}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="overflow-y-auto px-3 py-3 shizuku-scrollbar" style={{ maxHeight: 'calc(78vh - 124px)' }}>
+              {characters.length === 0 ? (
+                <div className="text-center text-[11px] py-8" style={{ color: C.faint }}>
+                  神经链接里还没有联系人
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {characters.map(ch => {
+                    const selected = inviteSelectedIds.has(ch.id);
+                    return (
+                      <button
+                        key={ch.id}
+                        onClick={() => toggleInviteTarget(ch.id)}
+                        className="w-full flex items-center gap-3 rounded-2xl p-2.5 text-left transition-all"
+                        style={{
+                          background: selected ? `linear-gradient(135deg, ${C.sakura}22, ${C.lavender}20)` : 'rgba(255,255,255,0.32)',
+                          border: `1px solid ${selected ? C.sakura + '66' : C.faint + '28'}`,
+                        }}
+                      >
+                        {avatarIsImage(ch.avatar) ? (
+                          <img src={ch.avatar} alt="" className="w-11 h-11 rounded-full object-cover shrink-0" />
+                        ) : (
+                          <div
+                            className="w-11 h-11 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0"
+                            style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.lavender})` }}
+                          >
+                            {ch.avatar || ch.name.slice(0, 1)}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate" style={{ color: C.text }}>{ch.name}</div>
+                          <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                            {listeningTogetherWith.includes(ch.id) ? '已经在一起听' : '发送邀请卡片'}
+                          </div>
+                        </div>
+                        <div
+                          className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+                          style={{
+                            background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(255,255,255,0.4)',
+                            color: selected ? 'white' : C.faint,
+                            border: `1px solid ${selected ? 'transparent' : C.faint + '40'}`,
+                          }}
+                        >
+                          {selected && <Check size={13} weight="bold" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

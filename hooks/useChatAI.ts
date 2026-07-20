@@ -733,6 +733,7 @@ export const useChatAI = ({
             const mcdInheritMeta = mcdMiniOpen ? { fromMcdMiniApp: true } : undefined;
             const luckinMiniSnap = luckinMiniAppRef?.current;
             const luckinMiniOpen = !!luckinMiniSnap?.open;
+            const isMusicTogetherForChar = !!(music.current && music.playing && music.listeningTogetherWith.includes(char.id));
 
             const payload = await stageT('payload', buildChatRequestPayload({
                 char: charForGen, userProfile, groups, emojis, categories,
@@ -742,6 +743,7 @@ export const useChatAI = ({
                 realtimeConfig,
                 innerState: skipEmotionInjection ? undefined : (evolvedNarrative || undefined),
                 userListeningContext: (() => {
+                    if (!isMusicTogetherForChar) return null;
                     if (music.current && music.playing && music.lyric.length > 0) {
                         const idx = music.activeLyricIdx;
                         if (idx >= 0) {
@@ -766,8 +768,23 @@ export const useChatAI = ({
                     }
                     return null;
                 })(),
-                isListeningTogether: !!(music.current && music.playing && music.listeningTogetherWith.includes(char.id)),
+                isListeningTogether: isMusicTogetherForChar,
                 musicCfg: music.cfg,
+                musicSnapshot: {
+                    current: music.current,
+                    queue: music.queue,
+                    idx: music.idx,
+                    playing: music.playing,
+                    progress: music.progress,
+                    duration: music.duration,
+                    lyric: music.lyric,
+                    activeLyricIdx: music.activeLyricIdx,
+                    listeningTogetherWith: music.listeningTogetherWith,
+                    listeningTogetherStartedAt: music.listeningTogetherStartedAt,
+                    listeningTogetherChangeCount: 0,
+                    listeningTogetherPreviousSong: null,
+                    cfg: music.cfg,
+                },
                 translationConfig,
                 htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
                 thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },

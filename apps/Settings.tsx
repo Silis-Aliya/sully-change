@@ -1,4 +1,4 @@
-
+﻿
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { Capacitor } from '@capacitor/core';
@@ -25,6 +25,7 @@ import VersionInfo from '../components/settings/VersionInfo';
 import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
+import type { CloudBackupProvider } from '../types';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
@@ -350,6 +351,7 @@ const Settings: React.FC = () => {
       realtimeConfig, updateRealtimeConfig, // 实时感知配置
       cloudBackupConfig, updateCloudBackupConfig,
       cloudBackupToWebDAV, cloudRestoreFromWebDAV, listCloudBackups,
+      quickSyncUploadDelta, quickSyncPullDelta,
   } = useOS();
   
   const [localKey, setLocalKey] = useState(apiConfig.apiKey);
@@ -395,6 +397,7 @@ const Settings: React.FC = () => {
   const [showCloudModal, setShowCloudModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
   const [showCloudRestoreModal, setShowCloudRestoreModal] = useState(false);
+  const [cloudRestoreProvider, setCloudRestoreProvider] = useState<CloudBackupProvider>('webdav');
   const [cloudBackupFiles, setCloudBackupFiles] = useState<import('../types').CloudBackupFile[]>([]);
   const [cloudTestResult, setCloudTestResult] = useState<string>('');
   const [cloudTesting, setCloudTesting] = useState(false);
@@ -976,15 +979,16 @@ const Settings: React.FC = () => {
       addToast('已恢复为默认 Worker', 'info');
   };
 
-  const handleCloudBackup = async (mode: 'text_only' | 'full') => {
-      try { await cloudBackupToWebDAV(mode); } catch { /* toast handled in context */ }
+  const handleCloudBackup = async (mode: 'text_only' | 'full', provider: CloudBackupProvider = cloudBackupConfig.provider || 'webdav') => {
+      try { await cloudBackupToWebDAV(mode, provider); } catch { /* toast handled in context */ }
   };
 
-  const handleOpenCloudRestore = async () => {
+  const handleOpenCloudRestore = async (provider: CloudBackupProvider = cloudBackupConfig.provider || 'webdav') => {
+      setCloudRestoreProvider(provider);
       setShowCloudRestoreModal(true);
       setCloudBackupFiles([]);
       try {
-          const files = await listCloudBackups();
+          const files = await listCloudBackups(provider);
           setCloudBackupFiles(files);
       } catch { addToast('获取云端备份列表失败', 'error'); }
   };
@@ -992,7 +996,7 @@ const Settings: React.FC = () => {
   const handleCloudRestore = async (file: import('../types').CloudBackupFile) => {
       setShowCloudRestoreModal(false);
       try {
-          await cloudRestoreFromWebDAV(file);
+          await cloudRestoreFromWebDAV(file, cloudRestoreProvider);
       } catch (err: any) {
           const details = err?.stack || err?.message || String(err || '未知错误');
           showError('云端恢复失败', details);
@@ -1250,6 +1254,9 @@ const Settings: React.FC = () => {
       }
   };
 
+  const hasGitHubBackup = !!(cloudBackupConfig.githubToken && cloudBackupConfig.githubOwner);
+  const hasWebDAVBackup = !!(cloudBackupConfig.webdavUrl && cloudBackupConfig.username && cloudBackupConfig.password);
+
   return (
     <div className="h-full w-full bg-slate-50/50 flex flex-col font-light relative">
 
@@ -1381,128 +1388,77 @@ const Settings: React.FC = () => {
                 </div>
             }
         >
-            {!cloudBackupConfig.enabled ? (
-                <div className="space-y-3 py-2">
-                    <p className="text-[11px] text-slate-400 leading-relaxed text-center">
-                        把备份上传到你自己的云端，换设备、丢手机都不怕。<br/>
-                        国内推荐 <b>GitHub</b>（不用梯子，2GB/份）。
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                        <button
-                            onClick={() => setShowGithubModal(true)}
-                            className="py-3 px-2 bg-gradient-to-br from-slate-800 to-slate-900 text-white rounded-xl text-xs font-bold shadow-sm active:scale-95 transition-all flex flex-col items-center gap-1.5 relative"
-                        >
-                            <span className="absolute top-1 right-1.5 text-[8px] bg-amber-300 text-slate-800 px-1.5 py-0.5 rounded-full font-bold">推荐</span>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0022 12.017C22 6.484 17.522 2 12 2z" /></svg>
-                            <span>GitHub</span>
-                            <span className="text-[9px] text-slate-300 font-normal">不用梯子 · 2GB</span>
-                        </button>
-                        <button
-                            onClick={() => setShowCloudModal(true)}
-                            className="py-3 px-2 bg-gradient-to-br from-sky-500 to-blue-600 text-white rounded-xl text-xs font-bold shadow-sm active:scale-95 transition-all flex flex-col items-center gap-1.5"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" /></svg>
-                            <span>WebDAV</span>
-                            <span className="text-[9px] text-sky-100 font-normal">日本/NAS · 需梯子</span>
-                        </button>
-                    </div>
-                </div>
-            ) : (
-                <div className="space-y-3">
-                    <div className={`flex items-center justify-between rounded-xl px-3 py-2 ${cloudBackupConfig.provider === 'github' ? 'bg-slate-100' : 'bg-sky-50'}`}>
-                        <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                            <span className="text-[11px] text-slate-600 font-medium">
-                                已连接 · {cloudBackupConfig.provider === 'github'
-                                    ? `GitHub${cloudBackupConfig.githubOwner ? ` (@${cloudBackupConfig.githubOwner})` : ''}`
-                                    : 'WebDAV'}
-                            </span>
-                        </div>
-                        <button
-                            onClick={() => cloudBackupConfig.provider === 'github' ? setShowGithubModal(true) : setShowCloudModal(true)}
-                            className={`text-[10px] font-medium ${cloudBackupConfig.provider === 'github' ? 'text-slate-600' : 'text-sky-500'}`}
-                        >
-                            修改配置
-                        </button>
-                    </div>
+            <div className="space-y-3">
+                <p className="text-[11px] text-slate-400 leading-relaxed text-center">
+                    GitHub 适合长期留档；WebDAV 适合手机和电脑之间快速中转。两边可以同时配置、分别备份和恢复。
+                </p>
 
-                    {/* Quick link to the GitHub releases page so the user knows
-                        where their backups physically live and can browse /
-                        delete them on github.com directly if they want. */}
-                    {cloudBackupConfig.provider === 'github' && cloudBackupConfig.githubOwner && (
-                        <a
-                            href={`https://github.com/${cloudBackupConfig.githubOwner}/${cloudBackupConfig.githubRepo || 'sully-backup'}/releases`}
-                            target="_blank" rel="noopener noreferrer"
-                            className="block text-center text-[10px] text-slate-500 hover:text-slate-800 underline-offset-2 hover:underline transition-colors"
-                        >
-                            🔗 在 GitHub 上查看备份 (github.com/{cloudBackupConfig.githubOwner}/{cloudBackupConfig.githubRepo || 'sully-backup'}/releases) ↗
-                        </a>
-                    )}
-
-                    {/* Switch-provider hint — shown to existing users so the
-                        new GitHub option is discoverable from the connected
-                        state, not only on the first-time setup screen. If the
-                        other provider was previously configured, the click is
-                        a one-shot flip; old credentials and backups stay put. */}
-                    {cloudBackupConfig.provider !== 'github' ? (
-                        <>
-                            <button
-                                onClick={switchToGithub}
-                                className="w-full py-2 bg-gradient-to-r from-slate-800 to-slate-900 text-white rounded-xl text-[11px] font-bold shadow-sm active:scale-95 transition-all flex items-center justify-center gap-2"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0022 12.017C22 6.484 17.522 2 12 2z" /></svg>
-                                <span>{cloudBackupConfig.githubToken ? '切换到 GitHub' : '试试 GitHub 备份（不用梯子 · 2GB/份）'}</span>
-                            </button>
-                            <p className="text-[10px] text-slate-400 text-center">
-                                你 WebDAV 上的旧备份不会被动，可随时切回。
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${hasGitHubBackup ? 'bg-green-400' : 'bg-slate-300'}`} />
+                                <span className="text-xs font-bold text-slate-700">GitHub 长期备份</span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-1">
+                                {hasGitHubBackup ? `已连接 @${cloudBackupConfig.githubOwner}` : '未配置，适合保存历史版本'}
                             </p>
-                        </>
-                    ) : (
-                        <button
-                            onClick={switchToWebDAV}
-                            className="w-full py-1.5 text-[10px] text-slate-400 hover:text-sky-500 transition-colors"
-                        >
-                            {cloudBackupConfig.webdavUrl ? '切换回 WebDAV →' : '改用 WebDAV 备份 →'}
-                        </button>
-                    )}
-                    {cloudBackupConfig.lastBackupTime && (
-                        <p className="text-[10px] text-slate-400 text-center">
-                            上次备份: {new Date(cloudBackupConfig.lastBackupTime).toLocaleString('zh-CN')}
-                            {cloudBackupConfig.lastBackupSize && ` (${(cloudBackupConfig.lastBackupSize / 1024 / 1024).toFixed(1)} MB)`}
-                        </p>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                        <button
-                            onClick={() => handleCloudBackup('text_only')}
-                            className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-1"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-sky-500"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" /></svg>
-                            <span>备份到云端</span>
-                            <span className="text-[9px] text-slate-400">(纯文字)</span>
-                        </button>
-                        <button
-                            onClick={() => handleCloudBackup('full')}
-                            className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-1"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-violet-500"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" /></svg>
-                            <span>备份到云端</span>
-                            <span className="text-[9px] text-slate-400">(完整)</span>
+                        </div>
+                        <button onClick={() => setShowGithubModal(true)} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-[10px] font-bold text-slate-600">
+                            {hasGitHubBackup ? '修改' : '配置'}
                         </button>
                     </div>
-
-                    <button
-                        onClick={handleOpenCloudRestore}
-                        className="w-full py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex items-center justify-center gap-2"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-emerald-500"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75v6.75m0 0l-3-3m3 3l3-3m-8.25 6a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" /></svg>
-                        从云端恢复
-                    </button>
+                    {hasGitHubBackup && (
+                        <>
+                            <a
+                                href={`https://github.com/${cloudBackupConfig.githubOwner}/${cloudBackupConfig.githubRepo || 'sully-backup'}/releases`}
+                                target="_blank" rel="noopener noreferrer"
+                                className="block text-[10px] text-slate-500 hover:text-slate-800 underline-offset-2 hover:underline break-all"
+                            >
+                                github.com/{cloudBackupConfig.githubOwner}/{cloudBackupConfig.githubRepo || 'sully-backup'}/releases
+                            </a>
+                            <div className="grid grid-cols-3 gap-2">
+                                <button onClick={() => handleCloudBackup('text_only', 'github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">备份文字</button>
+                                <button onClick={() => handleCloudBackup('full', 'github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">完整备份</button>
+                                <button onClick={() => handleOpenCloudRestore('github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95">恢复</button>
+                            </div>
+                        </>
+                    )}
                 </div>
-            )}
+
+                <div className="rounded-2xl border border-sky-100 bg-sky-50 p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${hasWebDAVBackup ? 'bg-green-400' : 'bg-slate-300'}`} />
+                                <span className="text-xs font-bold text-slate-700">WebDAV 快速同步</span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-1">
+                                {hasWebDAVBackup ? cloudBackupConfig.webdavUrl : '未配置，适合临时中转换设备'}
+                            </p>
+                        </div>
+                        <button onClick={() => setShowCloudModal(true)} className="px-3 py-1.5 rounded-lg bg-white border border-sky-100 text-[10px] font-bold text-sky-600">
+                            {hasWebDAVBackup ? '修改' : '配置'}
+                        </button>
+                    </div>
+                    {hasWebDAVBackup && (
+                        <div className="space-y-2">
+                            <div className="grid grid-cols-2 gap-2">
+                                <button onClick={quickSyncUploadDelta} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-sky-700 active:scale-95">上传增量</button>
+                                <button onClick={quickSyncPullDelta} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95">拉取增量</button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                <button onClick={() => handleCloudBackup('text_only', 'webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">上传文字</button>
+                                <button onClick={() => handleCloudBackup('full', 'webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">上传完整</button>
+                                <button onClick={() => handleOpenCloudRestore('webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">恢复完整</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
 
             <p className="text-[10px] text-slate-400 px-1 mt-3 leading-relaxed">
-                数据存储在你自己的账号下，我们不保存任何凭据到服务器。
+                数据存储在你自己的账号或服务器下；GitHub 和 WebDAV 的配置会同时保留。
             </p>
         </SettingsSection>
 
@@ -2575,13 +2531,13 @@ const Settings: React.FC = () => {
       </Modal>
 
       {/* Cloud Restore Modal */}
-      <Modal isOpen={showCloudRestoreModal} title="从云端恢复" onClose={() => setShowCloudRestoreModal(false)}>
+      <Modal isOpen={showCloudRestoreModal} title={`从${cloudRestoreProvider === 'github' ? 'GitHub' : 'WebDAV'}恢复`} onClose={() => setShowCloudRestoreModal(false)}>
           <div className="space-y-2 p-1">
               {cloudBackupFiles.length === 0 ? (
                   <div className="text-center py-8"><p className="text-[11px] text-slate-400">正在加载云端备份列表...</p></div>
               ) : (
                   <>
-                      <p className="text-[10px] text-slate-400 mb-2">选择要恢复的备份文件:</p>
+                      <p className="text-[10px] text-slate-400 mb-2">当前来源：{cloudRestoreProvider === 'github' ? 'GitHub 长期备份' : 'WebDAV 快速同步'}。选择要恢复的备份文件:</p>
                       <div className="max-h-[50vh] overflow-y-auto space-y-2">
                           {cloudBackupFiles.map((file, i) => (
                               <button key={i} onClick={() => handleCloudRestore(file)} className="w-full p-3 bg-white border border-slate-200 rounded-xl text-left hover:bg-sky-50 hover:border-sky-200 transition-colors active:scale-[0.98]">
@@ -3152,3 +3108,4 @@ const Settings: React.FC = () => {
 };
 
 export default Settings;
+

@@ -230,7 +230,7 @@ const MobileGameHome: React.FC = () => {
         const target = characters.find(c => c.id === activeCharacterId) || characters[0];
         setWidgetChar(target);
         DB.getMessagesByCharId(target.id).then(msgs => {
-            const visible = msgs.filter(m => m.role !== 'system');
+            const visible = msgs.filter(m => m.role !== 'system' && !m.metadata?.hidden);
             // 真实数值来源：聊天消息数（Lv/EXP/钻石）+ 最早消息时间（认识天数→星星）
             setStat({ msgCount: visible.length, firstTs: visible[0]?.timestamp || 0 });
             if (visible.length > 0) {

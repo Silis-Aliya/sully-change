@@ -9,6 +9,7 @@ import {
     splitWorldbookSections,
     type WorldbookScanMessage,
 } from './worldbook';
+import { buildMusicWakePickableSongs, formatMusicWakePickableSongs, rememberMusicWakePickableSongs } from './musicTrackChange';
 
 /**
  * Memory Central
@@ -586,6 +587,11 @@ export const ContextBuilder = {
             }
 
             // 歌单命中提示（按 songName 粗匹，避免在 context.ts 里引 MusicContext）
+            const musicChangeSummary = (userListening as any).changeSummary;
+            if (typeof musicChangeSummary === 'string' && musicChangeSummary.trim()) {
+                lines.push(musicChangeSummary.trim());
+            }
+
             const profile = char.musicProfile;
             if (profile) {
                 const hitPl = profile.playlists.find(pl =>
@@ -670,7 +676,7 @@ export const ContextBuilder = {
      * 如果 char 已经和 user 处于"一起听"状态，隐藏 join / join_and_add 选项 —
      * 防止 LLM 重复插"加入"卡片。
      */
-    buildMusicActionGuide: (isListeningTogether?: boolean): string => {
+    buildMusicActionGuide: (isListeningTogether?: boolean, char?: CharacterProfile, musicSnapshot?: any, userName?: string): string => {
         // 把"加入歌单"那段说明抽出来 — 两种状态都用同一份
         const addUsage = `**加入歌单的语法**（如果用 \`add\` 系列）：
   - \`[[MUSIC_ACTION:add]]\` — 默认放进你的第一个歌单
@@ -679,13 +685,35 @@ export const ContextBuilder = {
   请优先选**最贴合这首歌气质**的现有歌单；如果都不合适、又确实想收，再考虑新建。
   收进来的歌会被打上"从对方那里听到"的标签 —— 以后你单独听到这首时，会自然想起 ta。`;
         if (isListeningTogether) {
-            return `### 【音乐互动工具】
-你此刻已经在和对方一起听这首，不用再"加入"。如果想把这首也收进自己的歌单，可以在这一轮**最多一次**用下面的指令:
-- \`add\` 系列（见下）
+            const pickableSongs = char && musicSnapshot
+                ? buildMusicWakePickableSongs({
+                    charSongs: (char.musicProfile?.playlists || []).flatMap(pl => pl.songs || []),
+                    userSongs: musicSnapshot.queue || [],
+                    currentSongId: musicSnapshot.current?.id ?? null,
+                    max: 10,
+                })
+                : [];
+            if (char) rememberMusicWakePickableSongs(char.id, pickableSongs);
+            const pickableBlock = formatMusicWakePickableSongs(pickableSongs) || '暂无可选歌曲';
+            return `### 【一起听播放器工具】
+你正在和${userName || '对方'}一起听歌。如果你确实想调整播放器，可以在回复中使用隐藏指令：
 
-${addUsage}
+- \`[[MUSIC_ACTION:next_song]]\` — 切到下一首
+- \`[[MUSIC_ACTION:pick_song|N]]\` — 从下方可选歌曲里选第 N 首播放
+- \`[[MUSIC_ACTION:set_mode|shuffle]]\` — 随机播放
+- \`[[MUSIC_ACTION:set_mode|loop]]\` — 列表循环
+- \`[[MUSIC_ACTION:set_mode|single]]\` — 单曲循环
+- \`[[MUSIC_ACTION:leave]]\` — 退出一起听
 
-不要频繁插卡；只有真的被这首歌打动、或和当前对话气氛契合时才用。
+可选歌曲：
+${pickableBlock}
+
+规则：
+- \`next_song\` 和 \`pick_song\` 最多使用一个。
+- 三种播放模式最多选择一个。
+- 可以同时使用一个选歌动作和一个模式动作。
+- 如果使用 \`leave\`，不要使用其他音乐动作。
+- 这些是偶尔才用的工具，不要每次回复都操作。
 `;
         }
         return `### 【音乐互动工具】

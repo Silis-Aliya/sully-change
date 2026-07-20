@@ -1,6 +1,5 @@
-
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
-import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, CharacterGroup, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, SongSheet, Message, RealtimeConfig, AppearancePreset, CloudBackupConfig, CloudBackupFile } from '../types';
+import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, CharacterGroup, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, SongSheet, Message, RealtimeConfig, AppearancePreset, CloudBackupConfig, CloudBackupFile, CloudBackupProvider } from '../types';
 import { DB } from '../utils/db';
 import { modelRejectsSamplingParams, stripSamplingParams, isSamplingParamError } from '../utils/samplingParamCompat';
 import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport';
@@ -9,6 +8,7 @@ import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
 import { ProactiveChat } from '../utils/proactiveChat';
+import { MusicTogetherWake } from '../utils/musicTogetherWake';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
@@ -22,14 +22,15 @@ import { isGlobalStreamEnabled, upgradeChatBodyToStream, assembleUpgradedRespons
 import { rewriteStaleWorkerUrl } from '../utils/proxyWorker';
 import { INSTALLED_APPS } from '../constants';
 import { markBackupDone } from '../utils/backupReminder';
+import { applyQuickSyncDelta, buildQuickSyncDelta, QUICK_SYNC_LATEST_NAME, QUICK_SYNC_PREFIX, saveQuickSyncManifest } from '../utils/quickSync';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
 import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { evaluateEmotionBackground } from '../hooks/useChatAI';
 import { CHAT_GEN_EVENTS, setChatViewSnapshot } from '../utils/chatGenEvents';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
-import { loadMusicHooks, loadMusicPlaybackSnapshot } from './MusicContext';
-import { buildMusicTrackChangeHint, MUSIC_TRACK_CHANGED_EVENT, type MusicTrackChangeDetail } from '../utils/musicTrackChange';
+import { loadMusicHooks, loadMusicPlaybackSnapshot, MUSIC_TOGETHER_LEFT_EVENT } from './MusicContext';
+import { buildMusicInviteHint, buildMusicWakeHint, buildMusicWakePickableSongs, formatMusicWakePickableSongs, rememberMusicWakePickableSongs, type MusicTrackChangeDetail, type MusicTrackInfo } from '../utils/musicTrackChange';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -47,7 +48,10 @@ import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { inspectCsyBackup, prepareCsyMigration, type CsyMigrationReport } from '../utils/csyMigration';
 
-type ProactiveRunReason = { kind: 'music-track-change'; detail: MusicTrackChangeDetail };
+type ProactiveRunReason =
+  | { kind: 'music-track-change'; detail: MusicTrackChangeDetail }
+  | { kind: 'music-invite'; detail: { song: MusicTrackInfo } }
+  | { kind: 'music-wake'; detail: { scheduledAt: number } };
 
 interface ProactiveQueueEntry {
   charId: string;
@@ -62,6 +66,51 @@ const normalizeProactiveAiContent = (raw: string): string => {
     (_match, lineStart: string, emojiName: string) => `${lineStart}[[SEND_EMOJI: ${emojiName.trim()}]]`
   );
   return cleaned;
+};
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const stripMusicInviteStatusEcho = (content: string, charName: string): string => {
+  const name = escapeRegExp(charName.trim());
+  const statusLineRe = new RegExp(
+    `^\\s*[\\[【（(]?\\s*(?:${name}\\s*)?[：:，,、\\-—\\s]*(?:已?接受了邀请|同意了邀请|已?拒绝了邀请|拒绝了邀请)\\s*[。.!！）)\\]】]*\\s*$`
+  );
+  return content
+    .split(/\n+/)
+    .filter(line => !statusLineRe.test(line))
+    .join('\n')
+    .trim();
+};
+
+const MUSIC_WAKE_MIN_MINUTES = 5;
+const MUSIC_WAKE_MAX_MINUTES = 20;
+const MUSIC_WAKE_MAX_PER_HOUR = 3;
+const MUSIC_WAKE_TAG_RE = /\[\[MUSIC_WAKE_AFTER:\s*(\d{1,3})\s*m\s*\]\]/i;
+const MUSIC_WAKE_TAG_GLOBAL_RE = /\[\[MUSIC_WAKE_AFTER:[^\]]+\]\]/gi;
+
+const clampMusicWakeMinutes = (minutes: number): number =>
+  Math.max(MUSIC_WAKE_MIN_MINUTES, Math.min(MUSIC_WAKE_MAX_MINUTES, Math.floor(minutes)));
+
+const extractMusicWakeMinutes = (text: string): number | null => {
+  const m = text.match(MUSIC_WAKE_TAG_RE);
+  if (!m) return null;
+  const raw = parseInt(m[1], 10);
+  if (!Number.isFinite(raw)) return null;
+  return clampMusicWakeMinutes(raw);
+};
+
+const randomMusicWakeMinutes = (): number =>
+  MUSIC_WAKE_MIN_MINUTES + Math.floor(Math.random() * (MUSIC_WAKE_MAX_MINUTES - MUSIC_WAKE_MIN_MINUTES + 1));
+
+const formatMusicMs = (ms: number): string => {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    : `${m}:${s.toString().padStart(2, '0')}`;
 };
 
 
@@ -348,9 +397,11 @@ interface OSContextType {
   // Cloud Backup
   cloudBackupConfig: CloudBackupConfig;
   updateCloudBackupConfig: (updates: Partial<CloudBackupConfig>) => void;
-  cloudBackupToWebDAV: (mode: 'text_only' | 'media_only' | 'full') => Promise<void>;
-  cloudRestoreFromWebDAV: (file: CloudBackupFile) => Promise<void>;
-  listCloudBackups: () => Promise<CloudBackupFile[]>;
+  cloudBackupToWebDAV: (mode: 'text_only' | 'media_only' | 'full', providerOverride?: CloudBackupProvider) => Promise<void>;
+  cloudRestoreFromWebDAV: (file: CloudBackupFile, providerOverride?: CloudBackupProvider) => Promise<void>;
+  listCloudBackups: (providerOverride?: CloudBackupProvider) => Promise<CloudBackupFile[]>;
+  quickSyncUploadDelta: () => Promise<void>;
+  quickSyncPullDelta: () => Promise<void>;
 
   // System
   exportSystem: (mode: 'text_only' | 'media_only' | 'full') => Promise<Blob>;
@@ -1623,6 +1674,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   const proactiveRunningRef = useRef(false);
   const proactiveQueueRef = useRef<ProactiveQueueEntry[]>([]);
+  const musicWakeHourRef = useRef<Map<string, number[]>>(new Map());
   // Per-character innerState cache for proactive turns — mirrors useChatAI's
   // evolvedNarrative state so consecutive proactive triggers carry continuity.
   const proactiveInnerStateRef = useRef<Map<string, string>>(new Map());
@@ -1665,12 +1717,21 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
       };
 
+      const clearMusicWake = (charId: string) => {
+          MusicTogetherWake.stop(charId);
+      };
+
+      const scheduleMusicWake = (charId: string, minutes: number) => {
+          const clamped = clampMusicWakeMinutes(minutes);
+          MusicTogetherWake.schedule(charId, clamped);
+      };
+
       const runProactive = async (charId: string, reason?: ProactiveRunReason) => {
           if (proactiveRunningRef.current) {
               const queuedIndex = proactiveQueueRef.current.findIndex(item => item.charId === charId);
               if (queuedIndex < 0) {
                   proactiveQueueRef.current.push({ charId, reason });
-              } else if (reason?.kind === 'music-track-change') {
+          } else if (reason?.kind === 'music-invite' || reason?.kind === 'music-wake') {
                   // 同一角色排队期间再次收到更具体的换歌事件时，以最新歌曲为准。
                   proactiveQueueRef.current[queuedIndex] = { charId, reason };
               }
@@ -1690,8 +1751,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
-          // 换歌判断属于用户刚刚发起的“一起听”交互，不受定时主动消息开关限制。
-          if (reason?.kind !== 'music-track-change' && char.proactiveConfig && !char.proactiveConfig.enabled) {
+          // 音乐邀请 / 换歌判断属于用户刚刚发起的“一起听”交互，不受定时主动消息开关限制。
+          const isMusicInteractionReason = reason?.kind === 'music-invite' || reason?.kind === 'music-wake';
+          if (!isMusicInteractionReason && char.proactiveConfig && !char.proactiveConfig.enabled) {
               drainQueuedProactive();
               console.log(`🔕 [Proactive/Global] Skipped for ${char.name}: disabled`);
               return;
@@ -1760,9 +1822,37 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const justMetOffline = lastRealMsgRaw?.metadata?.source === 'date'
                   && (now.getTime() - lastRealMsgRaw.timestamp) < DATE_AFTERGLOW_MS;
 
-              const hintContent = reason?.kind === 'music-track-change'
-                  ? buildMusicTrackChangeHint(reason.detail, userName)
-                  : justMetOffline
+              const musicSnapshotForHint = loadMusicPlaybackSnapshot();
+              const musicChangeSummary = musicSnapshotForHint?.listeningTogetherChangeCount
+                  ? `用户切过 ${musicSnapshotForHint.listeningTogetherChangeCount} 首歌；上一首是《${musicSnapshotForHint.listeningTogetherPreviousSong?.name || '未知'}》— ${musicSnapshotForHint.listeningTogetherPreviousSong?.artists || '未知'}，当前是《${musicSnapshotForHint.current?.name || '未知'}》— ${musicSnapshotForHint.current?.artists || '未知'}。`
+                  : undefined;
+              const musicWakePickableSongs = reason?.kind === 'music-wake'
+                  ? buildMusicWakePickableSongs({
+                      charSongs: (char.musicProfile?.playlists || []).flatMap(pl => pl.songs || []),
+                      userSongs: musicSnapshotForHint?.queue || [],
+                      currentSongId: musicSnapshotForHint?.current?.id ?? null,
+                      max: 10,
+                  })
+                  : [];
+              if (reason?.kind === 'music-wake') {
+                  rememberMusicWakePickableSongs(charId, musicWakePickableSongs);
+              }
+              const hintContent = reason?.kind === 'music-invite'
+                  ? buildMusicInviteHint(reason.detail.song, userName)
+                  : reason?.kind === 'music-wake'
+                      ? buildMusicWakeHint({
+                          userName,
+                          song: musicSnapshotForHint?.current ? {
+                              id: musicSnapshotForHint.current.id,
+                              name: musicSnapshotForHint.current.name,
+                              artists: musicSnapshotForHint.current.artists,
+                          } : null,
+                          togetherDuration: formatMusicMs(Date.now() - (musicSnapshotForHint?.listeningTogetherStartedAt || Date.now())),
+                          progress: `${formatMusicMs((musicSnapshotForHint?.progress || 0) * 1000)} / ${formatMusicMs((musicSnapshotForHint?.duration || 0) * 1000)}`,
+                          changeSummary: musicChangeSummary,
+                          pickableSongs: formatMusicWakePickableSongs(musicWakePickableSongs),
+                      })
+                      : justMetOffline
                       ? `[系统提示（非${userName}发言）: 现在是 ${timeStr}。你和${userName}刚刚在线下见过面（如果上下文里有标着 [约会] 的内容，那就是你们见面时发生的事），现在你们暂时分开了，你拿起手机想给${userName}发条消息。请基于刚才的见面来发——可以回味见面里的某个细节、补一句当时没说出口的话、关心${userName}到家了没，或者就是刚分开就有点想念。绝对不要表现得好像很久没联系，更不要对刚才的见面毫不知情。一两句话就好。]`
                       : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`;
 
@@ -1847,6 +1937,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   console.log(`🎵 [Proactive/Global] Skipped stale track-change response for ${char.name}`);
                   return;
               }
+              if (reason?.kind === 'music-invite'
+                  && loadMusicPlaybackSnapshot()?.current?.id !== reason.detail.song.id) {
+                  console.log(`🎵 [Proactive/Global] Skipped stale invite response for ${char.name}`);
+                  return;
+              }
               let aiContent = data.choices?.[0]?.message?.content || '';
               // 思考链抽取 — 与 useChatAI 保持一致:reasoning_content 字段 + 主 content 里的 <think>/<thinking>/<thought> 块,
               // 拼接后挂到本回合首条 assistant 消息的 metadata.thinkingChain
@@ -1874,29 +1969,83 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
               aiContent = normalizeProactiveAiContent(aiContent);
 
-              // 换歌触发只执行 MUSIC_ACTION，不顺带放开主动消息路径里的其他动作。
+              // 音乐触发只执行 MUSIC_ACTION，不顺带放开主动消息路径里的其他动作。
               // 卡片由 ChatParser 落库；正文继续走下方原有的主动消息保存流程。
               let musicActionExecuted = false;
-              const musicActionTagPattern = /\[\[MUSIC_ACTION:(?:join|add|add_new|join_and_add|join_and_add_new)(?:\|[^\]]*)?\]\]/g;
+              const wakeAfterMinutes = extractMusicWakeMinutes(aiContent);
+              const musicActionTagPattern = /\[\[MUSIC_ACTION:(?:join|reject|add|add_new|join_and_add|join_and_add_new|leave|next_song|pick_song|set_mode)(?:\|[^\]]*)?\]\]/g;
               const musicActionTags = aiContent.match(musicActionTagPattern);
-              if (reason?.kind === 'music-track-change' && musicActionTags?.length) {
+              const musicSnapshotBeforeAction = isMusicInteractionReason ? loadMusicPlaybackSnapshot() : null;
+              const alreadyListeningTogetherBeforeAction = !!musicSnapshotBeforeAction?.listeningTogetherWith?.includes(charId);
+              const wantsLeaveTogether = reason?.kind !== 'music-invite'
+                  && !!musicActionTags?.some(tag => /\[\[MUSIC_ACTION:leave(?:\||\]\])/.test(tag));
+              const inviteRejectRequested = reason?.kind === 'music-invite'
+                  && !alreadyListeningTogetherBeforeAction
+                  && !!musicActionTags?.some(tag => /\[\[MUSIC_ACTION:reject(?:\||\]\])/.test(tag));
+              const inviteAccepted = reason?.kind === 'music-invite'
+                  && !alreadyListeningTogetherBeforeAction
+                  && !inviteRejectRequested
+                  && !!musicActionTags?.some(tag => /\[\[MUSIC_ACTION:join(?:\||\]\])/.test(tag));
+              const inviteRejected = inviteRejectRequested;
+              if (isMusicInteractionReason && musicActionTags?.length) {
                   const musicHooks = loadMusicHooks();
+                  const executableMusicActionTags = reason?.kind === 'music-invite'
+                      ? musicActionTags.filter(tag => /\[\[MUSIC_ACTION:(?:join|reject)(?:\||\]\])/.test(tag))
+                      : musicActionTags;
                   if (musicHooks) {
-                      await ChatParser.parseAndExecuteActions(
-                          musicActionTags.join(' '),
-                          charId,
-                          char.name,
-                          () => {},
-                          musicHooks,
-                      );
-                      musicActionExecuted = true;
+                      if (executableMusicActionTags.length) {
+                          await ChatParser.parseAndExecuteActions(
+                              executableMusicActionTags.join(' '),
+                              charId,
+                              char.name,
+                              addToast,
+                              musicHooks,
+                          );
+                          musicActionExecuted = true;
+                      }
                   }
                   aiContent = aiContent.replace(musicActionTagPattern, '').trim();
+              }
+              aiContent = aiContent.replace(MUSIC_WAKE_TAG_GLOBAL_RE, '').trim();
+              if (isMusicInteractionReason) {
+                  if (wantsLeaveTogether) {
+                      clearMusicWake(charId);
+                  } else if (inviteAccepted || (reason?.kind === 'music-wake' && !inviteRejected)) {
+                      scheduleMusicWake(charId, wakeAfterMinutes ?? randomMusicWakeMinutes());
+                  }
               }
 
               const savedPreviewChunks: string[] = [];
               const baseTimestamp = Date.now();
               let offset = 0;
+              if (reason?.kind === 'music-invite' && !alreadyListeningTogetherBeforeAction) {
+                  await DB.saveMessage({
+                      charId,
+                      role: 'assistant',
+                      type: 'music_invite_result',
+                      content: inviteAccepted ? `${char.name} 接受了邀请` : `${char.name} 拒绝了邀请`,
+                      timestamp: baseTimestamp + offset,
+                      metadata: {
+                          musicInviteResult: true,
+                          inviteStatus: inviteAccepted ? 'accepted' : 'rejected',
+                          status: inviteAccepted ? 'accepted' : 'rejected',
+                          charName: char.name,
+                          song: reason.detail.song,
+                      },
+                  });
+                  offset += 1;
+              }
+              if (isMusicInteractionReason && wantsLeaveTogether) {
+                  await DB.saveMessage({
+                      charId,
+                      role: 'assistant',
+                      type: 'text',
+                      content: `${char.name} 退出了一起听`,
+                      timestamp: baseTimestamp + offset,
+                      metadata: { musicTogetherStatus: 'left', hiddenSystemStyle: true, charName: char.name },
+                  });
+                  offset += 1;
+              }
               // 思考链只挂到本回合首条 assistant 消息上,避免每个气泡重复
               const consumeThinkingMeta = (): { thinkingChain: string } | undefined => {
                   if (!pendingThinkingChain) return undefined;
@@ -1934,6 +2083,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
 
               aiContent = ChatParser.sanitize(aiContent);
+              if (reason?.kind === 'music-invite') {
+                  aiContent = stripMusicInviteStatusEcho(aiContent, char.name);
+              }
 
               if (aiContent) {
                   // 双语翻译:沿用 useChatAI 的 <翻译><原文>..</原文><译文>..</译文></翻译> 协议,
@@ -2055,7 +2207,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
                           const textChunks = ChatParser.chunkText(part.content)
                               .map(chunk => ChatParser.sanitize(chunk))
-                              .filter(chunk => ChatParser.hasDisplayContent(chunk));
+                              .filter(chunk => ChatParser.hasDisplayContent(chunk))
+                              .filter(chunk => !/^\[(?:音乐卡片|闊充箰鍗＄墖)\]$/.test(chunk.trim()));
 
                           for (const chunk of textChunks) {
                               const meta = consumeThinkingMeta();
@@ -2101,15 +2254,38 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       ProactiveChat.onTrigger((charId: string) => {
           void runProactive(charId);
       });
+      MusicTogetherWake.onTrigger((charId: string) => {
+          const snap = loadMusicPlaybackSnapshot();
+          if (!snap?.listeningTogetherWith?.includes(charId)) {
+              clearMusicWake(charId);
+              return;
+          }
+          const now = Date.now();
+          const recent = (musicWakeHourRef.current.get(charId) || []).filter(t => now - t < 60 * 60 * 1000);
+          if (recent.length >= MUSIC_WAKE_MAX_PER_HOUR) {
+              musicWakeHourRef.current.set(charId, recent);
+              const waitMs = Math.max(60 * 1000, 60 * 60 * 1000 - (now - recent[0]));
+              MusicTogetherWake.schedule(charId, Math.ceil(waitMs / 60000));
+              return;
+          }
+          musicWakeHourRef.current.set(charId, [...recent, now]);
+          void runProactive(charId, { kind: 'music-wake', detail: { scheduledAt: now } });
+      });
 
-      const onMusicTrackChanged = (event: Event) => {
-          const detail = (event as CustomEvent<MusicTrackChangeDetail>).detail;
-          if (!detail?.currentSong || !Array.isArray(detail.charIds)) return;
-          for (const charId of new Set(detail.charIds)) {
-              void runProactive(charId, { kind: 'music-track-change', detail });
+      const onMusicInviteRequest = (event: Event) => {
+          const detail = (event as CustomEvent<{ charIds?: string[]; charId?: string; song?: MusicTrackInfo }>).detail;
+          if (!detail?.song) return;
+          const ids = detail.charIds && detail.charIds.length > 0 ? detail.charIds : (detail.charId ? [detail.charId] : []);
+          for (const charId of new Set(ids)) {
+              void runProactive(charId, { kind: 'music-invite', detail: { song: detail.song } });
           }
       };
-      window.addEventListener(MUSIC_TRACK_CHANGED_EVENT, onMusicTrackChanged);
+      const onMusicTogetherLeft = (event: Event) => {
+          const charId = (event as CustomEvent<{ charId?: string }>).detail?.charId;
+          if (charId) clearMusicWake(charId);
+      };
+      window.addEventListener('music-invite-request', onMusicInviteRequest);
+      window.addEventListener(MUSIC_TOGETHER_LEFT_EVENT, onMusicTogetherLeft);
 
       // 「彼方」自主登入 —— 独立调度，复用同一批 refs 拿最新状态
       const runVR = async (charId: string, room?: string, letterId?: string) => {
@@ -2209,9 +2385,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       return () => {
           // Cleanup: detach proactive listeners when OSContext unmounts (unlikely but safe)
           ProactiveChat.onTrigger(() => {});
+          MusicTogetherWake.detach();
           VRScheduler.onTrigger(() => {});
           WorldScheduler.onTrigger(() => {});
-          window.removeEventListener(MUSIC_TRACK_CHANGED_EVENT, onMusicTrackChanged);
+          window.removeEventListener('music-invite-request', onMusicInviteRequest);
+          window.removeEventListener(MUSIC_TOGETHER_LEFT_EVENT, onMusicTogetherLeft);
           window.removeEventListener('world-reroll-request', onRerollRequest as EventListener);
       };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2344,22 +2522,28 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // Backup provider router — picks the right client module based on
   // cloudBackupConfig.provider ('github' or 'webdav', defaulting to webdav
   // for back-compat with users who configured before the GitHub option).
-  const loadBackupProvider = async () => {
-      if (cloudBackupConfig.provider === 'github') {
+  const getCloudBackupConfigForProvider = (provider?: CloudBackupProvider): CloudBackupConfig => ({
+      ...cloudBackupConfig,
+      provider: provider || cloudBackupConfig.provider || 'webdav',
+  });
+
+  const loadBackupProvider = async (provider?: CloudBackupProvider) => {
+      if ((provider || cloudBackupConfig.provider) === 'github') {
           return await import('../utils/githubClient');
       }
       return await import('../utils/webdavClient');
   };
 
-  const cloudBackupToWebDAV = async (mode: 'text_only' | 'media_only' | 'full') => {
-      const { uploadBackup, cleanupOldBackups } = await loadBackupProvider();
+  const cloudBackupToWebDAV = async (mode: 'text_only' | 'media_only' | 'full', providerOverride?: CloudBackupProvider) => {
+      const providerConfig = getCloudBackupConfigForProvider(providerOverride);
+      const { uploadBackup, cleanupOldBackups } = await loadBackupProvider(providerConfig.provider);
       try {
           setSysOperation({ status: 'processing', message: '正在打包备份数据...', progress: 0 });
           const blob = await exportSystem(mode);
 
           setSysOperation({ status: 'processing', message: '正在上传到云端...', progress: 50 });
           const filename = `Sully_Backup_${mode}_${Date.now()}.zip`;
-          const result = await uploadBackup(cloudBackupConfig, blob, filename, (pct) => {
+          const result = await uploadBackup(providerConfig, blob, filename, (pct) => {
               setSysOperation(prev => ({ ...prev, message: `上传中 ${pct}%...`, progress: 50 + pct * 0.45 }));
           });
 
@@ -2368,10 +2552,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
 
           // Update last backup time
-          updateCloudBackupConfig({ lastBackupTime: Date.now(), lastBackupSize: blob.size });
+          updateCloudBackupConfig({ enabled: true, provider: providerConfig.provider, lastBackupTime: Date.now(), lastBackupSize: blob.size });
 
-          // Cleanup old backups (keep latest 5)
-          await cleanupOldBackups(cloudBackupConfig, 5).catch(() => {});
+          if (providerConfig.provider === 'webdav') {
+              const { listBackups, deleteBackup } = await import('../utils/webdavClient');
+              const regularBackups = (await listBackups(providerConfig))
+                  .filter(file => file.name.startsWith('Sully_Backup_'));
+              await Promise.all(regularBackups.slice(1).map(file => deleteBackup(providerConfig, file).catch(() => false)));
+          } else {
+              await cleanupOldBackups(providerConfig, 5).catch(() => {});
+          }
 
           setSysOperation({ status: 'idle', message: '', progress: 100 });
           addToast('云端备份完成', 'success');
@@ -2382,11 +2572,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   };
 
-  const cloudRestoreFromWebDAV = async (file: CloudBackupFile) => {
-      const { downloadBackup } = await loadBackupProvider();
+  const cloudRestoreFromWebDAV = async (file: CloudBackupFile, providerOverride?: CloudBackupProvider) => {
+      const providerConfig = getCloudBackupConfigForProvider(providerOverride);
+      const { downloadBackup } = await loadBackupProvider(providerConfig.provider);
       try {
           setSysOperation({ status: 'processing', message: '正在从云端下载...', progress: 0 });
-          const blob = await downloadBackup(cloudBackupConfig, file, (pct) => {
+          const blob = await downloadBackup(providerConfig, file, (pct) => {
               setSysOperation(prev => ({ ...prev, message: `下载中 ${pct}%...`, progress: pct * 0.5 }));
           });
 
@@ -2402,11 +2593,82 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   };
 
-  const listCloudBackups = async (): Promise<CloudBackupFile[]> => {
-      const { listBackups } = await loadBackupProvider();
-      return listBackups(cloudBackupConfig);
+  const listCloudBackups = async (providerOverride?: CloudBackupProvider): Promise<CloudBackupFile[]> => {
+      const providerConfig = getCloudBackupConfigForProvider(providerOverride);
+      const { listBackups } = await loadBackupProvider(providerConfig.provider);
+      return listBackups(providerConfig);
   };
 
+  const quickSyncUploadDelta = async () => {
+      const providerConfig = getCloudBackupConfigForProvider('webdav');
+      const { uploadBackup, listBackups, deleteBackup } = await import('../utils/webdavClient');
+      try {
+          setSysOperation({ status: 'processing', message: 'Building quick sync delta...', progress: 0 });
+          const JSZip = await loadJSZip();
+          const { blob, changed, manifest } = await buildQuickSyncDelta(JSZip, (done, total, label) => {
+              const pct = total > 0 ? Math.round((done / total) * 100) : 100;
+              const changedHint = label.includes(':') ? `，已发现 ${label.split(':').pop()?.trim() || 0} 项变化` : '';
+              setSysOperation({
+                  status: 'processing',
+                  message: `正在扫描增量 ${done}/${total}${changedHint}`,
+                  progress: Math.min(40, pct * 0.4),
+              });
+          });
+          if (changed === 0) {
+              setSysOperation({ status: 'idle', message: '', progress: 100 });
+              addToast('没有检测到需要同步的新变化', 'info');
+              return;
+          }
+
+          setSysOperation({ status: 'processing', message: 'Uploading quick sync delta...', progress: 45 });
+          const filename = QUICK_SYNC_LATEST_NAME;
+          const result = await uploadBackup(providerConfig, blob, filename, (pct) => {
+              setSysOperation(prev => ({ ...prev, message: `正在上传增量包 ${pct}%（${changed} 项变化）`, progress: 45 + pct * 0.5 }));
+          });
+          if (!result.ok) throw new Error(result.message);
+
+          saveQuickSyncManifest(manifest);
+          const staleQuickSyncFiles = (await listBackups(providerConfig))
+              .filter(file => file.name.startsWith(QUICK_SYNC_PREFIX) && file.name !== QUICK_SYNC_LATEST_NAME);
+          await Promise.all(staleQuickSyncFiles.map(file => deleteBackup(providerConfig, file).catch(() => false)));
+          setSysOperation({ status: 'idle', message: '', progress: 100 });
+          addToast(`快速同步增量已上传（${changed} 项变化，已覆盖上一份）`, 'success');
+      } catch (e: any) {
+          setSysOperation({ status: 'idle', message: '', progress: 0 });
+          addToast(`快速同步失败: ${e?.message || '未知错误'}`, 'error');
+          throw e;
+      }
+  };
+
+  const quickSyncPullDelta = async () => {
+      const providerConfig = getCloudBackupConfigForProvider('webdav');
+      const { listBackups, downloadBackup } = await import('../utils/webdavClient');
+      try {
+          setSysOperation({ status: 'processing', message: 'Finding quick sync delta...', progress: 0 });
+          const files = await listBackups(providerConfig);
+          const latest = files.find(f => f.name === QUICK_SYNC_LATEST_NAME)
+              || files.filter(f => f.name.startsWith(QUICK_SYNC_PREFIX))[0];
+          if (!latest) throw new Error('没有找到快速同步增量，请先在另一台设备上传增量');
+
+          const blob = await downloadBackup(providerConfig, latest, (pct) => {
+              setSysOperation(prev => ({ ...prev, message: `Downloading delta ${pct}%...`, progress: pct * 0.45 }));
+          });
+          if (!blob) throw new Error('下载增量失败');
+
+          setSysOperation({ status: 'processing', message: 'Applying quick sync delta...', progress: 55 });
+          const JSZip = await loadJSZip();
+          const { changed } = await applyQuickSyncDelta(JSZip, blob, (done, total) => {
+              const pct = total > 0 ? Math.round((done / total) * 100) : 100;
+              setSysOperation(prev => ({ ...prev, message: `正在写入增量 ${done}/${total}（${pct}%）`, progress: 55 + pct * 0.4 }));
+          });
+          setSysOperation({ status: 'idle', message: '', progress: 100 });
+          addToast(`快速同步已应用（${changed} 项变化）`, 'success');
+      } catch (e: any) {
+          setSysOperation({ status: 'idle', message: '', progress: 0 });
+          addToast(`拉取快速同步失败: ${e?.message || '未知错误'}`, 'error');
+          throw e;
+      }
+  };
   const updateMemoryPalaceConfig = (updates: Partial<MemoryPalaceGlobalConfig>) => {
     const newConfig: MemoryPalaceGlobalConfig = {
       embedding: { ...memoryPalaceConfig.embedding, ...(updates.embedding || {}) },
@@ -3963,6 +4225,32 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   }, [activeApp, closeApp]);
 
+  useEffect(() => {
+      const hasWebDAV = !!(cloudBackupConfig.webdavUrl && cloudBackupConfig.username && cloudBackupConfig.password);
+      if (!hasWebDAV) return;
+      const isNativeMobile = Capacitor.isNativePlatform();
+      const ua = navigator.userAgent || '';
+      const isMobileBrowser = /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(ua)
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (isNativeMobile || isMobileBrowser) return;
+
+      const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+          const syncReminder = '建议先上传增量；如果今天改动很多，也可以上传 GitHub 长期备份。';
+          if (sysOperation.status === 'processing') {
+              event.preventDefault();
+              event.returnValue = '正在同步或恢复中，建议等待完成后再关闭。';
+              return event.returnValue;
+          }
+
+          event.preventDefault();
+          event.returnValue = syncReminder;
+          return syncReminder;
+      };
+
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [cloudBackupConfig.webdavUrl, cloudBackupConfig.username, cloudBackupConfig.password, sysOperation.status]);
+
   const value: OSContextType = {
     activeApp,
     openApp,
@@ -4042,6 +4330,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     cloudBackupToWebDAV,
     cloudRestoreFromWebDAV,
     listCloudBackups,
+    quickSyncUploadDelta,
+    quickSyncPullDelta,
     exportSystem,
     importSystem,
     previewCsySystem,
@@ -4075,3 +4365,4 @@ export const useOS = () => {
   }
   return context;
 };
+

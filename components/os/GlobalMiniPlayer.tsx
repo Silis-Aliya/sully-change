@@ -22,6 +22,9 @@ import {
 const STORAGE_KEY = 'globalMiniPlayer.bubblePos.v1';
 const HIDDEN_KEY = 'globalMiniPlayer.hidden.v1';
 const EXPANDED_BOTTOM_KEY = 'globalMiniPlayer.expandedBottom.v1';
+const OPEN_PLAYER_EVENT = 'sully-music-open-player';
+const OPEN_PLAYER_REQUEST_KEY = 'sully.music.openPlayer.request';
+const OPEN_PLAYER_RETURN_APP_KEY = 'sully.music.openPlayer.returnApp';
 const DRAG_THRESHOLD = 4; // 像素：超过这个位移算拖动，不触发点击
 
 type Pos = { x: number; y: number } | null;
@@ -80,7 +83,7 @@ const computeInsets = (parent: HTMLElement): { insetTop: number; insetBottom: nu
 };
 
 const GlobalMiniPlayer: React.FC = () => {
-  const { activeApp } = useOS();
+  const { activeApp, openApp } = useOS();
   const { current, playing, togglePlay, nextSong, prevSong, progress, duration } = useMusic();
 
   const [expanded, setExpanded] = useState(false); // 默认折叠
@@ -199,6 +202,15 @@ const GlobalMiniPlayer: React.FC = () => {
     try { sessionStorage.setItem(HIDDEN_KEY, '1'); } catch {}
   }, []);
 
+  const openMusicPlayerPage = useCallback(() => {
+    try {
+      sessionStorage.setItem(OPEN_PLAYER_REQUEST_KEY, '1');
+      sessionStorage.setItem(OPEN_PLAYER_RETURN_APP_KEY, activeApp);
+    } catch {}
+    window.dispatchEvent(new Event(OPEN_PLAYER_EVENT));
+    openApp(AppID.Music);
+  }, [activeApp, openApp]);
+
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const el = wrapRef.current;
     if (!el) return;
@@ -271,12 +283,11 @@ const GlobalMiniPlayer: React.FC = () => {
       longPressTimer.current = null;
     }
     if (ds && !ds.moved) {
-      // 算作点击 → 展开
-      setExpanded(true);
+      openMusicPlayerPage();
     }
     dragState.current = null;
     try { (e.currentTarget as any).releasePointerCapture?.(e.pointerId); } catch {}
-  }, []);
+  }, [openMusicPlayerPage]);
 
   if (!current) return null;
   // 重新进入项目时音乐是暂停的（从未真正播放过本次会话）→ 不显示悬浮球
@@ -288,7 +299,7 @@ const GlobalMiniPlayer: React.FC = () => {
 
   const pct = duration > 0 ? (progress / duration) * 100 : 0;
 
-  // 折叠态：小圆球（可拖动、长按隐藏、单击展开）
+  // 折叠态：小圆球（可拖动、长按隐藏、单击打开整页歌词）
   if (!expanded) {
     const positional: React.CSSProperties = pos
       ? { left: pos.x, top: pos.y }
@@ -310,8 +321,8 @@ const GlobalMiniPlayer: React.FC = () => {
             boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
             border: '1px solid rgba(255,255,255,0.25)',
           }}
-          aria-label="音乐播放器（点击展开，拖动移位，长按隐藏）"
-          title="点击展开 · 拖动移位 · 长按隐藏"
+          aria-label="音乐播放器（点击打开歌词页，拖动移位，长按隐藏）"
+          title="点击打开歌词页 · 拖动移位 · 长按隐藏"
         >
           <img
             src={current.albumPic}

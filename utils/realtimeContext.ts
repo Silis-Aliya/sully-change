@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 实时上下文管理器 - 让AI角色感知真实世界
  * Real-time Context Manager - Give AI characters awareness of the real world
  */
@@ -86,6 +86,17 @@ export const defaultRealtimeConfig: RealtimeConfig = {
 };
 
 // 缓存
+const detectUserDeviceInfo = (): '手机' | '平板' | '电脑' => {
+    if (typeof navigator === 'undefined') return '电脑';
+    const ua = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+    const touchPoints = navigator.maxTouchPoints || 0;
+    const isTablet = /iPad|Tablet/i.test(ua) || (platform === 'MacIntel' && touchPoints > 1);
+    const isPhone = /iPhone|iPod|Android.*Mobile|Mobile/i.test(ua);
+    if (isTablet) return '平板';
+    if (isPhone) return '手机';
+    return '电脑';
+};
 let weatherCache: { data: WeatherData | null; timestamp: number } = { data: null, timestamp: 0 };
 let newsCache: { data: NewsItem[]; timestamp: number } = { data: [], timestamp: 0 };
 
@@ -615,6 +626,7 @@ export const RealtimeContextManager = {
         //    时差提示（tzAwarenessNote）统一由 ContextBuilder.buildCoreContext 注入，这里不再追加，避免双份。
         const time = RealtimeContextManager.getTimeContext(tz);
         parts.push(`📅 当前真实时间: ${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}`);
+        parts.push(`user当前使用设备：${detectUserDeviceInfo()}`);
 
         // 2. 特殊日期
         const specialDates = RealtimeContextManager.checkSpecialDates();
@@ -2200,3 +2212,4 @@ export interface XhsNote {
     type?: string;  // 'normal' | 'video'
 }
 // XhsManager removed — all XHS ops go through xhsMcpClient.ts
+

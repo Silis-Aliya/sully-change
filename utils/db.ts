@@ -2475,6 +2475,64 @@ export const DB = {
       });
   },
 
+  applyRawStorePatch: async (
+      storeName: string,
+      items: any[],
+      deletedKeys: Array<string | number> = [],
+      onProgress?: (done: number, total: number) => void
+  ): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(storeName)) return;
+      const isMobileLike = typeof navigator !== 'undefined' && (
+          /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(navigator.userAgent || '')
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+      );
+      const sleep = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+      const total = (items?.length || 0) + deletedKeys.length;
+      let done = 0;
+      const getMobileChunkSize = () => {
+          if (storeName === 'memory_vectors') return 30;
+          if (storeName === 'memory_links') return 400;
+          if (total <= 200) return total || 1;
+          return 200;
+      };
+      const chunkSize = getMobileChunkSize();
+      const writeChunk = async (keys: Array<string | number>, rows: any[]) => {
+          if (keys.length === 0 && rows.length === 0) return;
+          await new Promise<void>((resolve, reject) => {
+              const transaction = db.transaction(storeName, 'readwrite');
+              const store = transaction.objectStore(storeName);
+              for (const key of keys) store.delete(key as IDBValidKey);
+              for (const item of rows) {
+                  if (item !== undefined && item !== null) store.put(item);
+              }
+              transaction.oncomplete = () => resolve();
+              transaction.onerror = () => reject(transaction.error);
+              transaction.onabort = () => reject(transaction.error || new Error('applyRawStorePatch aborted'));
+          });
+          done += keys.length + rows.length;
+          onProgress?.(done, total);
+      };
+
+      if (!isMobileLike) {
+          await writeChunk(deletedKeys, items || []);
+          return;
+      }
+
+      for (let i = 0; i < deletedKeys.length;) {
+          const end = Math.min(i + chunkSize, deletedKeys.length);
+          await writeChunk(deletedKeys.slice(i, end), []);
+          await sleep();
+          i = end;
+      }
+      for (let i = 0; i < (items || []).length;) {
+          const end = Math.min(i + chunkSize, (items || []).length);
+          await writeChunk([], (items || []).slice(i, end));
+          await sleep();
+          i = end;
+      }
+  },
+
   /**
    * 游标分批读整表：每攒够 batchSize 条回调一次 onBatch(batch)，回调内消费完即释放，
    * 绝不像 getRawStoreData 那样把整表一次性 getAll 进内存。导出大 store 时用它，把读取
@@ -2830,6 +2888,22 @@ export const DB = {
           await options.beforeWrite(root, label);
       };
 
+      const isMobileLike = typeof navigator !== 'undefined' && (
+          /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(navigator.userAgent || '')
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+      );
+      const yieldForMobileRestore = async (total: number, chunkSize: number) => {
+          if (total <= chunkSize) return;
+          if (isMobileLike) await new Promise(resolve => setTimeout(resolve, 0));
+      };
+      const restoreChunkSizeForStore = (storeName: string, total: number) => {
+          if (!isMobileLike) return 50;
+          if (storeName === 'memory_vectors') return 30;
+          if (storeName === 'memory_links') return 400;
+          if (total <= 200) return total || 1;
+          return 200;
+      };
+
       const clearStore = async (storeName: string) => {
           await withStore(storeName, store => {
               store.clear();
@@ -2844,10 +2918,10 @@ export const DB = {
       ) => {
           if (!hasStore(storeName) || !items || items.length === 0) return;
 
-          const CHUNK_SIZE = 50;
           const total = items.length;
-          for (let i = 0; i < total; i += CHUNK_SIZE) {
-              const end = Math.min(i + CHUNK_SIZE, total);
+          const chunkSize = restoreChunkSizeForStore(storeName, total);
+          for (let i = 0; i < total; i += chunkSize) {
+              const end = Math.min(i + chunkSize, total);
               const chunk = items.slice(i, end).filter(Boolean);
               if (chunk.length === 0) {
                   report(label, 'items', end, total);
@@ -2861,6 +2935,7 @@ export const DB = {
                   (items as any[])[j] = undefined;
               }
               report(label, 'items', end, total);
+              await yieldForMobileRestore(total, chunkSize);
           }
       };
 
@@ -3152,10 +3227,10 @@ export const DB = {
               return;
           }
           await clearStore('memory_vectors');
-          const CHUNK_SIZE = 50;
           const total = data.memoryVectors.length;
-          for (let i = 0; i < total; i += CHUNK_SIZE) {
-              const end = Math.min(i + CHUNK_SIZE, total);
+          const chunkSize = restoreChunkSizeForStore('memory_vectors', total);
+          for (let i = 0; i < total; i += chunkSize) {
+              const end = Math.min(i + chunkSize, total);
               const chunk = data.memoryVectors.slice(i, end).filter(Boolean).map((v: any) => {
                   if (!v || !v.vector || !Array.isArray(v.vector)) return v;
                   const f32 = new Float32Array(v.vector);
@@ -3168,6 +3243,7 @@ export const DB = {
                   (data.memoryVectors as any[])[j] = undefined;
               }
               report('记忆向量', 'items', end, total);
+              await yieldForMobileRestore(total, chunkSize);
           }
           data.memoryVectors = undefined as any;
       }, data.memoryVectors?.length || 0);

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import {
     MemoryRoom, MemoryNode, ROOM_CONFIGS, ROOM_LABELS, getRoomLabel,
-    MemoryNodeDB, AnticipationDB, MemoryLinkDB, EventBoxDB,
+    MemoryNodeDB, MemoryVectorDB, AnticipationDB, MemoryLinkDB, EventBoxDB,
     migrateOldMemories, runCognitiveDigestion, getAvailableMonths, getAvailableChunks,
     detectPersonalityStyle,
     manuallyBindMemories, removeMemoryFromBox, unbindAllLiveMemories,
@@ -202,6 +202,19 @@ const Icon: React.FC<{ name: string; size?: number; style?: React.CSSProperties 
                     <path d="M21 4v5h-5" />
                 </svg>
             );
+        case 'check':
+            return (
+                <svg {...p}>
+                    <path d="M20 6 9 17l-5-5" />
+                </svg>
+            );
+        case 'x':
+            return (
+                <svg {...p}>
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
+            );
         case 'beaker':
             return (
                 <svg {...p}>
@@ -235,18 +248,6 @@ const Icon: React.FC<{ name: string; size?: number; style?: React.CSSProperties 
                 <svg {...p}>
                     <path d="M10.3 3.86 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.86a2 2 0 0 0-3.4 0Z" />
                     <path d="M12 9v4M12 17h.01" />
-                </svg>
-            );
-        case 'check':
-            return (
-                <svg {...p}>
-                    <path d="M20 6 9 17l-5-5" />
-                </svg>
-            );
-        case 'x':
-            return (
-                <svg {...p}>
-                    <path d="M18 6 6 18M6 6l12 12" />
                 </svg>
             );
         case 'pencil':
@@ -619,6 +620,13 @@ export default function MemoryPalaceApp() {
     const [rvTesting, setRvTesting] = useState(false);
     const [rvSyncing, setRvSyncing] = useState(false);
     const [showInitSQL, setShowInitSQL] = useState(false);
+    const [vectorAuditLoading, setVectorAuditLoading] = useState(false);
+    const [vectorAuditDeleting, setVectorAuditDeleting] = useState(false);
+    const [vectorAuditResult, setVectorAuditResult] = useState<{
+        total: number;
+        ok: number;
+        missing: MemoryNode[];
+    } | null>(null);
 
     // 全局配置变更时同步到本地状态
     useEffect(() => {
@@ -1558,6 +1566,56 @@ export default function MemoryPalaceApp() {
 
     /** 清除所有已迁移数据 */
     /** 一键清空记忆宫殿（本地 + 可选云端）。双重确认后执行。 */
+    const refreshVectorAudit = async () => {
+        if (!char) return;
+        setVectorAuditLoading(true);
+        try {
+            const nodes = await MemoryNodeDB.getByCharId(char.id);
+            const vectors = await MemoryVectorDB.getAllByCharId(char.id);
+            const vectorIds = new Set(vectors.map(v => v.memoryId));
+            const missing = nodes.filter(node => !node.embedded || !vectorIds.has(node.id));
+            setVectorAuditResult({
+                total: nodes.length,
+                ok: nodes.length - missing.length,
+                missing,
+            });
+        } finally {
+            setVectorAuditLoading(false);
+        }
+    };
+
+    const deleteMissingVectorMemories = async () => {
+        if (!char) return;
+        const audit = vectorAuditResult;
+        if (!audit || audit.missing.length === 0) return;
+        if (!confirm(`将删除 ${audit.missing.length} 条缺向量记忆。删除后无法撤回，确定继续吗？`)) return;
+        setVectorAuditDeleting(true);
+        try {
+            for (const node of audit.missing) {
+                await deleteMemory(node.id);
+            }
+            await refreshVectorAudit();
+            if (selectedRoom) {
+                const nodes = await MemoryNodeDB.getByRoom(char.id, selectedRoom);
+                nodes.sort((a: MemoryNode, b: MemoryNode) => b.createdAt - a.createdAt);
+                setRoomNodes(nodes);
+            }
+            const nodes = await MemoryNodeDB.getByCharId(char.id);
+            setAllNodes(nodes);
+            const boxes = await EventBoxDB.getByCharId(char.id);
+            boxes.sort((a, b) => b.updatedAt - a.updatedAt);
+            setAllBoxes(boxes);
+            setBoxMembers({});
+            setExpandedBoxId(null);
+            await loadStats();
+            addToast(`已删除 ${audit.missing.length} 条缺向量记忆`, 'success');
+        } catch (e: any) {
+            addToast(`删除失败：${e?.message || e}`, 'error');
+        } finally {
+            setVectorAuditDeleting(false);
+        }
+    };
+
     const handleWipeAll = async (includeRemote: boolean) => {
         const firstPrompt = includeRemote
             ? '即将清空【本地 + 云端 Supabase】所有记忆宫殿数据，包括：\n\n' +
@@ -2505,6 +2563,97 @@ export default function MemoryPalaceApp() {
                 </div>
 
                 {/* 费用警告 */}
+                {!isGlobal && char && (
+                    <div style={{
+                        background: '#fff7ed', borderRadius: 16, padding: 16,
+                        border: '1px solid #fed7aa', marginBottom: 16,
+                    }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#9a3412', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Icon name="warning" size={14} />
+                            <span>向量异常管理</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#92400e', lineHeight: 1.6, marginBottom: 12 }}>
+                            查看当前角色的记忆向量状态。
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: '#16a34a', fontWeight: 700, margin: '0 3px' }}>
+                                <Icon name="check" size={11} /> 成功
+                            </span>
+                            代表有对应向量；
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: '#ea580c', fontWeight: 700, margin: '0 3px' }}>
+                                <Icon name="x" size={11} /> 缺失
+                            </span>
+                            代表缺向量；缺向量记忆不会稳定参与语义召回。
+                        </div>
+
+                        <button
+                            onClick={refreshVectorAudit}
+                            disabled={vectorAuditLoading || vectorAuditDeleting}
+                            style={{
+                                width: '100%', padding: '10px 0', borderRadius: 12,
+                                border: '1px solid #fed7aa', background: 'white',
+                                color: '#9a3412', fontSize: 13, fontWeight: 700,
+                                cursor: vectorAuditLoading || vectorAuditDeleting ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            {vectorAuditLoading ? '检查中...' : '查看向量数量'}
+                        </button>
+
+                        {vectorAuditResult && (
+                            <div style={{ marginTop: 12 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+                                    <div style={{ background: 'white', borderRadius: 10, padding: 10, textAlign: 'center', border: '1px solid #ffedd5' }}>
+                                        <div style={{ fontSize: 18, fontWeight: 800, color: '#1f2937' }}>{vectorAuditResult.total}</div>
+                                        <div style={{ fontSize: 10, color: '#9ca3af' }}>总记忆</div>
+                                    </div>
+                                    <div style={{ background: 'white', borderRadius: 10, padding: 10, textAlign: 'center', border: '1px solid #dcfce7' }}>
+                                        <div style={{ fontSize: 18, fontWeight: 800, color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                                            <Icon name="check" size={20} />
+                                            <span>{vectorAuditResult.ok}</span>
+                                        </div>
+                                        <div style={{ fontSize: 10, color: '#9ca3af' }}>向量成功</div>
+                                    </div>
+                                    <div style={{ background: 'white', borderRadius: 10, padding: 10, textAlign: 'center', border: '1px solid #fed7aa' }}>
+                                        <div style={{ fontSize: 18, fontWeight: 800, color: '#ea580c', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                                            <Icon name="x" size={20} />
+                                            <span>{vectorAuditResult.missing.length}</span>
+                                        </div>
+                                        <div style={{ fontSize: 10, color: '#9ca3af' }}>缺向量</div>
+                                    </div>
+                                </div>
+
+                                {vectorAuditResult.missing.length > 0 && (
+                                    <>
+                                        <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                                            {vectorAuditResult.missing.slice(0, 20).map(node => (
+                                                <div key={node.id} style={{ background: 'white', border: '1px solid #ffedd5', borderRadius: 8, padding: 8 }}>
+                                                    <div style={{ fontSize: 11, color: '#ea580c', fontWeight: 800, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                        <Icon name="x" size={12} />
+                                                        <span>缺向量</span>
+                                                    </div>
+                                                    <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.45 }}>
+                                                        {node.content.length > 80 ? node.content.slice(0, 80) + '...' : node.content}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button
+                                            onClick={deleteMissingVectorMemories}
+                                            disabled={vectorAuditDeleting}
+                                            style={{
+                                                width: '100%', padding: '10px 0', borderRadius: 12,
+                                                border: 'none', background: '#dc2626', color: 'white',
+                                                fontSize: 13, fontWeight: 800,
+                                                cursor: vectorAuditDeleting ? 'not-allowed' : 'pointer',
+                                                opacity: vectorAuditDeleting ? 0.7 : 1,
+                                            }}
+                                        >
+                                            {vectorAuditDeleting ? '删除中...' : `一键删除缺向量（${vectorAuditResult.missing.length}）`}
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
                 {isGlobal && (<>
 
                 <div style={{
@@ -5292,3 +5441,4 @@ create table if not exists memory_vectors (
 
     return null;
 }
+

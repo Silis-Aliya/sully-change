@@ -483,8 +483,10 @@ export const SubActions: React.FC<{
   showDownload?: boolean;
   playMode?: SubPlayMode;
   onCyclePlayMode?: () => void;    // 循环模式切换
+  onInvite?: () => void;
+  inviteActive?: boolean;
   onAdd?: () => void;
-}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onAdd }) => {
+}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onInvite, inviteActive, onAdd }) => {
   const Item = ({ icon, label, onClick, active }: { icon: React.ReactNode; label: string; onClick?: () => void; active?: boolean }) => (
     <button onClick={onClick}
       className="flex flex-col items-center gap-1 transition-opacity active:scale-95"
@@ -535,6 +537,14 @@ export const SubActions: React.FC<{
       <path d="M3 6h13M3 12h13M3 18h9M17 15v6M14 18h6" />
     </svg>
   );
+  const inviteSvg = (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12a8 8 0 0 1 16 0" />
+      <path d="M4 12v3a2 2 0 0 0 2 2h1v-7H6a2 2 0 0 0-2 2Z" />
+      <path d="M20 12v3a2 2 0 0 1-2 2h-1v-7h1a2 2 0 0 1 2 2Z" />
+      <path d="M8.5 19.5c2.2 1.2 4.8 1.2 7 0" />
+    </svg>
+  );
   const downloadSvg = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 4v12" />
@@ -551,6 +561,7 @@ export const SubActions: React.FC<{
       {showSync && onSync && <Item onClick={onSync} active label="Sync" icon={syncSvg} />}
       {showDownload && onDownload && <Item onClick={onDownload} active label="Save" icon={downloadSvg} />}
       {onCyclePlayMode && <Item onClick={onCyclePlayMode} active={playMode !== 'loop'} label={playModeLabel[playMode]} icon={loopSvg} />}
+      {onInvite && <Item onClick={onInvite} active={inviteActive} label="Together" icon={inviteSvg} />}
       {onAdd && <Item onClick={onAdd} label="Add" icon={addSvg} />}
     </div>
   );

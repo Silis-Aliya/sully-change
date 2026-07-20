@@ -523,7 +523,7 @@ const Launcher: React.FC = () => {
               ]);
               
               if (msgs.length > 0) {
-                  const visibleMsgs = msgs.filter(m => m.role !== 'system');
+                  const visibleMsgs = msgs.filter(m => m.role !== 'system' && !m.metadata?.hidden);
                   if (visibleMsgs.length > 0) {
                       const last = visibleMsgs[visibleMsgs.length - 1];
                       const cleanContent = last.content.replace(/\[.*?\]/g, '').trim();

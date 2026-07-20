@@ -15,7 +15,9 @@ import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as 
 import { DB } from '../utils/db';
 import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER, PROXY_WORKER_CHANGED_EVENT } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
-import { createMusicTrackChangeDetail, MUSIC_TRACK_CHANGED_EVENT, type MusicTrackChangeDetail } from '../utils/musicTrackChange';
+import { buildMusicWakePickableSongs, getRememberedMusicWakePickableSongs } from '../utils/musicTrackChange';
+
+export const MUSIC_TOGETHER_LEFT_EVENT = 'music-together-left';
 
 /* ───────────── 类型 ───────────── */
 export type MusicQuality = 'standard' | 'higher' | 'exhigh' | 'lossless' | 'hires';
@@ -139,10 +141,17 @@ export const loadMusicCfgStandalone = (): MusicCfg => loadCfg();
  */
 export interface MusicPlaybackSnapshot {
   current: Song | null;
+  queue: Song[];
+  idx: number;
   playing: boolean;
+  progress: number;
+  duration: number;
   lyric: LyricLine[];
   activeLyricIdx: number;
   listeningTogetherWith: string[];
+  listeningTogetherStartedAt: number | null;
+  listeningTogetherChangeCount: number;
+  listeningTogetherPreviousSong: { id: number; name: string; artists: string } | null;
   cfg: MusicCfg;
 }
 let __musicPlaybackSnapshot: MusicPlaybackSnapshot | null = null;
@@ -334,6 +343,7 @@ interface MusicContextType {
   // 一起听 — 当前哪些 char 和 user 一起听（仅视觉状态，不影响播放）
   // 歌曲切换 / 结束时自动清空
   listeningTogetherWith: string[];
+  listeningTogetherStartedAt: number | null;
   addListeningPartner: (charId: string) => void;
   removeListeningPartner: (charId: string) => void;
   clearListeningPartners: () => void;
@@ -528,29 +538,51 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // 一起听 - char 加入后在 miniPlayer / 播放页显示徽标；切歌 / 结束自动清空
   const [listeningTogetherWith, setListeningTogetherWith] = useState<string[]>([]);
+  const [listeningTogetherStartedAt, setListeningTogetherStartedAt] = useState<number | null>(null);
   const addListeningPartner = useCallback((charId: string) => {
+    setListeningTogetherStartedAt(prev => prev ?? Date.now());
     setListeningTogetherWith(prev => prev.includes(charId) ? prev : [...prev, charId]);
   }, []);
   const removeListeningPartner = useCallback((charId: string) => {
-    setListeningTogetherWith(prev => prev.filter(id => id !== charId));
+    setListeningTogetherWith(prev => {
+      const wasListening = prev.includes(charId);
+      const next = prev.filter(id => id !== charId);
+      if (!next.length) {
+        setListeningTogetherStartedAt(null);
+        setListeningTogetherChangeCount(0);
+        setListeningTogetherPreviousSong(null);
+      }
+      if (wasListening) {
+        try {
+          window.dispatchEvent(new CustomEvent(MUSIC_TOGETHER_LEFT_EVENT, { detail: { charId } }));
+        } catch {}
+      }
+      return next;
+    });
   }, []);
   const clearListeningPartners = useCallback(() => {
+    setListeningTogetherStartedAt(null);
+    setListeningTogetherChangeCount(0);
+    setListeningTogetherPreviousSong(null);
     setListeningTogetherWith(prev => prev.length ? [] : prev);
   }, []);
 
   // 切歌后清空上一首的"一起听"；新歌真正开始播放后，再通知刚才的 char 重新判断
   const previousSongRef = useRef<Song | null>(null);
-  const pendingTrackChangeRef = useRef<MusicTrackChangeDetail | null>(null);
+  const [listeningTogetherChangeCount, setListeningTogetherChangeCount] = useState(0);
+  const [listeningTogetherPreviousSong, setListeningTogetherPreviousSong] = useState<{ id: number; name: string; artists: string } | null>(null);
   useEffect(() => {
     const previousSong = previousSongRef.current;
-    const detail = createMusicTrackChangeDetail(previousSong, current, listeningTogetherWith);
-
-    if (previousSong && previousSong.id !== current?.id) {
-      setListeningTogetherWith([]);
-      pendingTrackChangeRef.current = detail;
+    if (previousSong && current && previousSong.id !== current.id && listeningTogetherWith.length > 0) {
+      setListeningTogetherChangeCount(prev => prev + 1);
+      setListeningTogetherPreviousSong({
+        id: previousSong.id,
+        name: previousSong.name,
+        artists: previousSong.artists,
+      });
     }
     previousSongRef.current = current;
-  }, [current, listeningTogetherWith]);
+  }, [current, listeningTogetherWith.length]);
 
   // 前进/后退 refs (避免循环依赖 & audio 事件闭包陷阱)
   const queueRef = useRef(queue); queueRef.current = queue;
@@ -568,11 +600,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const onPlay = () => {
       setPlaying(true);
-      const detail = pendingTrackChangeRef.current;
-      if (detail) {
-        pendingTrackChangeRef.current = null;
-        window.dispatchEvent(new CustomEvent(MUSIC_TRACK_CHANGED_EVENT, { detail }));
-      }
     };
     const onPause = () => setPlaying(false);
     const onTime = () => setProgress(a.currentTime);
@@ -827,13 +854,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     __musicPlaybackSnapshot = {
       current,
+      queue,
+      idx,
       playing,
+      progress,
+      duration,
       lyric,
       activeLyricIdx,
       listeningTogetherWith,
+      listeningTogetherStartedAt,
+      listeningTogetherChangeCount,
+      listeningTogetherPreviousSong,
       cfg,
     };
-  }, [current, playing, lyric, activeLyricIdx, listeningTogetherWith, cfg]);
+  }, [current, queue, idx, playing, progress, duration, lyric, activeLyricIdx, listeningTogetherWith, listeningTogetherStartedAt, listeningTogetherChangeCount, listeningTogetherPreviousSong, cfg]);
 
   // 把整组 musicHooks 写到模块级 slot — useChatAI 和 instant push activeMsgRuntime 都从这里取.
   // current / addListeningPartner 变化时刷新闭包, 保证读到的是最新 React state.
@@ -852,8 +886,60 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           fee: current.fee,
         };
       },
+      isListeningTogether: (cid: string) => {
+        return listeningTogetherWith.includes(cid);
+      },
       joinListeningTogether: (cid: string) => {
         addListeningPartner(cid);
+      },
+      leaveListeningTogether: (cid: string) => {
+        removeListeningPartner(cid);
+      },
+      nextSong: () => {
+        nextSong();
+      },
+      setPlayMode: (mode) => {
+        setPlayMode(mode);
+      },
+      pickSong: async (index, cid) => {
+        try {
+          let candidates = getRememberedMusicWakePickableSongs(cid);
+          if (!candidates.length) {
+            const all = await DB.getAllCharacters();
+            const targetChar = all.find(c => c.id === cid);
+            const charSongs = (targetChar?.musicProfile?.playlists || [])
+              .flatMap(pl => pl.songs || []);
+            const userSongs = queueRef.current || [];
+            candidates = buildMusicWakePickableSongs({
+              charSongs,
+              userSongs,
+              currentSongId: current?.id ?? null,
+              max: 10,
+            });
+          }
+          const picked = candidates[index];
+          if (!picked) return null;
+          const song: Song = {
+            id: picked.id,
+            name: picked.name,
+            artists: picked.artists,
+            album: picked.album || '',
+            albumPic: picked.albumPic || '',
+            duration: picked.duration || 0,
+            fee: picked.fee || 0,
+            local: picked.local,
+            localAssetKey: picked.localAssetKey,
+            localMimeType: picked.localMimeType,
+            localCoverStyle: picked.localCoverStyle,
+            customAuthorCharIds: picked.customAuthorCharIds,
+            localLyrics: picked.localLyrics,
+            lyricLineTimings: picked.lyricLineTimings,
+          };
+          await playSong(song, { alsoSetQueue: true });
+          return { songName: picked.name, artists: picked.artists };
+        } catch {
+          return null;
+        }
       },
       addSongToCharPlaylist: async (cid, song, target) => {
         try {
@@ -926,7 +1012,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       },
     };
-  }, [current, addListeningPartner]);
+  }, [current, addListeningPartner, removeListeningPartner, listeningTogetherWith, nextSong, playSong]);
 
   const value: MusicContextType = {
     cfg, setCfg,
@@ -937,7 +1023,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playSong, togglePlay, nextSong, prevSong, seek,
     playMode, setPlayMode,
     liked, toggleLike,
-    listeningTogetherWith, addListeningPartner, removeListeningPartner, clearListeningPartners,
+    listeningTogetherWith, listeningTogetherStartedAt, addListeningPartner, removeListeningPartner, clearListeningPartners,
     toast, setToastHandler,
     localAlbumSongs, addLocalSong, removeLocalSong,
     regeneratingId, regeneratingStatus, markRegenerating,

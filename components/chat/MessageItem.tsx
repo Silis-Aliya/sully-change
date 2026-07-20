@@ -1411,6 +1411,90 @@ const MessageItem = React.memo(({
         }
     };
 
+    const inviteResultStatus =
+        m.metadata?.status === 'accepted' || m.metadata?.inviteStatus === 'accepted'
+            ? 'accepted'
+            : m.metadata?.status === 'rejected' || m.metadata?.inviteStatus === 'rejected'
+            ? 'rejected'
+            : null;
+    const isMusicInviteResult = m.type === 'music_invite_result'
+        || !!m.metadata?.musicInviteResult;
+    const isMusicTogetherLeft = m.metadata?.musicTogetherStatus === 'left';
+    const renderMusicInviteResultCard = () => {
+        const accepted = inviteResultStatus === 'accepted';
+        const songName = m.metadata?.song?.name || '';
+        const actor = m.metadata?.charName || charName || 'TA';
+        return (
+            <div
+                className="w-fit max-w-[260px] rounded-2xl border px-3.5 py-2.5 shadow-sm"
+                style={{
+                    borderColor: accepted ? 'rgba(147, 197, 253, 0.55)' : 'rgba(226, 232, 240, 0.9)',
+                    background: accepted
+                        ? 'linear-gradient(135deg, rgba(239,246,255,0.96), rgba(245,243,255,0.96))'
+                        : 'linear-gradient(135deg, rgba(248,250,252,0.96), rgba(241,245,249,0.96))',
+                }}
+            >
+                <div className="flex items-center justify-center gap-2">
+                    <span
+                        className="flex h-6 w-6 items-center justify-center rounded-full"
+                        style={{
+                            color: accepted ? '#4f46e5' : '#64748b',
+                            background: accepted ? 'rgba(199,210,254,0.55)' : 'rgba(226,232,240,0.8)',
+                        }}
+                    >
+                        {accepted ? (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" strokeWidth={2.7} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" strokeWidth={2.4} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+                        )}
+                    </span>
+                    <div className="min-w-0">
+                        <div className="text-[12px] font-semibold" style={{ color: accepted ? '#4338ca' : '#475569' }}>
+                            {actor}{accepted ? ' 接受了邀请' : ' 拒绝了邀请'}
+                        </div>
+                        {songName && (
+                            <div className="mt-0.5 max-w-[190px] truncate text-[10px]" style={{ color: accepted ? '#7c6fb3' : '#94a3b8' }}>
+                                {songName}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+    const renderMusicTogetherLeftCard = () => {
+        const actor = m.metadata?.charName || charName || 'TA';
+        return (
+            <div
+                className="w-fit max-w-[260px] rounded-2xl border px-3.5 py-2.5 shadow-sm"
+                style={{
+                    borderColor: 'rgba(191, 219, 254, 0.72)',
+                    background: 'linear-gradient(135deg, rgba(248,250,252,0.98), rgba(239,246,255,0.96))',
+                }}
+            >
+                <div className="flex items-center justify-center gap-2">
+                    <span
+                        className="flex h-6 w-6 items-center justify-center rounded-full"
+                        style={{
+                            color: '#64748b',
+                            background: 'rgba(219,234,254,0.86)',
+                        }}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" strokeWidth={2.4} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3-3h-9m0 0 3-3m-3 3 3 3" /></svg>
+                    </span>
+                    <div className="min-w-0">
+                        <div className="text-[12px] font-semibold" style={{ color: '#475569' }}>
+                            {actor} 退出了一起听
+                        </div>
+                        <div className="mt-0.5 max-w-[190px] truncate text-[10px]" style={{ color: '#94a3b8' }}>
+                            一起听已结束
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const interactionProps = {
         onPointerDown: handlePointerDown,
         onPointerUp: handlePointerEnd,
@@ -1465,6 +1549,49 @@ const MessageItem = React.memo(({
     // --- SYSTEM MESSAGE RENDERING ---
     if (isSystem) {
         const isCallSummary = m.metadata?.source === 'call-end-popup';
+
+        if (m.type === 'music_invite_result') {
+            const accepted = m.metadata?.status === 'accepted';
+            const songName = m.metadata?.song?.name || '';
+            const actor = m.metadata?.charName || charName || 'TA';
+            return commonLayout(
+                <div
+                    className="mx-auto w-fit max-w-[260px] rounded-2xl border px-3.5 py-2.5 shadow-sm"
+                    style={{
+                        borderColor: accepted ? 'rgba(147, 197, 253, 0.55)' : 'rgba(226, 232, 240, 0.9)',
+                        background: accepted
+                            ? 'linear-gradient(135deg, rgba(239,246,255,0.96), rgba(245,243,255,0.96))'
+                            : 'linear-gradient(135deg, rgba(248,250,252,0.96), rgba(241,245,249,0.96))',
+                    }}
+                >
+                    <div className="flex items-center justify-center gap-2">
+                        <span
+                            className="flex h-6 w-6 items-center justify-center rounded-full"
+                            style={{
+                                color: accepted ? '#4f46e5' : '#64748b',
+                                background: accepted ? 'rgba(199,210,254,0.55)' : 'rgba(226,232,240,0.8)',
+                            }}
+                        >
+                            {accepted ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" strokeWidth={2.7} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+                            ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" strokeWidth={2.4} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+                            )}
+                        </span>
+                        <div className="min-w-0">
+                            <div className="text-[12px] font-semibold" style={{ color: accepted ? '#4338ca' : '#475569' }}>
+                                {actor}{accepted ? ' 接受了邀请' : ' 拒绝了邀请'}
+                            </div>
+                            {songName && (
+                                <div className="mt-0.5 max-w-[190px] truncate text-[10px]" style={{ color: accepted ? '#7c6fb3' : '#94a3b8' }}>
+                                    {songName}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
 
         // Guidebook end card — rendered as pretty card, not ugly system pill
         if (m.type === 'score_card') {
@@ -1818,6 +1945,18 @@ const MessageItem = React.memo(({
         </>
     );
 
+    if (isMusicInviteResult) {
+        return commonLayout(renderMusicInviteResultCard());
+    }
+
+    if (isMusicTogetherLeft) {
+        return commonLayout(renderMusicTogetherLeftCard());
+    }
+
+    if (m.type === 'text' && /^\[(?:音乐卡片|闊充箰鍗＄墖)\]$/.test((m.content || '').trim())) {
+        return null;
+    }
+
     // [New] Social Card Rendering
     // --- Chat Forward Card ---
     if (m.type === 'chat_forward') {
@@ -1830,9 +1969,13 @@ const MessageItem = React.memo(({
 
     // --- Music Card Rendering (一起听 / 加入歌单) ---
     if (m.type === 'music_card' && m.metadata?.song) {
-        const song = m.metadata.song as { songId: number; name: string; artists: string; albumPic: string };
+        const song = m.metadata.song as { songId?: number; id?: number; name: string; artists: string; albumPic: string };
         const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add';
-        const isTogether = intent === 'join' || intent === 'join_and_add';
+        const isInviteFromUser = !!m.metadata.inviteFromUser;
+        const isInviteResult = !!m.metadata.inviteResult;
+        const inviteStatus = (m.metadata.inviteStatus || m.metadata.status) as 'accepted' | 'rejected' | undefined;
+        const inviteAccepted = inviteStatus === 'accepted';
+        const isTogether = !isInviteFromUser && !isInviteResult && (intent === 'join' || intent === 'join_and_add');
         const addedTo = m.metadata.addedToPlaylistTitle as string | undefined;
 
         // 头像渲染：有图用图，无图显姓名首字
@@ -1868,14 +2011,14 @@ const MessageItem = React.memo(({
         );
 
         return commonLayout(
-            <div className="w-64 rounded-2xl overflow-hidden shadow-sm border cursor-pointer active:opacity-90 transition-opacity"
+            <div className="relative w-64 rounded-2xl overflow-hidden shadow-sm border cursor-pointer active:opacity-90 transition-opacity"
                 style={{
                     borderColor: '#f3d9e6',
                     background: 'linear-gradient(135deg, #fff2f7 0%, #f5edff 55%, #eaf1ff 100%)',
                 }}>
 
-                {/* 一起听 · 居中双头像头图（仅 join / join_and_add 显示）*/}
-                {isTogether && (
+                {/* 一起听 / 邀请 · 居中双头像头图 */}
+                {(isTogether || isInviteFromUser || isInviteResult) && (
                     <div className="relative px-3 pt-3 pb-2 overflow-hidden">
                         {/* 粉紫光晕背景 */}
                         <div aria-hidden className="pointer-events-none absolute inset-0 opacity-70"
@@ -1897,7 +2040,7 @@ const MessageItem = React.memo(({
                         {/* 标签 */}
                         <div className="relative mt-1.5 text-center text-[9px] tracking-[0.3em] uppercase font-semibold"
                             style={{ color: '#9c6fc2', opacity: 0.8 }}>
-                            Listening Together
+                            {isInviteResult ? (inviteAccepted ? 'Invitation Accepted' : 'Invitation Declined') : isInviteFromUser ? 'Invitation Sent' : 'Listening Together'}
                         </div>
                         <div className="relative mt-0.5 text-center text-[11px]"
                             style={{ color: '#5a49a8', fontFamily: `'Noto Serif','Georgia',serif` }}>
@@ -1943,13 +2086,19 @@ const MessageItem = React.memo(({
                         </div>
                     )}
                     {/* 纯"收入歌单"保留角标；一起听意图已在头部表达，不再重复 */}
-                    {!isTogether && (
+                    {!isTogether && !isInviteResult && (
                         <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-full backdrop-blur-sm text-[9px] font-medium"
                             style={{ background: 'rgba(255,255,255,0.85)', color: '#5a49a8' }}>
-                            📌 收入歌单
+                            {isInviteFromUser ? '等待回应' : '📌 收入歌单'}
                         </div>
                     )}
                 </div>
+                    {isInviteResult && (
+                        <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-full backdrop-blur-sm text-[9px] font-medium"
+                            style={{ background: 'rgba(255,255,255,0.85)', color: '#5a49a8' }}>
+                            {inviteAccepted ? '已接受' : '已拒绝'}
+                        </div>
+                    )}
                 <div className="p-3">
                     <div className="font-bold text-sm line-clamp-1 leading-snug"
                         style={{ color: '#2a1f4d', fontFamily: `'Noto Serif','Georgia',serif` }}>
@@ -1966,8 +2115,54 @@ const MessageItem = React.memo(({
                     <div className="mt-2 pt-1.5 flex items-center gap-1 text-[9px] border-t" style={{ color: '#a89bc5', borderColor: '#e0d9f0' }}>
                         <span style={{ color: '#5a49a8', fontWeight: 600 }}>Shizuku Music</span>
                         <span>·</span>
-                        <span>{isUser ? '分享' : '互动'}</span>
+                        <span>{isInviteFromUser ? '邀请' : isUser ? '分享' : '互动'}</span>
                     </div>
+                    {isInviteResult && (
+                        <div className="mt-2">
+                            <div
+                                className="rounded-xl py-2 text-center text-[11px] font-semibold"
+                                style={{
+                                    color: inviteAccepted ? '#fff' : '#7c6e9d',
+                                    background: inviteAccepted
+                                        ? 'linear-gradient(135deg, #8f84bd 0%, #c3b2ff 100%)'
+                                        : 'rgba(255,255,255,0.56)',
+                                    border: inviteAccepted ? 'none' : '1px solid rgba(195,178,255,0.45)',
+                                    boxShadow: inviteAccepted ? '0 2px 10px rgba(143,132,189,0.2)' : undefined,
+                                }}
+                            >
+                                {charName}{inviteAccepted ? ' 接受了邀请' : ' 拒绝了邀请'}
+                            </div>
+                        </div>
+                    )}
+                    {isInviteFromUser && (
+                        <div className="mt-2">
+                            <div className="mb-1 text-center text-[9px]" style={{ color: '#9b8abb' }}>
+                                等待 TA 选择
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <div
+                                    className="rounded-xl py-1.5 text-center text-[10px] font-semibold"
+                                    style={{
+                                        color: '#fff',
+                                        background: 'linear-gradient(135deg, #8f84bd 0%, #c3b2ff 100%)',
+                                        boxShadow: '0 2px 10px rgba(143,132,189,0.2)',
+                                    }}
+                                >
+                                    接受
+                                </div>
+                                <div
+                                    className="rounded-xl py-1.5 text-center text-[10px] font-semibold"
+                                    style={{
+                                        color: '#7c6e9d',
+                                        background: 'rgba(255,255,255,0.56)',
+                                        border: '1px solid rgba(195,178,255,0.45)',
+                                    }}
+                                >
+                                    拒绝
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         );
