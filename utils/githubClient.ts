@@ -72,6 +72,9 @@ const useProxy = (config: CloudBackupConfig): boolean =>
 const proxify = (url: string): string =>
     `${getProxyWorkerUrl()}/github?url=${encodeURIComponent(url)}`;
 
+const shouldRetryDirect = (status: number): boolean =>
+    status === 502 || status === 503 || status === 504;
+
 const authHeaders = (token: string, extra: Record<string, string> = {}): Record<string, string> => ({
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
@@ -130,6 +133,10 @@ const ghRequest = async (
             headers,
             body: (opts.body as BodyInit | undefined) ?? null,
         });
+        if (shouldRetryDirect(res.status)) {
+            console.warn(`[GitHubBackup] proxy returned ${res.status}; retrying direct GitHub request`);
+            return ghRequest({ ...config, githubUseProxy: false }, fullUrl, method, opts);
+        }
         const respHeaders: Record<string, string> = {};
         res.headers.forEach((v, k) => { respHeaders[k.toLowerCase()] = v; });
         return {
@@ -325,6 +332,10 @@ const uploadOneAsset = async (
             });
             onFraction?.(1);
             if (res.status === 201) return { ok: true, message: '上传成功' };
+            if (useProxy(config) && shouldRetryDirect(res.status)) {
+                console.warn(`[GitHubBackup] proxy asset upload returned ${res.status}; retrying direct GitHub upload`);
+                return uploadOneAsset({ ...config, githubUseProxy: false }, releaseId, blob, assetName, onFraction);
+            }
             const text = await res.text();
             return { ok: false, message: `上传失败 (${res.status}): ${text.slice(0, 120)}` };
         } catch (e: any) {
@@ -346,6 +357,11 @@ const uploadOneAsset = async (
         xhr.onload = () => {
             onFraction?.(1);
             if (xhr.status === 201) resolve({ ok: true, message: '上传成功' });
+            else if (useProxy(config) && shouldRetryDirect(xhr.status)) {
+                console.warn(`[GitHubBackup] proxy asset upload returned ${xhr.status}; retrying direct GitHub upload`);
+                uploadOneAsset({ ...config, githubUseProxy: false }, releaseId, blob, assetName, onFraction)
+                    .then(resolve);
+            }
             else resolve({ ok: false, message: `上传失败 (${xhr.status}): ${(xhr.responseText || '').slice(0, 120)}` });
         };
         xhr.onerror = () => resolve({ ok: false, message: '上传失败: 网络错误（如果在国内，试试在高级设置里开启代理）' });
