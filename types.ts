@@ -3231,6 +3231,7 @@ export interface FullBackupData {
     hotNewsSnapshots?: HotNewsSnapshot[];
     dreamCollection?: Record<string, { firstAt: number; count: number }>;  // 梦境盲盒收藏册（os_dream_collection，账号级 localStorage）
     gotchiAccentHue?: string;  // 桌面电子宠物主题主色调偏好（tama_accent_hue，账号级 localStorage）
+    localStorageSettings?: Record<string, string>; // 跨设备恢复的小体积本机设置/token/cookie 快照
 }
 
 // --- CLOUD BACKUP TYPES ---

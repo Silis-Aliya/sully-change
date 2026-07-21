@@ -1,4 +1,5 @@
 import { DB } from './db';
+import { exportLocalStorageSettings, importLocalStorageSettings } from './localSettingsBackup';
 
 export type QuickSyncManifest = {
     version: 1;
@@ -164,6 +165,11 @@ export const buildQuickSyncDelta = async (
 
     zip.file('quick-sync-meta.json', JSON.stringify(meta));
     zip.file('quick-sync-manifest.json', JSON.stringify(manifest));
+    const localStorageSettings = exportLocalStorageSettings();
+    if (localStorageSettings) {
+        zip.file('local-storage-settings.json', JSON.stringify(localStorageSettings));
+        changed += Object.keys(localStorageSettings).length;
+    }
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
     return { blob, manifest, meta, changed };
 };
@@ -194,6 +200,13 @@ export const applyQuickSyncDelta = async (
         done += storeTotal;
         changed += storeTotal;
         onProgress?.(done, total || done);
+    }
+
+    const localStorageFile = zip.file('local-storage-settings.json');
+    if (localStorageFile) {
+        const localStorageSettings = JSON.parse(await localStorageFile.async('string')) as Record<string, string>;
+        importLocalStorageSettings(localStorageSettings);
+        changed += Object.keys(localStorageSettings || {}).length;
     }
 
     saveQuickSyncManifest(manifest);

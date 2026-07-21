@@ -23,6 +23,32 @@ Current known baseline:
 - Vercel deployment after that push succeeded.
 ```
 
+## 2026-07-21 Local Settings Backup / QuickSync
+
+### Result
+
+- Added a shared localStorage settings backup layer for small configuration values.
+- Full backup/export now includes `localStorageSettings`.
+- Full restore/import now restores `localStorageSettings`.
+- QuickSync delta upload now includes the same local settings snapshot.
+- QuickSync delta pull now restores the local settings snapshot.
+- Built successfully with `pnpm build`.
+
+### Custom Features Preserved / Covered
+
+- XHS Lite simple-mode cookie in `os_realtime_config.xhsMcpConfig.cookie`.
+- XHS phone channel token/config in `os_realtime_config.xhsPhoneConfig`.
+- WebDAV password and GitHub backup token in `os_cloud_backup_config`.
+- MCP server tokens, Luckin/McD tokens, proxy worker URL, push/VAPID config, chat prompt settings, translation settings, and other small user preferences.
+
+### Notes
+
+- The snapshot is intentionally limited to known small settings and prefixes, not arbitrary large localStorage cache blobs.
+- Added `utils/localSettingsBackup.test.ts`.
+- Verified:
+  - `pnpm vitest run utils/localSettingsBackup.test.ts utils/backupExport.test.ts utils/backupRoundtrip.test.ts`
+  - `pnpm build`
+
 ## 2026-07-21 Upstream Refresh to ac7f739
 
 ### Result

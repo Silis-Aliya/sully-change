@@ -17,6 +17,7 @@
  */
 
 import { DB } from './db';
+import { BACKUP_LOCAL_STORAGE_EXACT_KEYS } from './localSettingsBackup';
 
 /**
  * 参与镜像的键。收录标准：用户手动配置或长期积累、丢了没法凭空再生、体积是小段
@@ -24,26 +25,7 @@ import { DB } from './db';
  * 这份名单与「设置 → 导出备份」带走的 localStorage 键保持同一批（见 OSContext
  * exportFullData / importFullData），新增备份键时记得两边同步。
  */
-export const MIRRORED_KEYS: readonly string[] = [
-    'os_theme',                          // 外观主题（丢了 = 回初始主题）
-    'os_api_config',                     // 全局 API（丢了 = 一切生成静默失效）
-    'os_api_presets',
-    'os_realtime_config',
-    'os_memory_palace_config',
-    'os_remote_vector_config',
-    'os_cloud_backup_config',            // 丢了连"从云端恢复"都要重新配
-    'os_dream_collection',               // 梦境盲盒收藏册（账号级图鉴，纯积累不可再生）
-    'world_home_api',                    // 家园全局 API 覆盖
-    'study_api_config',
-    'study_tutor_presets',
-    'instant_push_config_v1',
-    'push_vapid_v1',                     // VAPID 密钥对，须与浏览器既有推送订阅匹配
-    'chat_archive_prompts',
-    'chat_active_archive_prompt_id',
-    'character_refine_prompts',
-    'character_active_refine_prompt_id',
-    'os_last_active_char_id',
-];
+export const MIRRORED_KEYS: readonly string[] = BACKUP_LOCAL_STORAGE_EXACT_KEYS;
 
 const MIRROR_ASSET_ID = 'ls_mirror_v1';
 const SNAPSHOT_INTERVAL_MS = 5 * 60_000;
