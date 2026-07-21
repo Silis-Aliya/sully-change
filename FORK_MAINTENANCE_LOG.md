@@ -344,4 +344,4 @@ Run this when a merge/deploy looks risky:
 
 ## Current Deployment Note
 
-The deployment after pushing `c5155c7` to remote `master` succeeded. Treat this as the current stable deployed baseline unless a later entry says otherwise.
+Pushed `ecc01ab` to remote `master` on 2026-07-21 after upstream refresh plus backup/QuickSync settings fixes. Vercel should auto-deploy from `master`; verify the deployment dashboard before treating it as the latest stable deployed baseline.
