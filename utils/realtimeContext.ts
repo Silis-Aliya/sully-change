@@ -60,10 +60,17 @@ export interface RealtimeConfig {
     xhsMcpConfig?: {
         enabled: boolean;
         serverUrl: string;
+        liteMode?: 'full' | 'simple'; // Lite 模式能力档位：full=完整，simple=不发帖/收藏/评论/回复
         cookie?: string;        // Lite 模式：登录后的完整小红书 cookie
         loggedInNickname?: string;
         loggedInUserId?: string;
         userXsecToken?: string; // 从 feed 列表自动获取，用于 getUserProfile 等
+    };
+    xhsPhoneConfig?: {
+        enabled: boolean;
+        mcpUrl: string;
+        deviceAddress?: string;
+        accessToken?: string;
     };
 
     // 缓存配置
@@ -82,7 +89,8 @@ export const defaultRealtimeConfig: RealtimeConfig = {
     notionApiKey: '',
     notionDatabaseId: '',
     xhsEnabled: false,
-    xhsMcpConfig: { enabled: false, serverUrl: `${getProxyWorkerUrl()}/api`, cookie: undefined, loggedInNickname: undefined, loggedInUserId: undefined, userXsecToken: undefined },
+    xhsMcpConfig: { enabled: false, serverUrl: `${getProxyWorkerUrl()}/api`, liteMode: 'full', cookie: undefined, loggedInNickname: undefined, loggedInUserId: undefined, userXsecToken: undefined },
+    xhsPhoneConfig: { enabled: false, mcpUrl: '', deviceAddress: '100.67.26.88:5555', accessToken: undefined },
     cacheMinutes: 30
 };
 

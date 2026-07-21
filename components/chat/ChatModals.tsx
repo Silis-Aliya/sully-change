@@ -443,7 +443,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                              </div>
                          </div>
                          <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                             开启后，角色在聊天中可以搜索、浏览、发帖、评论小红书。需要在全局设置中配置 MCP 或 Cookie。
+                             开启后，角色在聊天中可以使用全局设置里配置的小红书能力；具体可用动作由当前小红书模式决定。
                          </p>
                      </div>
 

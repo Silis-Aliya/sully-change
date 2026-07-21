@@ -9,6 +9,7 @@ import { EXPORT_CHUNK_SIZE, sliceRanges } from '../utils/backupExport';
 import Modal from '../components/os/Modal';
 import { NotionManager, FeishuManager, RealtimeContextManager, fetchOwmWeather, fetchOpenMeteoWeather } from '../utils/realtimeContext';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
+import { formatXhsPhoneStatus, isXhsPhoneChannelError, testXhsPhoneChannel, type XhsPhoneChannelStatus } from '../utils/xhsPhoneChannel';
 import { getMcdToken, setMcdToken as saveMcdToken, isMcdEnabled, setMcdEnabled as saveMcdEnabled, testMcdConnection, resetMcdSession } from '../utils/mcdMcpClient';
 import { getLuckinToken, setLuckinToken as saveLuckinToken, isLuckinEnabled, setLuckinEnabled as saveLuckinEnabled, testLuckinConnection, resetLuckinSession } from '../utils/luckinMcpClient';
 import { getProxyWorkerUrl, setProxyWorkerUrl, DEFAULT_PROXY_WORKER } from '../utils/proxyWorker';
@@ -460,17 +461,32 @@ const Settings: React.FC = () => {
     '注意：别用 Console 的 document.cookie，拿不到 web_session(httpOnly)。cookie 数天~数周会过期，失效重复制即可。',
   ].join('\n');
   const _xhsCfgUrl = realtimeConfig.xhsMcpConfig?.serverUrl || '';
+  const XHS_DUAL_MODE_WARNING = '小红书旧 MCP/Lite 和小红书手机通道建议只开启一个。\n\n如果两个同时开启，角色会同时看到两套相似的小红书指令：旧模式使用 [[XHS_SEARCH]] / [[XHS_BROWSE]]，手机通道使用 [[XHS_PHONE_SEARCH]] / [[XHS_PHONE_BROWSE]]。这样可能导致角色选错通道、重复触发、或把旧模式的 noteId 规则和手机当前屏幕操作混在一起。\n\n建议：想用 Pixel 真机刷小红书时，只开启「小红书手机通道」；想用旧网页 MCP/Lite 时，关闭手机通道。';
+  const warnXhsDualMode = () => {
+      showError('小红书模式可能冲突', XHS_DUAL_MODE_WARNING);
+  };
   // local MCP 地址不含 /api；lite bridge 含 /api。按这个判模式（与 xhsMcpClient.detectMode 一致），
   // 比之前的 `!== XHS_LITE_URL` 更稳——换 worker 域名后老的 lite 配置不会被误判成 local。
   const _xhsIsLocal = !!_xhsCfgUrl && !_xhsCfgUrl.includes('/api');
   const [rtXhsMcpEnabled, setRtXhsMcpEnabled] = useState(realtimeConfig.xhsMcpConfig?.enabled || false);
   const [rtXhsMode, setRtXhsMode] = useState<'lite' | 'local'>(_xhsIsLocal ? 'local' : 'lite');
+  const [rtXhsLiteMode, setRtXhsLiteMode] = useState<'full' | 'simple'>(realtimeConfig.xhsMcpConfig?.liteMode === 'simple' ? 'simple' : 'full');
   const [rtXhsLocalUrl, setRtXhsLocalUrl] = useState(_xhsIsLocal ? _xhsCfgUrl : 'http://localhost:18060/mcp');
   const [rtXhsNickname, setRtXhsNickname] = useState(realtimeConfig.xhsMcpConfig?.loggedInNickname || '');
   const [rtXhsUserId, setRtXhsUserId] = useState(realtimeConfig.xhsMcpConfig?.loggedInUserId || '');
   const [rtXhsCookie, setRtXhsCookie] = useState(realtimeConfig.xhsMcpConfig?.cookie || '');
+  const [rtXhsPhoneEnabled, setRtXhsPhoneEnabled] = useState(realtimeConfig.xhsPhoneConfig?.enabled || false);
+  const [rtXhsPhoneMcpUrl, setRtXhsPhoneMcpUrl] = useState(realtimeConfig.xhsPhoneConfig?.mcpUrl || '');
+  const [rtXhsPhoneDeviceAddress, setRtXhsPhoneDeviceAddress] = useState(realtimeConfig.xhsPhoneConfig?.deviceAddress || '100.67.26.88:5555');
+  const [rtXhsPhoneAccessToken, setRtXhsPhoneAccessToken] = useState(realtimeConfig.xhsPhoneConfig?.accessToken || '');
+  const [rtXhsPhoneStatus, setRtXhsPhoneStatus] = useState<XhsPhoneChannelStatus | null>(null);
   const [rtXhsGuideOpen, setRtXhsGuideOpen] = useState(false);
   const [rtTestStatus, setRtTestStatus] = useState('');
+  const renderRealtimeTestStatus = () => rtTestStatus ? (
+      <div className={`p-2 rounded-xl text-[11px] font-medium text-center leading-relaxed ${rtTestStatus.includes('成功') ? 'bg-emerald-100 text-emerald-700' : rtTestStatus.includes('失败') || rtTestStatus.includes('错误') || rtTestStatus.includes('未登录') ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-600'}`}>
+          {rtTestStatus}
+      </div>
+  ) : null;
 
   // 麦当劳 MCP (token / 启用态都直接存 localStorage, 不进 realtimeConfig)
   const [mcdToken, setMcdTokenState] = useState(() => getMcdToken());
@@ -1090,10 +1106,17 @@ const Settings: React.FC = () => {
           xhsMcpConfig: {
               enabled: rtXhsMcpEnabled,
               serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl,
+              liteMode: rtXhsMode === 'lite' ? rtXhsLiteMode : 'full',
               cookie: rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined,
               loggedInNickname: rtXhsNickname || undefined,
               loggedInUserId: rtXhsUserId || undefined,
               userXsecToken: realtimeConfig.xhsMcpConfig?.userXsecToken, // 保留自动获取的 token
+          },
+          xhsPhoneConfig: {
+              enabled: rtXhsPhoneEnabled,
+              mcpUrl: rtXhsPhoneMcpUrl.trim(),
+              deviceAddress: rtXhsPhoneDeviceAddress.trim() || undefined,
+              accessToken: rtXhsPhoneAccessToken.trim() || undefined,
           }
       });
       RealtimeContextManager.clearCache(); // 城市/来源改了就别再吐旧缓存
@@ -1169,7 +1192,7 @@ const Settings: React.FC = () => {
               const tokenInfo = result.xsecToken ? ' | xsecToken 已获取' : '';
               const loginInfo = result.loggedIn
                   ? ` | ${result.nickname ? `账号: ${result.nickname}` : '已登录'}${result.userId ? ` (ID: ${result.userId})` : ''}${tokenInfo}`
-                  : ' | 未登录，请检查 cookie 或登录小红书';
+                  : ' | 未登录，Cookie 可能已过期或不完整，请重新复制（至少需要 a1 和 web_session）';
               setRtTestStatus(`连接成功! ${toolCount} 个功能可用${loginInfo}`);
               // 自动填充：只在用户未手动填写时覆盖
               if (result.nickname && !rtXhsNickname) setRtXhsNickname(result.nickname);
@@ -1178,6 +1201,7 @@ const Settings: React.FC = () => {
                   xhsMcpConfig: {
                       enabled: rtXhsMcpEnabled,
                       serverUrl: urlToUse,
+                      liteMode: rtXhsMode === 'lite' ? rtXhsLiteMode : 'full',
                       cookie: cookieToUse,
                       loggedInNickname: rtXhsNickname || result.nickname,
                       loggedInUserId: rtXhsUserId || result.userId,
@@ -1189,6 +1213,29 @@ const Settings: React.FC = () => {
           }
       } catch (e: any) {
           setRtTestStatus(`网络错误: ${e.message}`);
+      }
+  };
+
+  const testXhsPhoneChannelConfig = async () => {
+      const config = {
+          enabled: rtXhsPhoneEnabled,
+          mcpUrl: rtXhsPhoneMcpUrl.trim(),
+          deviceAddress: rtXhsPhoneDeviceAddress.trim() || undefined,
+          accessToken: rtXhsPhoneAccessToken.trim() || undefined,
+      };
+      setRtTestStatus('正在测试小红书手机通道...');
+      setRtXhsPhoneStatus(null);
+      try {
+          const status = await testXhsPhoneChannel(config);
+          setRtXhsPhoneStatus(status);
+          setRtTestStatus(`连接成功: ${status.message}`);
+      } catch (e: any) {
+          const status = isXhsPhoneChannelError(e) ? e.status : null;
+          if (status) setRtXhsPhoneStatus(status);
+          const message = isXhsPhoneChannelError(e) ? e.message : (e?.message || String(e));
+          const detail = status ? formatXhsPhoneStatus(status) : '';
+          setRtTestStatus(`连接失败: ${message}`);
+          showError('小红书手机通道连接失败', `${message}${detail ? `\n\n${detail}` : ''}`);
       }
   };
 
@@ -2844,7 +2891,7 @@ const Settings: React.FC = () => {
                           <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full">MCP / Skills</span>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'local'} onChange={e => { if (e.target.checked) { setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('local'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
+                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'local'} onChange={e => { if (e.target.checked) { if (rtXhsPhoneEnabled) warnXhsDualMode(); setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('local'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
                       </label>
                   </div>
@@ -2858,6 +2905,7 @@ const Settings: React.FC = () => {
                               <input value={rtXhsLocalUrl} onChange={e => setRtXhsLocalUrl(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="http://localhost:18060/mcp" />
                           </div>
                           <button onClick={testXhsMcp} className="w-full py-2 bg-red-100 text-red-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
+                          {renderRealtimeTestStatus()}
                           <div className="grid grid-cols-2 gap-2">
                               <div>
                                   <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书昵称</label>
@@ -2886,21 +2934,32 @@ const Settings: React.FC = () => {
                           <span className="text-[9px] bg-rose-100 text-rose-500 px-1.5 py-0.5 rounded-full">云端 · 推荐</span>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'lite'} onChange={e => { if (e.target.checked) { if (!window.confirm(XHS_RISK_TEXT + '\n\n确定要开启吗？')) return; setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('lite'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
+                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'lite'} onChange={e => { if (e.target.checked) { if (!window.confirm(XHS_RISK_TEXT + '\n\n确定要开启吗？')) return; if (rtXhsPhoneEnabled) warnXhsDualMode(); setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('lite'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
                       </label>
                   </div>
                   <p className="text-[10px] text-rose-500/70 leading-relaxed">
-                      免电脑、免扫码：粘贴一次小红书 cookie，即可搜索/浏览/详情/点赞/收藏/评论/发帖(带图)。地址已内置，无需填写。
+                      免电脑、免扫码：粘贴一次小红书 cookie，即可搜索/浏览/详情/点赞/分享。完整版额外开放收藏/评论/发帖(带图)。地址已内置，无需填写。
                   </p>
                   <p className="text-[10px] text-amber-700 leading-relaxed bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">{XHS_RISK_TEXT}</p>
                   {rtXhsMcpEnabled && rtXhsMode === 'lite' && (
                       <div className="space-y-2">
                           <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Lite 模式</label>
+                              <div className="grid grid-cols-2 gap-1 bg-white/70 border border-rose-100 rounded-xl p-1">
+                                  <button type="button" onClick={() => setRtXhsLiteMode('full')} className={`py-2 rounded-lg text-[11px] font-bold transition-colors ${rtXhsLiteMode === 'full' ? 'bg-rose-500 text-white shadow-sm' : 'text-rose-500'}`}>完整版</button>
+                                  <button type="button" onClick={() => setRtXhsLiteMode('simple')} className={`py-2 rounded-lg text-[11px] font-bold transition-colors ${rtXhsLiteMode === 'simple' ? 'bg-rose-500 text-white shadow-sm' : 'text-rose-500'}`}>简易版</button>
+                              </div>
+                              <p className="mt-1 text-[10px] text-slate-400 leading-relaxed">
+                                  简易版只开放搜索、浏览、详情、点赞、分享和主页；不发帖、不收藏、不评论、不回复评论。
+                              </p>
+                          </div>
+                          <div>
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书 Cookie</label>
                               <textarea value={rtXhsCookie} onChange={e => setRtXhsCookie(e.target.value)} rows={2} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-mono resize-y" placeholder="a1=...; web_session=...; （从浏览器登录后复制完整 cookie）" />
                           </div>
                           <button onClick={testXhsMcp} className="w-full py-2 bg-rose-100 text-rose-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
+                          {renderRealtimeTestStatus()}
                           <div className="grid grid-cols-2 gap-2">
                               <div>
                                   <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书昵称</label>
@@ -2923,6 +2982,56 @@ const Settings: React.FC = () => {
                           <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-100/60 rounded-lg px-2 py-1.5">
                               🔒 隐私：cookie 经 HTTPS 加密发到云端 Worker 仅用于请求签名，服务器<b>不保存、不记录</b>，运营方看不到。正常使用是安全的；但凡经第三方云服务都存在理论风险，介意可自行评估。
                           </p>
+                      </div>
+                  )}
+              </div>
+
+              {/* 小红书手机通道 */}
+              <div className="bg-fuchsia-50/50 p-4 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                          <Book size={20} weight="fill" />
+                          <span className="text-sm font-bold text-fuchsia-700">小红书手机通道</span>
+                          <span className="text-[9px] bg-fuchsia-100 text-fuchsia-500 px-1.5 py-0.5 rounded-full">Pixel</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                          <input type="checkbox" checked={rtXhsPhoneEnabled} onChange={e => { if (e.target.checked && rtXhsMcpEnabled) warnXhsDualMode(); setRtXhsPhoneEnabled(e.target.checked); }} className="sr-only peer" />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-fuchsia-500"></div>
+                      </label>
+                  </div>
+                  <p className="text-[10px] text-fuchsia-500/70 leading-relaxed">
+                      通过云服务器 MCP 连接安卓手机，让角色在真实 Pixel 上浏览、搜索、查看评论和记录话题。
+                  </p>
+                  {rtXhsPhoneEnabled && (
+                      <div className="space-y-2">
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书手机 MCP 地址</label>
+                              <input value={rtXhsPhoneMcpUrl} onChange={e => setRtXhsPhoneMcpUrl(e.target.value)} className="w-full bg-white/80 border border-fuchsia-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="https://pixel-agent.whisper-aliya.uk/mcp" />
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Pixel ADB 地址</label>
+                              <input value={rtXhsPhoneDeviceAddress} onChange={e => setRtXhsPhoneDeviceAddress(e.target.value)} className="w-full bg-white/80 border border-fuchsia-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="100.67.26.88:5555" />
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">访问 Token</label>
+                              <input type="password" value={rtXhsPhoneAccessToken} onChange={e => setRtXhsPhoneAccessToken(e.target.value)} className="w-full bg-white/80 border border-fuchsia-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="云服务器 MCP Bearer Token，可选" />
+                          </div>
+                          <button onClick={testXhsPhoneChannelConfig} className="w-full py-2 bg-fuchsia-100 text-fuchsia-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
+                          {rtXhsPhoneStatus && (
+                              <div className="bg-white/70 border border-fuchsia-100 rounded-xl p-3 text-[10px] text-slate-600 space-y-1.5">
+                                  <div className="flex justify-between gap-3">
+                                      <span className="text-slate-400">状态</span>
+                                      <span className={rtXhsPhoneStatus.overall === 'connected' ? 'text-emerald-600 font-bold' : rtXhsPhoneStatus.overall === 'partial' ? 'text-amber-600 font-bold' : 'text-rose-600 font-bold'}>
+                                          {rtXhsPhoneStatus.overall === 'connected' ? '已连接' : rtXhsPhoneStatus.overall === 'partial' ? '部分异常' : '不可用'}
+                                      </span>
+                                  </div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">MCP</span><span>{rtXhsPhoneStatus.server === 'connected' ? '已连接' : rtXhsPhoneStatus.server === 'failed' ? '连接失败' : '未知'}</span></div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">Pixel</span><span>{rtXhsPhoneStatus.pixel === 'online' ? '在线' : rtXhsPhoneStatus.pixel === 'unauthorized' ? 'ADB 未授权' : rtXhsPhoneStatus.pixel === 'offline' ? '不在线' : '未知'}</span></div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">Tailscale</span><span>{rtXhsPhoneStatus.tailscale === 'connected' ? '已连通' : rtXhsPhoneStatus.tailscale === 'failed' ? '未连通' : '未知'}</span></div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">小红书</span><span>{rtXhsPhoneStatus.xhs === 'available' ? '可打开' : rtXhsPhoneStatus.xhs === 'failed' ? '打开失败' : '未知'}</span></div>
+                                  <div className="flex justify-between gap-3"><span className="text-slate-400">屏幕读取</span><span>{rtXhsPhoneStatus.screen === 'available' ? '可用' : rtXhsPhoneStatus.screen === 'failed' ? '失败' : '未知'}</span></div>
+                              </div>
+                          )}
                       </div>
                   )}
               </div>

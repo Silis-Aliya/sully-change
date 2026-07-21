@@ -132,8 +132,9 @@ export const ChatParser = {
                 return content;
             }
 
+            const targetMatch = musicMatches.find(m => m[1] === 'next_song' || m[1] === 'pick_song');
             const modeMatch = findVerb(['set_mode']);
-            if (modeMatch) {
+            if (modeMatch && targetMatch?.[1] !== 'pick_song') {
                 const mode = (modeMatch[2] || '').trim() as 'loop' | 'shuffle' | 'single';
                 if (mode === 'loop' || mode === 'shuffle' || mode === 'single') {
                     musicHooks.setPlayMode?.(mode);
@@ -142,10 +143,10 @@ export const ChatParser = {
                 }
             }
 
-            const targetMatch = musicMatches.find(m => m[1] === 'next_song' || m[1] === 'pick_song');
             if (targetMatch?.[1] === 'pick_song') {
                 const rawIdx = Number.parseInt((targetMatch[2] || '').trim(), 10);
                 if (Number.isInteger(rawIdx)) {
+                    musicHooks.setPlayMode?.('loop');
                     const picked = await musicHooks.pickSong?.(rawIdx, charId);
                     if (picked) addToast(`${charName} 点了《${picked.songName}》`, 'info');
                 }

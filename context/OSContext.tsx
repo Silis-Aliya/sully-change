@@ -244,6 +244,7 @@ const defaultRealtimeConfig: RealtimeConfig = {
   feishuBaseId: '',
   feishuTableId: '',
   xhsEnabled: false,
+  xhsPhoneConfig: { enabled: false, mcpUrl: '', deviceAddress: '100.67.26.88:5555', accessToken: undefined },
   cacheMinutes: 30
 };
 

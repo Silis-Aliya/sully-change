@@ -2177,6 +2177,11 @@ const MessageItem = React.memo(({
         const note = m.metadata.xhsNote;
         const openXhsNote = () => {
             const nid = note.noteId || note.note_id || note.id;
+            if (!nid && note.sourceUrl) {
+                const url = /^https?:\/\//i.test(note.sourceUrl) ? note.sourceUrl : `https://${note.sourceUrl}`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+                return;
+            }
             if (!nid) return;
             const token = note.xsecToken || note.xsec_token;
             const url = `https://www.xiaohongshu.com/explore/${nid}${token ? `?xsec_token=${encodeURIComponent(token)}&xsec_source=pc_feed` : ''}`;

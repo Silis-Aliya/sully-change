@@ -414,6 +414,7 @@ export interface RealtimeConfig {
   // 小红书配置 (MCP / Skills 双模式浏览器自动化)
   xhsEnabled: boolean;
   xhsMcpConfig?: XhsMcpConfig;
+  xhsPhoneConfig?: XhsPhoneConfig;
 
   // 缓存配置
   cacheMinutes: number;
@@ -3348,10 +3349,18 @@ export interface XhsFreeRoamSession {
 export interface XhsMcpConfig {
     enabled: boolean;
     serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://localhost:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
+    liteMode?: 'full' | 'simple'; // Lite 模式能力档位：full=完整，simple=不发帖/收藏/评论/回复
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
     loggedInUserId?: string;   // 登录用户的 user_id，连接测试成功后自动获取
     loggedInNickname?: string; // 登录用户的昵称
     userXsecToken?: string;    // 连接测试时从首页推荐自动提取的 xsec_token
+}
+
+export interface XhsPhoneConfig {
+    enabled: boolean;
+    mcpUrl: string;
+    deviceAddress?: string;
+    accessToken?: string;
 }
 
 // ============================================================

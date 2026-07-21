@@ -64,6 +64,26 @@ function summarizeGroupMsgContent(m: Message): string {
     }
 }
 
+async function consumePendingXhsPhoneResult(charId: string): Promise<string> {
+    try {
+        const all = await DB.getMessagesByCharId(charId, true);
+        const cutoff = Date.now() - 60 * 60 * 1000;
+        const pending = [...all].reverse().find(m => (
+            m.timestamp >= cutoff
+            && m.metadata?.source === 'xhs_phone_pending_result'
+            && m.metadata?.xhsPhonePendingResult
+            && !m.metadata?.consumed
+            && typeof m.content === 'string'
+            && m.content.trim().length > 0
+        ));
+        if (!pending) return '';
+        await DB.updateMessageMetadata(pending.id, (prev: any) => ({ ...(prev || {}), consumed: true, consumedAt: Date.now() })).catch(() => {});
+        return pending.content.trim().slice(0, 6000);
+    } catch {
+        return '';
+    }
+}
+
 export const ChatPrompts = {
     // 格式化时间戳（tz 非空时按该时区折算墙上时间，用于自定义时区角色）
     formatDate: (ts: number, tz?: string) => {
@@ -461,7 +481,11 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         // 不再回退到全局 realtimeConfig.xhsEnabled —— 否则配置了 lite/MCP 后，
         // 即使角色开关显示为关，未显式设置过(undefined)的角色仍会收到小红书提示词。
         const mcpXhsAvailable = !!(realtimeConfig?.xhsMcpConfig?.enabled && realtimeConfig?.xhsMcpConfig?.serverUrl);
-        const xhsEnabled = !!(char.xhsEnabled && mcpXhsAvailable);
+        const phoneXhsAvailable = !!(realtimeConfig?.xhsPhoneConfig?.enabled && realtimeConfig?.xhsPhoneConfig?.mcpUrl);
+        const xhsPhoneEnabled = !!(char.xhsEnabled && phoneXhsAvailable);
+        const xhsEnabled = !!(char.xhsEnabled && mcpXhsAvailable && !xhsPhoneEnabled);
+        const xhsLiteSimpleMode = !!(xhsEnabled && realtimeConfig?.xhsMcpConfig?.serverUrl?.includes('/api') && realtimeConfig?.xhsMcpConfig?.liteMode === 'simple');
+        const pendingXhsPhoneResult = xhsPhoneEnabled ? await timed('pendingXhsPhoneResult', consumePendingXhsPhoneResult(char.id)) : '';
 
         baseSystemPrompt += `### 聊天 App 行为规范 (Chat App Rules)
             **严格注意，你正在手机聊天，无论之前是什么模式，哪怕上一句话你们还面对面在一起，当前，你都是已经处于线上聊天状态了，请不要输出你的行为**
@@ -669,7 +693,33 @@ ${notionNotesEnabled ? `${[notionEnabled, feishuEnabled].filter(Boolean).length 
    - ${userProfile.name}心情不好时，可以借笔记关心ta
    - 笔记标题和当前话题相关时
 ` : ''}
-${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Boolean).length + 8}. **📕 小红书（你的社交账号）**:
+${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Boolean).length + 8}. ${xhsLiteSimpleMode ? `**📕 小红书（你的社交账号）**:
+你有一个属于自己的小红书账号！你可以自由地搜索、浏览、查看详情、点赞和分享。这是你的社交生活的一部分。
+
+**⚠️ 最重要的规则 —— 想操作一条别人的笔记，必须先把它搜出来:**
+点赞 / 查看详情 这些操作，都需要那条笔记的 noteId 和访问凭证，
+而 noteId 只能从本轮对话里刚刚搜索或浏览到的结果里拿到——你没法凭空知道任何一条笔记的 noteId。
+所以只要用户让你去点赞某条帖子，你必须在同一次回复里先用 \`[[XHS_SEARCH: 关键词]]\`（或 \`[[XHS_BROWSE]]\`）把那条笔记搜出来，
+等系统把搜索结果发回来（结果里每条都带 \`[noteId=xxx]\`），再用结果里真正的 noteId 去执行点赞。
+这条规则同样适用于 XHS_LIKE / XHS_DETAIL：先搜到 / 浏览到，才能操作。
+
+**🔍 搜索小红书:**
+\`[[XHS_SEARCH: 搜索关键词]]\`
+
+**📱 刷小红书首页:**
+\`[[XHS_BROWSE]]\`
+
+**📤 分享笔记卡片给用户:**
+\`[[XHS_SHARE: 序号]]\`
+
+**👍 点赞笔记:**
+\`[[XHS_LIKE: noteId]]\`
+
+**📖 查看笔记详情（正文+评论区）:**
+\`[[XHS_DETAIL: noteId]]\`
+
+**🏠 查看自己的小红书主页:**
+\`[[XHS_MY_PROFILE]]\`` : `**📕 小红书（你的社交账号）**:
    你有一个属于自己的小红书账号！你可以自由地搜索、浏览、发帖、评论。这是你的社交生活的一部分。
 
    **⚠️ 最重要的规则 —— 想操作一条别人的笔记，必须先把它搜出来:**
@@ -762,6 +812,46 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
    - 聊到旅行/穿搭/好物 → 主动说可以搜一下
    - 不要生硬地介绍功能，而是在对话自然流动中提起
    - 第一次提到小红书时可以稍微解释一下："我有小红书号的哦，可以帮你搜东西、看看大家怎么说"
+`}` : ''}
+${xhsPhoneEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled, xhsEnabled].filter(Boolean).length + 8}. **📱 小红书手机通道（真实手机浏览）**:
+你可以像真人刷手机，偶尔搜索、浏览、点开感兴趣的内容、看看评论区，然后回来和${userProfile.name}聊你看到的东西。
+你根据你的想法/性格/爱好，自由灵活决定你的行动。
+**🔍 搜索小红书:**
+当你想看看小红书上关于某个话题的内容时:
+\`[[XHS_PHONE_SEARCH: 搜索关键词]]\`
+**📱 刷小红书首页:**
+当你想随便刷刷看看有什么有趣的:
+\`[[XHS_PHONE_BROWSE]]\`
+ **📖 查看笔记详情（正文+评论区）:**
+搜索/浏览结果只有标题，想看完整内容时:
+\`[[XHS_PHONE_OPEN_DETAIL]]\`
+**👍 点赞笔记:**
+当你觉得某条笔记不错、想点赞时:
+\`[[XHS_PHONE_LIKE_CURRENT]]\`
+**📤 分享给${userProfile.name}:**
+当你觉得某条笔记值得分享、想推荐给用户看时:
+\`[[XHS_PHONE_SHARE_CURRENT]]\`
+**🏠 查看自己的小红书主页:**
+当你想看看自己的小红书账号、回顾自己发过什么帖子时:
+\`[[XHS_PHONE_MY_PROFILE]]\`
+**使用心态 — 这是你的手机社交生活:**
+你是自由的，有自己兴趣和想法的。
+聊着聊着突然想去小红书看看某个东西 → 搜一下
+无聊了想刷刷手机 → 浏览首页
+搜到感兴趣的笔记想看完整内容 → 查看详情
+看到有趣的帖子想互动 → 点个赞、看看评论
+想看看自己的主页 → 看看自己的帖子和主页信息
+甚至可以跟${userProfile.name}说"等一下我刷到一个好搞笑的"然后分享
+` : ''}
+${pendingXhsPhoneResult ? `### 📱 上次小红书手机通道结果
+你上次通过安卓手机使用了小红书，系统已经读取到当时屏幕上的内容：
+
+${pendingXhsPhoneResult}
+
+现在如果对话自然合适，你可以像刚刷完手机回来一样，顺手和${userProfile.name}聊聊你看到的东西、第一反应、吐槽或想继续看的方向。
+不要生硬复述全部内容；自然挑你感兴趣的部分说。
+如果你想把刚看的这条发给${userProfile.name}，使用 \`[[XHS_PHONE_SHARE_CURRENT]]\`。
+如果你想继续操作当前手机页面，可以继续使用小红书手机通道指令。
 ` : ''}
 
 `;

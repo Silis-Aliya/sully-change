@@ -47,6 +47,15 @@ import {
     runXhsDetail,
 } from './agenticTools';
 import { getLocalDateKey } from './localDate';
+import {
+    runXhsPhoneBrowse,
+    runXhsPhoneSearch,
+    runXhsPhoneOpenDetail,
+    runXhsPhoneLikeCurrent,
+    runXhsPhoneShareCurrent,
+    runXhsPhoneMyProfile,
+    type XhsPhoneActivityResult,
+} from './xhsPhoneChannel';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -1184,7 +1193,307 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[READ_NOTE:.*?\]\]/g, '').trim();
 
     // 5.10 Handle XHS (小红书) Actions
-    const xhsConf = resolveXhsConfig(char, realtimeConfig);
+    const phoneXhsActive = !!(realtimeConfig?.xhsPhoneConfig?.enabled && realtimeConfig?.xhsPhoneConfig?.mcpUrl);
+    const resolvedXhsConf = resolveXhsConfig(char, realtimeConfig);
+    const xhsConf = phoneXhsActive ? { ...resolvedXhsConf, enabled: false } : resolvedXhsConf;
+    const xhsLiteSimpleMode = !!(xhsConf.enabled && realtimeConfig?.xhsMcpConfig?.serverUrl?.includes('/api') && realtimeConfig?.xhsMcpConfig?.liteMode === 'simple');
+    const stripXhsLiteSimpleBlockedActions = (content: string) => content
+        .replace(/\[\[XHS_POST:.*?\]\]/gs, '')
+        .replace(/\[\[XHS_FAV:.*?\]\]/g, '')
+        .replace(/\[\[XHS_COMMENT:.*?\]\]/g, '')
+        .replace(/\[\[XHS_REPLY:.*?\]\]/g, '')
+        .trim();
+    const buildXhsSearchFollowupPrompt = (keyword: string, notesText: string) => xhsLiteSimpleMode
+        ? `[系统: 你在小红书搜索了"${keyword}"，以下是搜索结果]\n\n${notesText}\n\n[系统: 你已经看完了搜索结果（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 自然地分享你看到的内容，比如"我刚在小红书搜了一下..."、"诶小红书上有人说..."\n2. 可以评价、吐槽、分享感兴趣的内容\n3. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n4. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞\n5. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n6. 严禁再输出[[XHS_SEARCH:...]]标记]`
+        : `[系统: 你在小红书搜索了"${keyword}"，以下是搜索结果]\n\n${notesText}\n\n[系统: 你已经看完了搜索结果（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 自然地分享你看到的内容，比如"我刚在小红书搜了一下..."、"诶小红书上有人说..."\n2. 可以评价、吐槽、分享感兴趣的内容\n3. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n4. 如果想评论某条笔记，可以用 [[XHS_COMMENT: noteId | 评论内容]]\n5. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n6. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n7. 严禁再输出[[XHS_SEARCH:...]]标记]`;
+    const buildXhsBrowseFollowupPrompt = (notesText: string) => xhsLiteSimpleMode
+        ? `[系统: 你刷了一会儿小红书首页，以下是你看到的内容]\n\n${notesText}\n\n[系统: 你已经看完了（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 像在跟朋友分享一样，随意聊聊你看到了什么有趣的\n2. 不用全部都提，挑你感兴趣的1-3条聊就行\n3. 可以吐槽、感叹、分享想法\n4. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n5. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞\n6. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n7. 严禁再输出[[XHS_BROWSE]]标记]`
+        : `[系统: 你刷了一会儿小红书首页，以下是你看到的内容]\n\n${notesText}\n\n[系统: 你已经看完了（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 像在跟朋友分享一样，随意聊聊你看到了什么有趣的\n2. 不用全部都提，挑你感兴趣的1-3条聊就行\n3. 可以吐槽、感叹、分享想法\n4. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n5. 如果想发一条自己的笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n6. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n7. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n8. 严禁再输出[[XHS_BROWSE]]标记]`;
+    const buildXhsProfileFollowupPrompt = (body: string) => xhsLiteSimpleMode
+        ? `${body}现在请你：\n1. 自然地聊聊你看到了什么，"我看了看我的小红书..."、"我之前发的那个帖子..."\n2. 如果想看某条笔记的详细内容，可以用 [[XHS_DETAIL: noteId]]\n3. 严禁再输出[[XHS_MY_PROFILE]]标记]`
+        : `${body}现在请你：\n1. 自然地聊聊你看到了什么，"我看了看我的小红书..."、"我之前发的那个帖子..."\n2. 如果想发新笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n3. 如果想看某条笔记的详细内容，可以用 [[XHS_DETAIL: noteId]]\n4. 严禁再输出[[XHS_MY_PROFILE]]标记]`;
+    const buildXhsDetailFollowupPrompt = (noteId: string, detailStr: string) => xhsLiteSimpleMode
+        ? `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 你已经看完了这条笔记的完整内容和评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想点赞，可以用 [[XHS_LIKE: ${noteId}]]\n3. 严禁再输出[[XHS_DETAIL:...]]标记]`
+        : `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 你已经看完了这条笔记的完整内容和评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想评论这条笔记，可以用 [[XHS_COMMENT: ${noteId} | 评论内容]]\n3. 如果想回复某条评论，可以用 [[XHS_REPLY: ${noteId} | commentId | 回复内容]]（commentId 在上面的评论区数据里）\n4. 如果想点赞，可以用 [[XHS_LIKE: ${noteId}]]；想收藏可以用 [[XHS_FAV: ${noteId}]]\n5. 严禁再输出[[XHS_DETAIL:...]]标记]`;
+    const isLikelyXhsLiteAuthExpired = (detail: unknown) => {
+        const text = String(detail || '').toLowerCase();
+        return /未登录|请先登录|登录失效|cookie|web_session|a1=|401|unauthorized|forbidden|鉴权|授权|auth|login/.test(text);
+    };
+    const notifyXhsLiteAuthExpired = (detail: unknown) => {
+        if (!xhsLiteSimpleMode && !realtimeConfig?.xhsMcpConfig?.serverUrl?.includes('/api')) return;
+        if (!isLikelyXhsLiteAuthExpired(detail)) return;
+        addToast('小红书 Lite Cookie 可能已过期或不完整，请重新复制 cookie（至少需要 a1 和 web_session）。', 'error');
+    };
+    const classifyXhsPhoneError = (detail: string): string => {
+        const text = String(detail || '').toLowerCase();
+        if (/adb.*unauthori[sz]ed|device.*unauthori[sz]ed|unauthori[sz]ed.*device|adb.*authori/.test(text)) {
+            return 'Pixel ADB 未授权。请在 Pixel 上确认 USB/无线调试授权，或重新连接 ADB。';
+        }
+        if (/401|token|bearer|authorization/.test(text)) {
+            return '访问 Token 错误或已失效。请检查设置里的小红书手机通道 Token 是否和云服务器一致。';
+        }
+        if (/failed to fetch|networkerror|network error|cannot connect|connection refused|econnrefused|404|\/mcp|mcp initialize|tools\/list/.test(text)) {
+            return 'MCP 服务器连接异常。可能是云服务器服务没运行、Cloudflare 路由不通，或 MCP 地址填错。';
+        }
+        if (/offline|missing|no devices|device not found|100\.\d+\.\d+\.\d+|tailscale|adb connect|connection timed out|timeout/.test(text)) {
+            return 'Pixel/ADB/Tailscale 连接异常。可能是 Pixel 没开 Tailscale、ADB TCP 断开、手机关机或网络不通。';
+        }
+        if (/screen|observe|uiautomator|dump|screencap|locked|lock|empty|读屏|屏幕|无法读取/.test(text)) {
+            return '手机屏幕读取失败。可能是 Pixel 锁屏、停在指纹/密码页、小红书弹窗遮挡，或读屏返回为空。';
+        }
+        if (/xhs|小红书|activity|package|not found|open/.test(text)) {
+            return '小红书 App 状态异常。可能是小红书没安装、没登录、页面卡住，或打开入口失效。';
+        }
+        return '暂未能自动判断具体环节。请优先检查云服务器 MCP、Pixel Tailscale/ADB、手机是否解锁。';
+    };
+    const saveXhsPhoneErrorMessage = async (title: string, detail: string) => {
+        const diagnosis = classifyXhsPhoneError(detail);
+        try {
+            await DB.saveMessage({
+                charId: char.id,
+                role: 'system',
+                type: 'text',
+                content: `📱 小红书手机通道不可用：${title}\n原因判断：${diagnosis}\n原始错误：${detail}`,
+                metadata: {
+                    hidden: true,
+                    noMemory: true,
+                    source: 'xhs_phone_channel',
+                    xhsPhoneStatus: true,
+                },
+            });
+        } catch (err) {
+            console.warn('📱 [XHS Phone] 保存错误提示失败:', err);
+        }
+    };
+    const saveXhsPhonePendingResult = async (title: string, observationText: string) => {
+        try {
+            await DB.saveMessage({
+                charId: char.id,
+                role: 'system',
+                type: 'text',
+                content: `📱 小红书手机通道结果：${title}\n\n${observationText}`,
+                metadata: {
+                    hidden: true,
+                    noMemory: true,
+                    source: 'xhs_phone_pending_result',
+                    xhsPhonePendingResult: true,
+                    title,
+                },
+            });
+        } catch (err) {
+            console.warn('📱 [XHS Phone] 保存暂存结果失败:', err);
+        }
+    };
+    const saveXhsPhoneShareCard = async (observationText: string, result?: Extract<XhsPhoneActivityResult, { ok: true }>): Promise<boolean> => {
+        const textParts = [
+            result?.shareLink,
+            result?.clipboardText,
+            typeof result?.raw?.shareLink === 'string' ? result.raw.shareLink : '',
+            typeof result?.raw?.clipboardText === 'string' ? result.raw.clipboardText : '',
+            typeof result?.raw?.text === 'string' ? result.raw.text : '',
+            typeof result?.raw?.observationText === 'string' ? result.raw.observationText : '',
+            observationText,
+        ].filter(Boolean);
+        const text = textParts.join('\n').trim();
+        const noteId = text.match(/(?:https?:\/\/)?(?:www\.)?xiaohongshu\.com\/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/i)?.[1] || '';
+        const xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
+        const shortUrl = text.match(/(?:https?:\/\/)?(?:www\.)?(?:xhslink\.com|xiaohongshu\.com)\/[A-Za-z0-9/_?&=.%:-]+/i)?.[0] || '';
+        const sourceUrl = shortUrl && /^https?:\/\//i.test(shortUrl) ? shortUrl : shortUrl ? `https://${shortUrl}` : undefined;
+        if (!noteId && !sourceUrl) return false;
+        const contentLines = text
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line && !/^##/.test(line) && !/^https?:\/\//i.test(line));
+        const title =
+            text.match(/(?:标题|title)[:：]\s*(.+)/i)?.[1]?.trim()
+            || text.match(/【(.+?)】/)?.[1]?.replace(/\s*[|｜]\s*小红书.*$/, '').trim()
+            || contentLines.find(line => (
+                line
+                && !/^(小红书|分享|复制|微信|朋友圈|QQ|更多|取消)$/.test(line)
+            ))
+            || '小红书笔记';
+        const desc = contentLines
+            .slice(0, 20)
+            .join('\n')
+            .slice(0, 1200);
+        const note: XhsNote & { sourceUrl?: string } = {
+            noteId,
+            title: title.slice(0, 120),
+            desc,
+            likes: 0,
+            author: '',
+            authorId: '',
+            xsecToken,
+            sourceUrl,
+        };
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'assistant',
+            type: 'xhs_card',
+            content: note.title || '小红书笔记',
+            metadata: { xhsNote: note, source: 'xhs_phone_channel' },
+        } as any);
+        setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+        return true;
+    };
+    const getLatestXhsPhonePendingResultForCard = async (): Promise<Message | null> => {
+        const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+        const all = await DB.getMessagesByCharId(char.id, true);
+        return [...all].reverse().find(m => (
+            m.timestamp >= cutoff
+            && m.metadata?.source === 'xhs_phone_pending_result'
+            && m.metadata?.xhsPhonePendingResult
+            && !m.metadata?.cardShared
+            && typeof m.content === 'string'
+            && m.content.trim().length > 0
+        )) || null;
+    };
+    const maybeCreateImplicitXhsPhoneShareCard = async () => {
+        if (!realtimeConfig?.xhsPhoneConfig?.enabled) return;
+        if (/\[\[XHS_PHONE_SHARE_CURRENT\]\]/.test(aiContent)) return;
+        const saysShared = /(分享给你|发给你|甩给你|甩过来|丢给你|推给你|给你看|给你用过来|给你甩过来了|卡片|链接)/.test(aiContent);
+        if (!saysShared) return;
+        try {
+            const pending = await getLatestXhsPhonePendingResultForCard();
+            if (!pending) return;
+            const cardSaved = await saveXhsPhoneShareCard(pending.content);
+            if (!cardSaved) return;
+            await DB.updateMessageMetadata(pending.id, (prev: any) => ({ ...(prev || {}), cardShared: true, cardSharedAt: Date.now() })).catch(() => {});
+            addToast('📱 已生成小红书分享卡片', 'success');
+        } catch (err) {
+            console.warn('📱 [XHS Phone] 隐式分享卡片生成失败:', err);
+        }
+    };
+
+    const hasXhsPhoneShareCurrent = /\[\[XHS_PHONE_SHARE_CURRENT\]\]/.test(aiContent);
+
+    // [[XHS_PHONE_SEARCH: 关键词]]
+    const xhsPhoneSearchMatch = aiContent.match(/\[\[XHS_PHONE_SEARCH:\s*(.+?)\]\]/);
+    if (!skipSecondPassLLM && xhsPhoneSearchMatch && !hasXhsPhoneShareCurrent) {
+        const keyword = xhsPhoneSearchMatch[1].trim();
+        if (!keyword) {
+            console.warn('📱 [XHS Phone] 搜索关键词为空，跳过手机搜索');
+            aiContent = aiContent.replace(xhsPhoneSearchMatch[0], '').trim();
+        } else {
+        const phoneConf = realtimeConfig?.xhsPhoneConfig;
+        console.log(`📱 [XHS Phone] AI想用手机搜索小红书:`, keyword);
+        setXhsStatus(`正在用手机搜索小红书: ${keyword}...`);
+
+        try {
+            const result = await runXhsPhoneSearch(phoneConf, keyword);
+            if (result.ok) {
+                const cleanedForXhs = aiContent.replace(/\[\[XHS_PHONE_SEARCH:.*?\]\]/g, '').trim() || `我去小红书搜搜「${keyword}」...`;
+                await saveXhsPhonePendingResult(`搜索了「${keyword}」`, result.observationText);
+                aiContent = cleanedForXhs;
+                addToast(`📱 ${char.name}用手机搜了小红书: ${keyword}`, 'info');
+            } else {
+                console.warn('📱 [XHS Phone] 搜索失败:', result.message);
+                addToast(`手机小红书搜索失败: ${result.message}`, 'error');
+                await saveXhsPhoneErrorMessage('搜索失败', result.message);
+                aiContent = aiContent.replace(xhsPhoneSearchMatch[0], '').trim();
+            }
+        } catch (e: any) {
+            console.error('📱 [XHS Phone] 搜索异常:', e);
+            addToast(`手机小红书搜索异常: ${e?.message || String(e)}`, 'error');
+            await saveXhsPhoneErrorMessage('搜索异常', e?.message || String(e));
+            aiContent = aiContent.replace(xhsPhoneSearchMatch[0], '').trim();
+        }
+        setXhsStatus('');
+        }
+    } else if (!skipSecondPassLLM && xhsPhoneSearchMatch) {
+        aiContent = aiContent.replace(xhsPhoneSearchMatch[0], '').trim();
+    }
+    aiContent = aiContent.replace(/\[\[XHS_PHONE_SEARCH:.*?\]\]/g, '').trim();
+
+    // [[XHS_PHONE_BROWSE]]
+    const xhsPhoneBrowseMatch = aiContent.match(/\[\[XHS_PHONE_BROWSE\]\]/);
+    if (!skipSecondPassLLM && xhsPhoneBrowseMatch && !hasXhsPhoneShareCurrent) {
+        const phoneConf = realtimeConfig?.xhsPhoneConfig;
+        console.log(`📱 [XHS Phone] AI想用手机刷小红书`);
+        setXhsStatus('正在用手机刷小红书...');
+
+        try {
+            const result = await runXhsPhoneBrowse(phoneConf);
+            if (result.ok) {
+                const cleanedForXhs = aiContent.replace(/\[\[XHS_PHONE_BROWSE\]\]/g, '').trim() || '我刷一下小红书...';
+                await saveXhsPhonePendingResult('刷了一会儿首页', result.observationText);
+                aiContent = cleanedForXhs;
+                addToast(`📱 ${char.name}用手机刷了会儿小红书`, 'info');
+            } else {
+                console.warn('📱 [XHS Phone] 浏览失败:', result.message);
+                addToast(`手机小红书浏览失败: ${result.message}`, 'error');
+                await saveXhsPhoneErrorMessage('浏览失败', result.message);
+                aiContent = aiContent.replace(xhsPhoneBrowseMatch[0], '').trim();
+            }
+        } catch (e: any) {
+            console.error('📱 [XHS Phone] 浏览异常:', e);
+            addToast(`手机小红书浏览异常: ${e?.message || String(e)}`, 'error');
+            await saveXhsPhoneErrorMessage('浏览异常', e?.message || String(e));
+            aiContent = aiContent.replace(xhsPhoneBrowseMatch[0], '').trim();
+        }
+        setXhsStatus('');
+    } else if (!skipSecondPassLLM && xhsPhoneBrowseMatch) {
+        aiContent = aiContent.replace(xhsPhoneBrowseMatch[0], '').trim();
+    }
+    aiContent = aiContent.replace(/\[\[XHS_PHONE_BROWSE\]\]/g, '').trim();
+
+    const handleXhsPhoneCurrentAction = async (
+        tag: 'OPEN_DETAIL' | 'LIKE_CURRENT' | 'SHARE_CURRENT' | 'MY_PROFILE',
+        run: (config: RealtimeConfig['xhsPhoneConfig']) => Promise<XhsPhoneActivityResult>,
+        statusText: string,
+        purpose: string,
+        systemSummary: string,
+        followupPrompt?: string,
+    ) => {
+        const tagRe = new RegExp(`\\[\\[XHS_PHONE_${tag}\\]\\]`);
+        const tagMatch = aiContent.match(tagRe);
+        if (!skipSecondPassLLM && tagMatch) {
+            const phoneConf = realtimeConfig?.xhsPhoneConfig;
+            console.log(`📱 [XHS Phone] AI想执行手机动作:`, tag);
+            setXhsStatus(statusText);
+
+            try {
+                const result = await run(phoneConf);
+                if (result.ok) {
+                    const cleanedForXhs = aiContent.replace(tagRe, '').trim() || systemSummary;
+                    await saveXhsPhonePendingResult(systemSummary, result.observationText);
+                    if (tag === 'SHARE_CURRENT') {
+                        const cardSaved = await saveXhsPhoneShareCard(result.observationText, result);
+                        if (!cardSaved) addToast('📱 没拿到可分享的小红书链接，暂时不生成卡片', 'warning');
+                    }
+                    aiContent = cleanedForXhs;
+                    addToast(`📱 ${char.name}${systemSummary}`, 'info');
+                } else {
+                    console.warn(`📱 [XHS Phone] ${tag} 失败:`, result.message);
+                    addToast(`手机小红书操作失败: ${result.message}`, 'error');
+                    await saveXhsPhoneErrorMessage('操作失败', result.message);
+                    aiContent = aiContent.replace(tagRe, '').trim();
+                }
+            } catch (e: any) {
+                console.error(`📱 [XHS Phone] ${tag} 异常:`, e);
+                addToast(`手机小红书操作异常: ${e?.message || String(e)}`, 'error');
+                await saveXhsPhoneErrorMessage('操作异常', e?.message || String(e));
+                aiContent = aiContent.replace(tagRe, '').trim();
+            }
+            setXhsStatus('');
+        } else if (!skipSecondPassLLM && tagMatch) {
+            aiContent = aiContent.replace(tagRe, '').trim();
+        }
+    };
+
+    await handleXhsPhoneCurrentAction(
+        'OPEN_DETAIL',
+        runXhsPhoneOpenDetail,
+        '正在用手机查看小红书详情...',
+        'xhs-phone-detail',
+        '点开了一条小红书笔记详情',
+        `[系统: 你通过安卓手机点开了一条小红书笔记的详情页]\n\n\${result.observationText}\n\n[系统: 你已经看完了这条笔记的完整内容和评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想点赞，可以用 [[XHS_PHONE_LIKE_CURRENT]]\n3. 严禁再输出[[XHS_PHONE_OPEN_DETAIL]]标记]`,
+    );
+    await handleXhsPhoneCurrentAction('LIKE_CURRENT', runXhsPhoneLikeCurrent, '正在用手机点赞当前小红书...', 'xhs-phone-like', '点赞了当前小红书笔记');
+    await handleXhsPhoneCurrentAction('SHARE_CURRENT', runXhsPhoneShareCurrent, '正在用手机打开小红书分享面板...', 'xhs-phone-share', '打开了当前小红书笔记的分享面板');
+    await handleXhsPhoneCurrentAction('MY_PROFILE', runXhsPhoneMyProfile, '正在用手机查看小红书主页...', 'xhs-phone-profile', '打开了自己的小红书主页');
+    aiContent = aiContent.replace(/\[\[XHS_PHONE_(?:OPEN_DETAIL|LIKE_CURRENT|SHARE_CURRENT|MY_PROFILE)\]\]/g, '').trim();
+    await maybeCreateImplicitXhsPhoneShareCard();
 
     // [[XHS_SEARCH: 关键词]]
     const xhsSearchMatch = aiContent.match(/\[\[XHS_SEARCH:\s*(.+?)\]\]/);
@@ -1200,7 +1509,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你在小红书搜索了"${keyword}"，以下是搜索结果]\n\n${xsr.notesText}\n\n[系统: 你已经看完了搜索结果（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 自然地分享你看到的内容，比如"我刚在小红书搜了一下..."、"诶小红书上有人说..."\n2. 可以评价、吐槽、分享感兴趣的内容\n3. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n4. 如果想评论某条笔记，可以用 [[XHS_COMMENT: noteId | 评论内容]]\n5. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n6. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n7. 严禁再输出[[XHS_SEARCH:...]]标记]` }
+                    { role: 'user', content: buildXhsSearchFollowupPrompt(keyword, xsr.notesText) }
                 ];
 
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1210,6 +1519,7 @@ export async function applyAssistantPostProcessing(
                 updateTokenUsage(data, historyMsgCount, 'xhs-search');
                 aiContent = data.choices?.[0]?.message?.content || '';
                 aiContent = normalizeAiContent(aiContent);
+                if (xhsLiteSimpleMode) aiContent = stripXhsLiteSimpleBlockedActions(aiContent);
                 await DB.saveMessage({
                     charId: char.id,
                     role: 'system',
@@ -1220,10 +1530,12 @@ export async function applyAssistantPostProcessing(
             } else {
                 // xsr.reason === 'no_results' (not_enabled 已被外层 if 排除)
                 console.log('📕 [XHS] 搜索无结果:', xsr.message);
+                notifyXhsLiteAuthExpired(xsr.message);
                 aiContent = aiContent.replace(xhsSearchMatch[0], '').trim();
             }
         } catch (e) {
             console.error('📕 [XHS] 搜索异常:', e);
+            notifyXhsLiteAuthExpired((e as any)?.message || e);
             aiContent = aiContent.replace(xhsSearchMatch[0], '').trim();
         }
         setXhsStatus('');
@@ -1246,7 +1558,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你刷了一会儿小红书首页，以下是你看到的内容]\n\n${xbr.notesText}\n\n[系统: 你已经看完了（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 像在跟朋友分享一样，随意聊聊你看到了什么有趣的\n2. 不用全部都提，挑你感兴趣的1-3条聊就行\n3. 可以吐槽、感叹、分享想法\n4. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n5. 如果想发一条自己的笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n6. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n7. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n8. 严禁再输出[[XHS_BROWSE]]标记]` }
+                    { role: 'user', content: buildXhsBrowseFollowupPrompt(xbr.notesText) }
                 ];
 
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1256,13 +1568,16 @@ export async function applyAssistantPostProcessing(
                 updateTokenUsage(data, historyMsgCount, 'xhs-browse');
                 aiContent = data.choices?.[0]?.message?.content || '';
                 aiContent = normalizeAiContent(aiContent);
+                if (xhsLiteSimpleMode) aiContent = stripXhsLiteSimpleBlockedActions(aiContent);
                 addToast(`📕 ${char.name}刷了会儿小红书`, 'info');
             } else {
                 // xbr.reason === 'no_results' (not_enabled 已被外层 if 排除)
+                notifyXhsLiteAuthExpired(xbr.message);
                 aiContent = aiContent.replace(xhsBrowseMatch[0], '').trim();
             }
         } catch (e) {
             console.error('📕 [XHS] 浏览异常:', e);
+            notifyXhsLiteAuthExpired((e as any)?.message || e);
             aiContent = aiContent.replace(xhsBrowseMatch[0], '').trim();
         }
         setXhsStatus('');
@@ -1272,7 +1587,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_BROWSE(?::.*?)?\]\]/g, '').trim();
 
     // [[XHS_SHARE: 序号]]
-    const xhsShareMatches: Iterable<RegExpMatchArray> = disabledXhsSideEffects ? [] : aiContent.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g);
+    const xhsShareMatches: Iterable<RegExpMatchArray> = (!xhsConf.enabled || disabledXhsSideEffects) ? [] : aiContent.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g);
     for (const shareMatch of xhsShareMatches) {
         const idx = parseInt(shareMatch[1]) - 1;
         if (idx >= 0 && idx < lastXhsNotesRef.current.length) {
@@ -1296,7 +1611,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]
     const xhsPostMatch = aiContent.match(/\[\[XHS_POST:\s*(.+?)\]\]/s);
-    if (!disabledXhsSideEffects && xhsPostMatch && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsPostMatch && xhsConf.enabled) {
         const postRaw = xhsPostMatch[1].trim();
         const parts = postRaw.split('|').map(p => p.trim());
         const postTitle = parts[0] || '';
@@ -1334,7 +1649,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_COMMENT: noteId | 评论内容]]
     const xhsCommentMatch = aiContent.match(/\[\[XHS_COMMENT:\s*(.+?)\]\]/);
-    if (!disabledXhsSideEffects && xhsCommentMatch && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsCommentMatch && xhsConf.enabled) {
         const commentRaw = xhsCommentMatch[1].trim();
         const sepIdx = commentRaw.indexOf('|');
         if (sepIdx > 0) {
@@ -1370,7 +1685,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_REPLY: noteId | commentId | 回复内容]] (first pass; before LIKE/FAV)
     const xhsReplyMatch = aiContent.match(/\[\[XHS_REPLY:\s*(.+?)\]\]/);
-    if (!disabledXhsSideEffects && xhsReplyMatch && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsReplyMatch && xhsConf.enabled) {
         const parts = xhsReplyMatch[1].split('|').map(s => s.trim());
         if (parts.length >= 3) {
             const [noteId, commentId, ...replyParts] = parts;
@@ -1450,7 +1765,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_LIKE:.*?\]\]/g, '').trim();
 
     // [[XHS_FAV: noteId]]
-    const xhsFavMatches: Iterable<RegExpMatchArray> = disabledXhsSideEffects ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
+    const xhsFavMatches: Iterable<RegExpMatchArray> = (xhsLiteSimpleMode || disabledXhsSideEffects) ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
     for (const xhsFavMatch of xhsFavMatches) {
         if (xhsConf.enabled) {
             const noteId = xhsFavMatch[1].trim();
@@ -1488,7 +1803,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你打开了自己的小红书]\n\n你的小红书账号昵称: ${nickname || '未知'}${userId ? ` (userId: ${userId})` : ''}${profileSection}\n\n${gotProfile ? '你的笔记' : `搜索「${nickname}」找到的相关笔记`}:\n${feedsStr}\n\n[系统: ${gotProfile ? '以上是你的主页数据。' : '注意，搜索结果可能包含别人的帖子，你需要辨别哪些是你自己发的（看作者名字）。'}现在请你：\n1. 自然地聊聊你看到了什么，"我看了看我的小红书..."、"我之前发的那个帖子..."\n2. 如果想发新笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n3. 如果想看某条笔记的详细内容，可以用 [[XHS_DETAIL: noteId]]\n4. 严禁再输出[[XHS_MY_PROFILE]]标记]` }
+                    { role: 'user', content: buildXhsProfileFollowupPrompt(`[系统: 你打开了自己的小红书]\n\n你的小红书账号昵称: ${nickname || '未知'}${userId ? ` (userId: ${userId})` : ''}${profileSection}\n\n${gotProfile ? '你的笔记' : `搜索「${nickname}」找到的相关笔记`}:\n${feedsStr}\n\n[系统: ${gotProfile ? '以上是你的主页数据。' : '注意，搜索结果可能包含别人的帖子，你需要辨别哪些是你自己发的（看作者名字）。'}`) }
                 ];
 
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1498,6 +1813,7 @@ export async function applyAssistantPostProcessing(
                 updateTokenUsage(data, historyMsgCount, 'xhs-profile');
                 aiContent = data.choices?.[0]?.message?.content || '';
                 aiContent = normalizeAiContent(aiContent);
+                if (xhsLiteSimpleMode) aiContent = stripXhsLiteSimpleBlockedActions(aiContent);
                 addToast(`📕 ${char.name}看了看自己的小红书`, 'info');
             } else if (xmpr.reason === 'no_identity') {
                 console.warn('📕 [XHS] 无昵称也无userId，无法查看主页。请在设置中填写。');
@@ -1507,7 +1823,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你打开了自己的小红书]\n\n你的小红书账号昵称: 未知${profileSection}\n\n搜索「」找到的相关笔记:\n（无法获取主页：请在设置-小红书中填写你的昵称或用户ID）\n\n[系统: 注意，搜索结果可能包含别人的帖子，你需要辨别哪些是你自己发的（看作者名字）。现在请你：\n1. 自然地聊聊你看到了什么，"我看了看我的小红书..."、"我之前发的那个帖子..."\n2. 如果想发新笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n3. 如果想看某条笔记的详细内容，可以用 [[XHS_DETAIL: noteId]]\n4. 严禁再输出[[XHS_MY_PROFILE]]标记]` }
+                    { role: 'user', content: buildXhsProfileFollowupPrompt(`[系统: 你打开了自己的小红书]\n\n你的小红书账号昵称: 未知${profileSection}\n\n搜索「」找到的相关笔记:\n（无法获取主页：请在设置-小红书中填写你的昵称或用户ID）\n\n[系统: 注意，搜索结果可能包含别人的帖子，你需要辨别哪些是你自己发的（看作者名字）。`) }
                 ];
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
@@ -1516,6 +1832,7 @@ export async function applyAssistantPostProcessing(
                 updateTokenUsage(data, historyMsgCount, 'xhs-profile');
                 aiContent = data.choices?.[0]?.message?.content || '';
                 aiContent = normalizeAiContent(aiContent);
+                if (xhsLiteSimpleMode) aiContent = stripXhsLiteSimpleBlockedActions(aiContent);
                 addToast(`📕 ${char.name}看了看自己的小红书`, 'info');
             }
         } catch (e) {
@@ -1552,7 +1869,7 @@ export async function applyAssistantPostProcessing(
                 { role: 'assistant', content: cleanedForXhs },
                 { role: 'user', content: detailFailed
                     ? `[系统: 你尝试打开一条小红书笔记（noteId=${noteId}），但加载失败了]\n\n${detailStr}\n\n[系统: 笔记详情页加载失败了。可能的原因：这条笔记需要先通过搜索或浏览才能打开详情。现在请你：\n1. 自然地告知用户"这条笔记打不开/加载不出来"\n2. 可以建议搜索相关关键词再试: [[XHS_SEARCH: 关键词]]\n3. 严禁再输出[[XHS_DETAIL:...]]标记]`
-                    : `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 你已经看完了这条笔记的完整内容和评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想评论这条笔记，可以用 [[XHS_COMMENT: ${noteId} | 评论内容]]\n3. 如果想回复某条评论，可以用 [[XHS_REPLY: ${noteId} | commentId | 回复内容]]（commentId 在上面的评论区数据里）\n4. 如果想点赞，可以用 [[XHS_LIKE: ${noteId}]]；想收藏可以用 [[XHS_FAV: ${noteId}]]\n5. 严禁再输出[[XHS_DETAIL:...]]标记]` }
+                    : buildXhsDetailFollowupPrompt(noteId, detailStr) }
             ];
 
             data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1562,6 +1879,7 @@ export async function applyAssistantPostProcessing(
             updateTokenUsage(data, historyMsgCount, 'xhs-detail');
             aiContent = data.choices?.[0]?.message?.content || '';
             aiContent = normalizeAiContent(aiContent);
+            if (xhsLiteSimpleMode) aiContent = stripXhsLiteSimpleBlockedActions(aiContent);
             addToast(`📕 ${char.name}${detailFailed ? '尝试查看一条笔记（加载失败）' : '看了一条笔记的详情'}`, 'info');
             }  // end of else (xdr.ok)
         } catch (e) {
@@ -1577,7 +1895,7 @@ export async function applyAssistantPostProcessing(
     // 5.10.1 Second-round XHS action processing
     // [[XHS_COMMENT: noteId | 评论内容]] (second round)
     const xhsCommentMatch2 = aiContent.match(/\[\[XHS_COMMENT:\s*(.+?)\]\]/);
-    if (!disabledXhsSideEffects && xhsCommentMatch2 && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsCommentMatch2 && xhsConf.enabled) {
         const commentRaw = xhsCommentMatch2[1].trim();
         const sepIdx = commentRaw.indexOf('|');
         if (sepIdx > 0) {
@@ -1609,7 +1927,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_REPLY]] (second round)
     const xhsReplyMatch2 = aiContent.match(/\[\[XHS_REPLY:\s*(.+?)\]\]/);
-    if (!disabledXhsSideEffects && xhsReplyMatch2 && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsReplyMatch2 && xhsConf.enabled) {
         const parts = xhsReplyMatch2[1].split('|').map(s => s.trim());
         if (parts.length >= 3) {
             const [noteId, commentId, ...replyParts] = parts;
@@ -1686,7 +2004,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_LIKE:.*?\]\]/g, '').trim();
 
     // [[XHS_FAV]] (second round)
-    const xhsFavMatches2: Iterable<RegExpMatchArray> = disabledXhsSideEffects ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
+    const xhsFavMatches2: Iterable<RegExpMatchArray> = (xhsLiteSimpleMode || disabledXhsSideEffects) ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
     for (const xhsFavMatch of xhsFavMatches2) {
         if (xhsConf.enabled) {
             const noteId = xhsFavMatch[1].trim();
@@ -1706,7 +2024,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_POST]] (second round - after MY_PROFILE)
     const xhsPostMatch2 = aiContent.match(/\[\[XHS_POST:\s*(.+?)\]\]/s);
-    if (!disabledXhsSideEffects && xhsPostMatch2 && xhsConf.enabled) {
+    if (!xhsLiteSimpleMode && !disabledXhsSideEffects && xhsPostMatch2 && xhsConf.enabled) {
         const postRaw = xhsPostMatch2[1].trim();
         const parts = postRaw.split('|').map(p => p.trim());
         const postTitle = parts[0] || '';

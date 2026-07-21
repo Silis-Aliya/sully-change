@@ -772,6 +772,7 @@ const Chat: React.FC = () => {
         if (modalType === 'history-manager' && activeCharacterId) {
             DB.getMessagesByCharId(activeCharacterId, true).then(allMsgs => {
                 const filtered = allMsgs
+                    .filter(m => !m.metadata?.hidden)
                     .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
                     .filter(m => !(char?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card'));
                 setAllHistoryMessages(filtered);

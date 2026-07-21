@@ -75,6 +75,11 @@ import { isMessageSemanticallyRelevant, formatMessageForPrompt } from '../messag
 import { sanitizeQuerySourceMessages } from './querySanitizer';
 import { getLocalDateKey } from '../localDate';
 
+const isMemoryPipelineMessage = (msg: Message): boolean => {
+    if (msg.metadata?.hidden || msg.metadata?.noMemory) return false;
+    return isMessageSemanticallyRelevant(msg);
+};
+
 // ─── 轻量 LLM 配置类型 ───────────────────────────────
 
 /**
@@ -1160,7 +1165,7 @@ const PROCESS_RATIO = 0.85;
  */
 export async function getMemoryPalaceUnprocessedBufferCount(charId: string): Promise<number> {
     const allMessages = await DB.getMessagesByCharId(charId, true);
-    const semantic = allMessages.filter(m => isMessageSemanticallyRelevant(m));
+    const semantic = allMessages.filter(isMemoryPipelineMessage);
     return countUnprocessedBufferMessages(semantic, getLastProcessedId(charId), HOT_ZONE_SIZE);
 }
 
@@ -1552,7 +1557,7 @@ export async function processNewMessages(
         //    只排除纯视觉/音频类（image / emoji / voice）—— 后者经 normalize 变短占位，对 LLM 无增益
         const allMessages = await DB.getMessagesByCharId(charId, true);
         const textMessages = allMessages
-            .filter(m => isMessageSemanticallyRelevant(m))
+            .filter(isMemoryPipelineMessage)
             .sort((a, b) => a.id - b.id);
 
         const totalCount = textMessages.length;
@@ -1698,7 +1703,7 @@ export async function processMessageRange(
         // 加载全部消息（含已处理的），取区间内的语义相关消息，按 id 升序
         const allMessages = await DB.getMessagesByCharId(charId, true);
         const toProcess = allMessages
-            .filter(m => isMessageSemanticallyRelevant(m))
+            .filter(isMemoryPipelineMessage)
             .filter(m => m.id >= lo && m.id <= hi)
             .sort((a, b) => a.id - b.id);
 
