@@ -1327,7 +1327,7 @@ const Settings: React.FC = () => {
                       onClick={dismissSysOperation}
                       className="mt-1 px-4 py-2 rounded-xl bg-slate-100 text-xs font-bold text-slate-500 active:scale-95"
                   >
-                      关闭遮罩
+                      退出
                   </button>
               </div>
           </div>
