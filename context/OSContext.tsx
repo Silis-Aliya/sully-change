@@ -3,7 +3,8 @@ import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, CharacterGrou
 import { DB } from '../utils/db';
 import { modelRejectsSamplingParams, stripSamplingParams, isSamplingParamError } from '../utils/samplingParamCompat';
 import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport';
-import { isBlobRef, getBlobForRef, migrateDataUrlToRef, resolveBlobRefsDeep, BLOBREF_PREFIX } from '../utils/blobRef';
+import { isBlobRef, getBlobForRef, migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep, BLOBREF_PREFIX, deleteBlobRefIfUnreferenced } from '../utils/blobRef';
+import { isLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
@@ -284,7 +285,7 @@ interface OSContextType {
   openApp: (appId: AppID) => void;
   closeApp: () => void;
   theme: OSTheme;
-  updateTheme: (updates: Partial<OSTheme>) => void;
+  updateTheme: (updates: Partial<OSTheme>) => Promise<void>;
   virtualTime: VirtualTime;
   apiConfig: APIConfig;
   updateApiConfig: (updates: Partial<APIConfig>) => void;
@@ -380,7 +381,7 @@ interface OSContextType {
 
   // Icons
   customIcons: Record<string, string>;
-  setCustomIcon: (appId: string, iconUrl: string | undefined) => void;
+  setCustomIcon: (appId: string, iconUrl: string | undefined) => Promise<void>;
 
   // Appearance Reset
   resetAppearance: () => Promise<void>;
@@ -432,19 +433,50 @@ interface OSContextType {
   consumeDateAutoStart: () => void;
 }
 
-export const DEFAULT_WALLPAPER = 'linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%)';
+const PREVIOUS_DEFAULT_WALLPAPER = [
+  'radial-gradient(120% 85% at 12% 0%, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0) 58%)',
+  'repeating-linear-gradient(0deg, rgba(92,72,49,0.018) 0px, rgba(92,72,49,0.018) 1px, transparent 1px, transparent 4px)',
+  'linear-gradient(145deg, #f3ecdf 0%, #e9dfcf 52%, #dfd2bf 100%)',
+].join(', ');
+
+export const DEFAULT_WALLPAPER = [
+  'radial-gradient(120% 85% at 12% 0%, rgba(255,255,255,0.64) 0%, rgba(255,255,255,0) 58%)',
+  'repeating-linear-gradient(0deg, rgba(76,69,60,0.010) 0px, rgba(76,69,60,0.010) 1px, transparent 1px, transparent 4px)',
+  'linear-gradient(145deg, #fdfcf9 0%, #f8f6f1 54%, #f1eee8 100%)',
+].join(', ');
 
 export const DEFAULT_PAPER_APPEARANCE = {
   hue: 88,
   saturation: 14,
   lightness: 46,
   contentColor: '#4b4136',
+} as const;
+
+const migrateLegacyDefaultPalette = (theme: OSTheme): OSTheme => {
+  const next = { ...theme };
+  if (!next.contentColor || next.contentColor.toLowerCase() === '#ffffff') {
+    next.contentColor = DEFAULT_PAPER_APPEARANCE.contentColor;
+  }
+  if (next.hue === 245 && next.saturation === 25 && next.lightness === 65) {
+    next.hue = DEFAULT_PAPER_APPEARANCE.hue;
+    next.saturation = DEFAULT_PAPER_APPEARANCE.saturation;
+    next.lightness = DEFAULT_PAPER_APPEARANCE.lightness;
+  }
+  return next;
 };
 
 export const isPaperWallpaper = (wallpaper?: string) => {
   if (!wallpaper) return false;
+  if (wallpaper === DEFAULT_WALLPAPER || wallpaper === PREVIOUS_DEFAULT_WALLPAPER) return true;
   const compact = wallpaper.toLowerCase().replace(/\s+/g, '');
-  return compact.includes('#f3ecdf') || compact.includes('rgb(243,236,223)') || compact.includes('#fdfcf9');
+  return (
+    compact.includes('#f3ecdf') ||
+    compact.includes('rgb(243,236,223)') ||
+    compact.includes('#faf7f1') ||
+    compact.includes('rgb(250,247,241)') ||
+    compact.includes('#fdfcf9') ||
+    compact.includes('rgb(253,252,249)')
+  );
 };
 
 // 壁纸改存 Blob（见 utils/blobRef.ts）：assets store 的 'wallpaper' 记录只存一个指针值
@@ -452,6 +484,21 @@ export const isPaperWallpaper = (wallpaper?: string) => {
 // 必须是能直接喂给 CSS 的 url，所以令牌要解析成 objectURL。全 OS 只有一张壁纸，用一个模块级
 // 变量记住当前 objectURL，换壁纸时回收上一张，避免泄漏。
 let currentWallpaperObjUrl: string | null = null;
+let currentLockWallpaperObjUrl: string | null = null;
+
+const replaceWallpaperAssetPointer = async (assetId: 'wallpaper' | 'lock_wallpaper', next: string | null): Promise<void> => {
+    let previous: string | null = null;
+    try {
+        previous = await DB.getAsset(assetId);
+        if (next) await DB.saveAsset(assetId, next);
+        else await DB.deleteAsset(assetId);
+    } catch {
+        return;
+    }
+    if (previous && previous !== next && isBlobRef(previous)) {
+        void deleteBlobRefIfUnreferenced(previous);
+    }
+};
 
 /**
  * 把「存储值」壁纸解析成可直接渲染的 url，并把指针（令牌）落进 assets 'wallpaper'。
@@ -464,30 +511,72 @@ const resolveWallpaperStoredValue = async (w: string): Promise<string> => {
     const revokePrev = () => {
         if (currentWallpaperObjUrl) { try { URL.revokeObjectURL(currentWallpaperObjUrl); } catch { /* ignore */ } currentWallpaperObjUrl = null; }
     };
+    if (isLegacyDefaultWallpaper(w)) {
+        await replaceWallpaperAssetPointer('wallpaper', null);
+        revokePrev();
+        return DEFAULT_WALLPAPER;
+    }
     if (isBlobRef(w) || (w && w.startsWith('data:'))) {
         const token = isBlobRef(w) ? w : await migrateDataUrlToRef(w);
-        try { await DB.saveAsset('wallpaper', token); } catch { /* ignore */ }
         const blob = await getBlobForRef(token);
         revokePrev();
         if (blob) {
+            await replaceWallpaperAssetPointer('wallpaper', token);
             currentWallpaperObjUrl = URL.createObjectURL(blob);
             return currentWallpaperObjUrl;
         }
-        return w; // Blob 意外缺失：data: 仍可渲染；令牌无解时保底不改
+        if (isBlobRef(token)) {
+            await replaceWallpaperAssetPointer('wallpaper', null);
+            return DEFAULT_WALLPAPER;
+        }
+        await replaceWallpaperAssetPointer('wallpaper', token);
+        return w;
     }
     // http(s) 链接 / 重置 / 渐变：没有二进制要存，清掉指针
-    try { await DB.deleteAsset('wallpaper'); } catch { /* ignore */ }
+    await replaceWallpaperAssetPointer('wallpaper', null);
     revokePrev();
     return w;
 };
 
 const defaultTheme: OSTheme = {
-  hue: 245, // Default Indigo-ish
-  saturation: 25,
-  lightness: 65,
+  ...DEFAULT_PAPER_APPEARANCE,
   wallpaper: DEFAULT_WALLPAPER,
   darkMode: false,
-  contentColor: '#ffffff', // Default white text
+  preserveCustomIconOutlines: false,
+  nowPlayingWidgetLight: true,
+};
+
+const resolveLockWallpaperStoredValue = async (w: string | undefined): Promise<string | undefined> => {
+    const revokePrev = () => {
+        if (currentLockWallpaperObjUrl) {
+            try { URL.revokeObjectURL(currentLockWallpaperObjUrl); } catch { /* ignore */ }
+            currentLockWallpaperObjUrl = null;
+        }
+    };
+    if (!w) {
+        await replaceWallpaperAssetPointer('lock_wallpaper', null);
+        revokePrev();
+        return undefined;
+    }
+    if (isBlobRef(w) || w.startsWith('data:')) {
+        const token = isBlobRef(w) ? w : await migrateDataUrlToRef(w);
+        const blob = await getBlobForRef(token);
+        revokePrev();
+        if (blob) {
+            await replaceWallpaperAssetPointer('lock_wallpaper', token);
+            currentLockWallpaperObjUrl = URL.createObjectURL(blob);
+            return currentLockWallpaperObjUrl;
+        }
+        if (isBlobRef(token)) {
+            await replaceWallpaperAssetPointer('lock_wallpaper', null);
+            return undefined;
+        }
+        await replaceWallpaperAssetPointer('lock_wallpaper', token);
+        return w;
+    }
+    await replaceWallpaperAssetPointer('lock_wallpaper', null);
+    revokePrev();
+    return w;
 };
 
 const defaultApiConfig: APIConfig = {
@@ -1082,20 +1171,27 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         let loadedTheme = { ...defaultTheme };
         if (savedThemeStr) {
              try {
-                 const parsed = JSON.parse(savedThemeStr);
-                 loadedTheme = { ...loadedTheme, ...parsed };
-                 // Strip the legacy Unsplash hard-coded wallpaper, keep user-imported http(s) URLs
-                 if (
-                     loadedTheme.wallpaper.includes('unsplash') ||
+                const parsed = JSON.parse(savedThemeStr);
+                loadedTheme = { ...loadedTheme, ...parsed };
+                if (isLegacyDefaultWallpaper(loadedTheme.wallpaper) || (isPaperWallpaper(loadedTheme.wallpaper) && loadedTheme.wallpaper !== DEFAULT_WALLPAPER)) {
+                    loadedTheme.wallpaper = DEFAULT_WALLPAPER;
+                    loadedTheme = migrateLegacyDefaultPalette(loadedTheme);
+                }
+                // Strip the legacy Unsplash hard-coded wallpaper, keep user-imported http(s) URLs
+                if (
+                    loadedTheme.wallpaper.includes('unsplash') ||
                      loadedTheme.wallpaper === ''
                  ) {
                      loadedTheme.wallpaper = DEFAULT_WALLPAPER;
                  }
                  // LS 里绝不该有 data:（旧包）或 blob:（上会话临时 objectURL，重启即失效）壁纸——
                  // 真值在 assets 'wallpaper'，下面会解析覆盖；这里先回退默认避免闪一帧坏图。
-                 if (loadedTheme.wallpaper.startsWith('data:') || loadedTheme.wallpaper.startsWith('blob:')) {
-                     loadedTheme.wallpaper = defaultTheme.wallpaper;
-                 }
+                if (loadedTheme.wallpaper.startsWith('data:') || loadedTheme.wallpaper.startsWith('blob:')) {
+                    loadedTheme.wallpaper = defaultTheme.wallpaper;
+                }
+                if (loadedTheme.lockWallpaper?.startsWith('data:') || loadedTheme.lockWallpaper?.startsWith('blob:')) {
+                    loadedTheme.lockWallpaper = undefined;
+                }
                  // Deprecated legacy fields are forcibly stripped — they never render again.
                  loadedTheme.launcherWidgetImage = undefined;
                  // Reset font too if it's data URI
@@ -1133,7 +1229,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                 if (assetMap['wallpaper']) {
                     // assets 'wallpaper' 现在存的是指针（blobref 令牌 / 旧 data: / http）。
                     // 解析成可渲染 url（令牌→objectURL；旧 data: 顺手迁移成 Blob）。
-                    loadedTheme.wallpaper = await resolveWallpaperStoredValue(assetMap['wallpaper']);
+                    const legacyAssetWallpaper = isLegacyDefaultWallpaper(assetMap['wallpaper']);
+                    if (legacyAssetWallpaper || isPaperWallpaper(assetMap['wallpaper'])) {
+                        loadedTheme.wallpaper = DEFAULT_WALLPAPER;
+                        if (legacyAssetWallpaper) loadedTheme = migrateLegacyDefaultPalette(loadedTheme);
+                        await DB.deleteAsset('wallpaper');
+                    } else {
+                        loadedTheme.wallpaper = await resolveWallpaperStoredValue(assetMap['wallpaper']);
+                    }
+                }
+                if (assetMap['lock_wallpaper']) {
+                    loadedTheme.lockWallpaper = await resolveLockWallpaperStoredValue(assetMap['lock_wallpaper']);
                 }
 
                 // Deprecated legacy asset — purge silently so it can never be rendered again.
@@ -1149,20 +1255,23 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                 const DEPRECATED_WIDGET_SLOTS = new Set(['bl', 'br']);
                 const loadedIcons: Record<string, string> = {};
                 const loadedWidgets: Record<string, string> = {};
-                Object.keys(assetMap).forEach(key => {
+                for (const key of Object.keys(assetMap)) {
                     if (key.startsWith('icon_')) {
                         const appId = key.replace('icon_', '');
-                        loadedIcons[appId] = assetMap[key];
+                        const previous = assetMap[key];
+                        const stored = previous.startsWith('data:') ? await migrateDataUrlToRef(previous) : previous;
+                        loadedIcons[appId] = stored;
+                        if (stored !== previous) await DB.saveAsset(key, stored);
                     }
                     if (key.startsWith('widget_')) {
                         const slot = key.replace('widget_', '');
                         if (DEPRECATED_WIDGET_SLOTS.has(slot)) {
                             void DB.deleteAsset(key);
-                            return;
+                            continue;
                         }
                         loadedWidgets[slot] = assetMap[key];
                     }
-                });
+                }
                 setCustomIcons(loadedIcons);
                 // Strip deprecated slots that may have been imported via beautification packs.
                 if (loadedTheme.launcherWidgets) {
@@ -2410,7 +2519,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   }, [isDataLoaded]);
 
   const updateTheme = async (updates: Partial<OSTheme>) => {
-    const { wallpaper, launcherWidgetImage, launcherWidgets, desktopDecorations, customFont, ...styleUpdates } = updates;
+    const { wallpaper, lockWallpaper, launcherWidgetImage, launcherWidgets, desktopDecorations, customFont, ...styleUpdates } = updates;
     // Legacy slots are banned — never let them enter state, regardless of caller intent.
     const sanitizedWidgets = launcherWidgets !== undefined
         ? Object.fromEntries(Object.entries(launcherWidgets).filter(([k]) => k !== 'bl' && k !== 'br'))
@@ -2428,7 +2537,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     // theme.wallpaper 在内存里始终是能直接喂 CSS 的值（objectURL / http / 渐变），
     // 不是 blobref 令牌。
     if (wallpaper !== undefined) {
+        const legacyWallpaper = isLegacyDefaultWallpaper(wallpaper);
         newTheme.wallpaper = await resolveWallpaperStoredValue(wallpaper);
+        if (legacyWallpaper) Object.assign(newTheme, migrateLegacyDefaultPalette(newTheme));
+    }
+    if ('lockWallpaper' in updates) {
+        newTheme.lockWallpaper = await resolveLockWallpaperStoredValue(lockWallpaper);
     }
     setTheme(newTheme);
 
@@ -2492,6 +2606,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     // blob: objectURL 是本次会话临时的，重启后失效——不能进 LS，清空让加载路径从 assets 重新解析。
     const lsTheme = { ...newTheme };
     if (lsTheme.wallpaper && (lsTheme.wallpaper.startsWith('data:') || lsTheme.wallpaper.startsWith('blob:'))) lsTheme.wallpaper = '';
+    if (lsTheme.lockWallpaper && (lsTheme.lockWallpaper.startsWith('data:') || lsTheme.lockWallpaper.startsWith('blob:'))) lsTheme.lockWallpaper = undefined;
     // Banned legacy field — never persist.
     lsTheme.launcherWidgetImage = undefined;
     // Strip data URIs and deprecated slots from widgets for LS
@@ -2929,7 +3044,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const updateUserProfile = async (updates: Partial<UserProfile>) => { setUserProfile(prev => { const next = { ...prev, ...updates }; DB.saveUserProfile(next); return next; }); };
   const addCustomTheme = async (theme: ChatTheme) => { setCustomThemes(prev => { const exists = prev.find(t => t.id === theme.id); if (exists) return prev.map(t => t.id === theme.id ? theme : t); return [...prev, theme]; }); await DB.saveTheme(theme); };
   const removeCustomTheme = async (id: string) => { setCustomThemes(prev => prev.filter(t => t.id !== id)); await DB.deleteTheme(id); };
-  const setCustomIcon = async (appId: string, iconUrl: string | undefined) => { setCustomIcons(prev => { const next = { ...prev }; if (iconUrl) next[appId] = iconUrl; else delete next[appId]; return next; }); if (iconUrl) { await DB.saveAsset(`icon_${appId}`, iconUrl); } else { await DB.deleteAsset(`icon_${appId}`); } };
+  const setCustomIcon = async (appId: string, iconUrl: string | undefined) => {
+      const stored = iconUrl?.startsWith('data:') ? await migrateDataUrlToRef(iconUrl) : iconUrl;
+      setCustomIcons(prev => {
+          const next = { ...prev };
+          if (stored) next[appId] = stored;
+          else delete next[appId];
+          return next;
+      });
+      if (stored) await DB.saveAsset(`icon_${appId}`, stored);
+      else await DB.deleteAsset(`icon_${appId}`);
+  };
   const addToast = (message: string, type: Toast['type'] = 'info') => { const id = Date.now().toString(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 3000); };
   const showError = (title: string, details: string) => { setErrorDialog({ title, details }); };
   const dismissError = () => { setErrorDialog(null); };
@@ -2941,6 +3066,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const presetTheme: OSTheme = { ...theme };
       if (presetTheme.wallpaper && presetTheme.wallpaper.startsWith('blob:')) {
           presetTheme.wallpaper = (await DB.getAsset('wallpaper')) || '';
+      }
+      if (presetTheme.lockWallpaper?.startsWith('blob:')) {
+          presetTheme.lockWallpaper = (await DB.getAsset('lock_wallpaper')) || undefined;
       }
       const preset: AppearancePreset = {
           id: `ap_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -2971,11 +3099,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       if (sanitizedPresetTheme.wallpaper !== undefined && typeof sanitizedPresetTheme.wallpaper === 'string') {
           sanitizedPresetTheme.wallpaper = await resolveWallpaperStoredValue(sanitizedPresetTheme.wallpaper);
       }
+      if ('lockWallpaper' in sanitizedPresetTheme) {
+          sanitizedPresetTheme.lockWallpaper = await resolveLockWallpaperStoredValue(sanitizedPresetTheme.lockWallpaper);
+      }
       // Apply theme
       setTheme(sanitizedPresetTheme);
       // 写 LS 前必须剥 data URI / blob: objectURL，否则 base64 壁纸撑爆 quota、blob: 重启即失效
       const lsTheme: any = { ...sanitizedPresetTheme };
       if (lsTheme.wallpaper && typeof lsTheme.wallpaper === 'string' && (lsTheme.wallpaper.startsWith('data:') || lsTheme.wallpaper.startsWith('blob:'))) lsTheme.wallpaper = '';
+      if (lsTheme.lockWallpaper && typeof lsTheme.lockWallpaper === 'string' && (lsTheme.lockWallpaper.startsWith('data:') || lsTheme.lockWallpaper.startsWith('blob:'))) lsTheme.lockWallpaper = undefined;
       lsTheme.launcherWidgetImage = undefined;
       if (lsTheme.launcherWidgets) {
           const cleanWidgets: Record<string, string> = {};
@@ -3002,10 +3134,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       applyCustomFont(preset.theme.customFont);
       // Apply custom icons if present
       if (preset.customIcons) {
-          setCustomIcons(preset.customIcons);
+          const persistedIcons: Record<string, string> = {};
           for (const [appId, iconUrl] of Object.entries(preset.customIcons)) {
-              await DB.saveAsset(`icon_${appId}`, iconUrl);
+              const stored = iconUrl.startsWith('data:') ? await migrateDataUrlToRef(iconUrl) : iconUrl;
+              persistedIcons[appId] = stored;
+              await DB.saveAsset(`icon_${appId}`, stored);
           }
+          setCustomIcons(persistedIcons);
       }
       // Apply chat themes if present
       if (preset.chatThemes) {
@@ -3125,7 +3260,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           raw = JSON.parse(text);
       }
       if (raw.type !== 'sully_appearance_preset') throw new Error('无效的外观预设文件');
-      const preset: AppearancePreset = {
+      const preset = await migrateAppearancePresetBlobRefs({
           id: `ap_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           name: raw.name || '导入的预设',
           createdAt: Date.now(),
@@ -3133,7 +3268,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           customIcons: raw.customIcons,
           chatThemes: raw.chatThemes,
           chatLayout: raw.chatLayout,
-      };
+      } as AppearancePreset);
       setAppearancePresets(prev => [preset, ...prev]);
       await DB.saveAsset(`appearance_preset_${preset.id}`, JSON.stringify(preset));
       addToast(`已导入预设「${preset.name}」`, 'success');
@@ -3442,9 +3577,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       const ptr = await DB.getAsset('wallpaper'); // blobref 令牌 / 旧 data: / http
                       (backupData.theme as any).wallpaper = ptr || '';
                   }
+                  const lockWp = (backupData.theme as any).lockWallpaper;
+                  if (typeof lockWp === 'string' && lockWp.startsWith('blob:')) {
+                      const ptr = await DB.getAsset('lock_wallpaper');
+                      (backupData.theme as any).lockWallpaper = ptr || undefined;
+                  }
                   await resolveBlobRefsDeep(backupData.theme);
               }
               if (backupData.roomCustomAssets) await resolveBlobRefsDeep(backupData.roomCustomAssets);
+              if (backupData.customIcons) await resolveBlobRefsDeep(backupData.customIcons);
               if (backupData.appearancePresets) await resolveBlobRefsDeep(backupData.appearancePresets);
 
               if (backupData.socialAppData?.userProfile) processObject(backupData.socialAppData.userProfile);
@@ -4020,13 +4161,19 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
               if (data.customIcons) {
                   for (const [appId, iconUrl] of Object.entries(data.customIcons)) {
-                      await DB.saveAsset(`icon_${appId}`, iconUrl);
+                      const stored = iconUrl.startsWith('data:') ? await migrateDataUrlToRef(iconUrl) : iconUrl;
+                      await DB.saveAsset(`icon_${appId}`, stored);
                   }
               }
               if (data.appearancePresets) {
+                  const cache = new Map<string, string>();
+                  const migratedPresets: AppearancePreset[] = [];
                   for (const preset of data.appearancePresets) {
-                      await DB.saveAsset(`appearance_preset_${preset.id}`, JSON.stringify(preset));
+                      const migrated = await migrateAppearancePresetBlobRefs(preset, cache);
+                      migratedPresets.push(migrated);
+                      await DB.saveAsset(`appearance_preset_${migrated.id}`, JSON.stringify(migrated));
                   }
+                  data.appearancePresets = migratedPresets;
               }
           }
 
@@ -4143,14 +4290,18 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const loadedIcons: Record<string, string> = {};
               const loadedPresets: AppearancePreset[] = [];
               if (Array.isArray(assets)) {
-                  assets.forEach(a => {
-                      if (a.id.startsWith('icon_')) loadedIcons[a.id.replace('icon_', '')] = a.data;
+                  for (const a of assets) {
+                      if (a.id.startsWith('icon_')) {
+                          const stored = a.data.startsWith('data:') ? await migrateDataUrlToRef(a.data) : a.data;
+                          loadedIcons[a.id.replace('icon_', '')] = stored;
+                          if (stored !== a.data) await DB.saveAsset(a.id, stored);
+                      }
                       if (a.id.startsWith('appearance_preset_')) {
                           try {
                               loadedPresets.push(JSON.parse(a.data));
                           } catch {}
                       }
-                  });
+                  }
               }
               setCustomIcons(loadedIcons);
               loadedPresets.sort((a, b) => b.createdAt - a.createdAt);
