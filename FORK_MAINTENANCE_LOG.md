@@ -169,6 +169,32 @@ Current known baseline:
 
 ## Important Risk Points
 
+### Backup / QuickSync Coverage Is Required
+
+User requirement: anything that affects normal use, login state, customization, passwords/tokens/cookies, or user-facing settings must be included in both full backup/restore and QuickSync delta upload/pull.
+
+This includes:
+
+- XHS Lite simple-mode cookie and XHS phone channel token/config.
+- WebDAV/GitHub backup passwords and tokens.
+- API config, model presets, MCP servers/tokens, Luckin/McD tokens, worker/proxy URLs, push/VAPID settings.
+- Appearance/theme choices, nostalgic desktop option, custom icons, appearance presets, widgets, decorations, custom fonts, room custom assets, custom chat CSS presets.
+- Upstream-added user-facing options or local state, such as loyal recruitment state/base URL.
+
+Intentional exclusions:
+
+- Generated voice cache.
+- Generated music cache.
+- Runtime cache blobs that do not affect configuration or customization.
+
+When upstream adds any new setting, toggle, localStorage key, IndexedDB config store, or `assets`-backed customization, check:
+
+- `utils/localSettingsBackup.ts`
+- `utils/quickSync.ts`
+- `types.ts` `FullBackupData`
+- `context/OSContext.tsx` export/import paths
+- full backup tests and QuickSync tests
+
 ### OSContext Is High Risk
 
 `context/OSContext.tsx` is the most collision-prone file. It now contains both:
@@ -341,6 +367,8 @@ Run this when a merge/deploy looks risky:
 - Appearance presets still save/apply/import.
 - Custom icon upload still works.
 - Lock wallpaper behavior still works if used.
+- XHS Lite cookie, WebDAV/GitHub credentials, MCP tokens, and other user settings survive full backup restore.
+- The same settings/customizations survive QuickSync upload/pull between phone and computer.
 
 ## Current Deployment Note
 
