@@ -32,6 +32,7 @@ Current known baseline:
 - Full restore/import now restores `localStorageSettings`.
 - QuickSync delta upload now includes the same local settings snapshot.
 - QuickSync delta pull now restores the local settings snapshot.
+- QuickSync now also includes chat themes and whitelisted settings assets from the IndexedDB `assets` store.
 - Built successfully with `pnpm build`.
 
 ### Custom Features Preserved / Covered
@@ -40,13 +41,18 @@ Current known baseline:
 - XHS phone channel token/config in `os_realtime_config.xhsPhoneConfig`.
 - WebDAV password and GitHub backup token in `os_cloud_backup_config`.
 - MCP server tokens, Luckin/McD tokens, proxy worker URL, push/VAPID config, chat prompt settings, translation settings, and other small user preferences.
+- Upstream loyal recruitment local state and custom base URL via `sullyos_*` keys.
+- Upstream nostalgic appearance via `os_theme.desktopVariant`.
+- Appearance presets, custom icons, widgets, decorations, custom fonts, room custom assets, social profile assets, bank custom furniture assets, and custom chat CSS presets via whitelisted `assets` records.
 
 ### Notes
 
 - The snapshot is intentionally limited to known small settings and prefixes, not arbitrary large localStorage cache blobs.
+- QuickSync asset coverage is intentionally limited to settings/customization assets, not runtime caches such as generated voice/music blobs.
 - Added `utils/localSettingsBackup.test.ts`.
+- Added `utils/quickSync.test.ts`.
 - Verified:
-  - `pnpm vitest run utils/localSettingsBackup.test.ts utils/backupExport.test.ts utils/backupRoundtrip.test.ts`
+  - `pnpm vitest run utils/localSettingsBackup.test.ts utils/quickSync.test.ts utils/backupExport.test.ts utils/backupRoundtrip.test.ts`
   - `pnpm build`
 
 ## 2026-07-21 Upstream Refresh to ac7f739

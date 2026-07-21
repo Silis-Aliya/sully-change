@@ -25,6 +25,8 @@ export const QUICK_SYNC_STORES = [
     'characters',
     'character_groups',
     'messages',
+    'themes',
+    'assets',
     'worldbooks',
     'memory_nodes',
     'memory_links',
@@ -44,6 +46,35 @@ export const QUICK_SYNC_STORES = [
     'world_episodes',
     'daily_schedule',
 ] as const;
+
+const QUICK_SYNC_ASSET_IDS = new Set([
+    'wallpaper',
+    'lock_wallpaper',
+    'launcherWidgetImage',
+    'custom_font_data',
+    'room_custom_assets_list',
+    'wallpaper_user_backup',
+    'spark_social_profile',
+    'spark_user_bg',
+    'bank_custom_furniture_assets_v1',
+    'chrome_css_presets',
+]);
+
+const QUICK_SYNC_ASSET_PREFIXES = [
+    'icon_',
+    'appearance_preset_',
+    'widget_',
+    'deco_',
+    'pixel_char_',
+    'pixel_home_theme_',
+] as const;
+
+export const shouldIncludeQuickSyncRow = (storeName: string, row: any): boolean => {
+    if (storeName !== 'assets') return true;
+    const id = typeof row?.id === 'string' ? row.id : '';
+    if (!id) return false;
+    return QUICK_SYNC_ASSET_IDS.has(id) || QUICK_SYNC_ASSET_PREFIXES.some(prefix => id.startsWith(prefix));
+};
 
 const getDeviceId = (): string => {
     try {
@@ -103,7 +134,7 @@ export const buildQuickSyncManifest = async (
     const records: Record<string, Map<string, any>> = {};
     for (let i = 0; i < QUICK_SYNC_STORES.length; i++) {
         const storeName = QUICK_SYNC_STORES[i];
-        const rows = await DB.getRawStoreData(storeName);
+        const rows = (await DB.getRawStoreData(storeName)).filter(row => shouldIncludeQuickSyncRow(storeName, row));
         const hashes: Record<string, string> = {};
         const map = new Map<string, any>();
         for (const row of rows) {
