@@ -411,6 +411,7 @@ interface OSContextType {
   importSystem: (fileOrJson: File | string) => Promise<void>; // Accept File or String
   resetSystem: () => Promise<void>;
   sysOperation: { status: 'idle' | 'processing', message: string, progress: number }; // Progress state
+  dismissSysOperation: () => void;
 
   // Logs
   systemLogs: SystemLog[];
@@ -892,6 +893,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   
   // Sys Operation Status
   const [sysOperation, setSysOperation] = useState<{ status: 'idle' | 'processing', message: string, progress: number }>({ status: 'idle', message: '', progress: 0 });
+  const dismissSysOperation = () => setSysOperation({ status: 'idle', message: '', progress: 0 });
 
   // Cloud Backup Config
   const defaultCloudBackupConfig: CloudBackupConfig = {
@@ -4492,6 +4494,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     importSystem,
     resetSystem,
     sysOperation,
+    dismissSysOperation,
     systemLogs,
     clearLogs,
     registerBackHandler,

@@ -354,6 +354,7 @@ const Settings: React.FC = () => {
       cloudBackupConfig, updateCloudBackupConfig,
       cloudBackupToWebDAV, cloudRestoreFromWebDAV, listCloudBackups,
       quickSyncUploadDelta, quickSyncPullDelta,
+      dismissSysOperation,
   } = useOS();
   
   const [localKey, setLocalKey] = useState(apiConfig.apiKey);
@@ -1305,6 +1306,7 @@ const Settings: React.FC = () => {
 
   const hasGitHubBackup = !!(cloudBackupConfig.githubToken && cloudBackupConfig.githubOwner);
   const hasWebDAVBackup = !!(cloudBackupConfig.webdavUrl && cloudBackupConfig.username && cloudBackupConfig.password);
+  const isSystemBusy = sysOperation.status === 'processing';
 
   return (
     <div className="h-full w-full bg-slate-50/50 flex flex-col font-light relative">
@@ -1320,6 +1322,13 @@ const Settings: React.FC = () => {
                           <div className="h-full bg-primary transition-all duration-300" style={{ width: `${sysOperation.progress}%` }}></div>
                       </div>
                   )}
+                  <button
+                      type="button"
+                      onClick={dismissSysOperation}
+                      className="mt-1 px-4 py-2 rounded-xl bg-slate-100 text-xs font-bold text-slate-500 active:scale-95"
+                  >
+                      关闭遮罩
+                  </button>
               </div>
           </div>
       )}
@@ -1350,21 +1359,21 @@ const Settings: React.FC = () => {
             }
         >
             <div className="mb-3">
-                <button onClick={() => handleExport('full')} className="w-full py-4 bg-gradient-to-r from-violet-500 to-purple-600 border border-violet-300 rounded-xl text-xs font-bold text-white shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 relative overflow-hidden mb-3">
+                <button onClick={() => handleExport('full')} disabled={isSystemBusy} className="w-full py-4 bg-gradient-to-r from-violet-500 to-purple-600 border border-violet-300 rounded-xl text-xs font-bold text-white shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 relative overflow-hidden mb-3 disabled:opacity-50">
                     <div className="absolute top-0 right-0 px-1.5 py-0.5 bg-white/20 text-[9px] text-white rounded-bl-lg font-bold">完整</div>
                     <div className="p-2 bg-white/20 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" /></svg></div>
-                    <span>整合导出 (文字+媒体)</span>
+                    <span>{isSystemBusy ? '处理中…' : '整合导出 (文字+媒体)'}</span>
                 </button>
             </div>
 
             <p className="text-[10px] text-slate-400 px-1 mb-3 text-center">以下为分步导出，适合低配设备分次备份</p>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
-                <button onClick={() => handleExport('text_only')} className="py-4 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 relative overflow-hidden">
+                <button onClick={() => handleExport('text_only')} disabled={isSystemBusy} className="py-4 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 relative overflow-hidden disabled:opacity-50">
                     <div className="p-2 bg-blue-50 rounded-full text-blue-500"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg></div>
                     <span>纯文字备份</span>
                 </button>
-                 <button onClick={() => handleExport('media_only')} className="py-4 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2">
+                 <button onClick={() => handleExport('media_only')} disabled={isSystemBusy} className="py-4 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 disabled:opacity-50">
                     <div className="p-2 bg-pink-50 rounded-full text-pink-500"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" /></svg></div>
                     <span>媒体与美化素材</span>
                 </button>
@@ -1467,9 +1476,9 @@ const Settings: React.FC = () => {
                                 github.com/{cloudBackupConfig.githubOwner}/{cloudBackupConfig.githubRepo || 'sully-backup'}/releases
                             </a>
                             <div className="grid grid-cols-3 gap-2">
-                                <button onClick={() => handleCloudBackup('text_only', 'github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">备份文字</button>
-                                <button onClick={() => handleCloudBackup('full', 'github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">完整备份</button>
-                                <button onClick={() => handleOpenCloudRestore('github')} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95">恢复</button>
+                                <button onClick={() => handleCloudBackup('text_only', 'github')} disabled={isSystemBusy} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95 disabled:opacity-50">备份文字</button>
+                                <button onClick={() => handleCloudBackup('full', 'github')} disabled={isSystemBusy} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95 disabled:opacity-50">完整备份</button>
+                                <button onClick={() => handleOpenCloudRestore('github')} disabled={isSystemBusy} className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95 disabled:opacity-50">恢复</button>
                             </div>
                         </>
                     )}
@@ -1493,13 +1502,13 @@ const Settings: React.FC = () => {
                     {hasWebDAVBackup && (
                         <div className="space-y-2">
                             <div className="grid grid-cols-2 gap-2">
-                                <button onClick={quickSyncUploadDelta} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-sky-700 active:scale-95">上传增量</button>
-                                <button onClick={quickSyncPullDelta} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95">拉取增量</button>
+                                <button onClick={quickSyncUploadDelta} disabled={isSystemBusy} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-sky-700 active:scale-95 disabled:opacity-50">上传增量</button>
+                                <button onClick={quickSyncPullDelta} disabled={isSystemBusy} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-emerald-600 active:scale-95 disabled:opacity-50">拉取增量</button>
                             </div>
                             <div className="grid grid-cols-3 gap-2">
-                                <button onClick={() => handleCloudBackup('text_only', 'webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">上传文字</button>
-                                <button onClick={() => handleCloudBackup('full', 'webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">上传完整</button>
-                                <button onClick={() => handleOpenCloudRestore('webdav')} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95">恢复完整</button>
+                                <button onClick={() => handleCloudBackup('text_only', 'webdav')} disabled={isSystemBusy} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95 disabled:opacity-50">上传文字</button>
+                                <button onClick={() => handleCloudBackup('full', 'webdav')} disabled={isSystemBusy} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95 disabled:opacity-50">上传完整</button>
+                                <button onClick={() => handleOpenCloudRestore('webdav')} disabled={isSystemBusy} className="py-2 bg-white border border-sky-100 rounded-xl text-[10px] font-bold text-slate-600 active:scale-95 disabled:opacity-50">恢复完整</button>
                             </div>
                         </div>
                     )}
