@@ -4,7 +4,7 @@ import { DB } from '../utils/db';
 import { modelRejectsSamplingParams, stripSamplingParams, isSamplingParamError } from '../utils/samplingParamCompat';
 import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport';
 import { isBlobRef, getBlobForRef, migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep, BLOBREF_PREFIX, deleteBlobRefIfUnreferenced } from '../utils/blobRef';
-import { isLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
+import { LEGACY_DEFAULT_WALLPAPER, isLegacyDefaultWallpaper, shouldPreserveLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
@@ -47,7 +47,7 @@ import { exportWorldHomeLocal } from '../utils/worldHome/localBackup';
 import { exportLuckinLocal } from '../utils/luckinMcpClient';
 import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
-import { inspectCsyBackup, prepareCsyMigration, type CsyMigrationReport } from '../utils/csyMigration';
+import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
 
 type ProactiveRunReason =
   | { kind: 'music-track-change'; detail: MusicTrackChangeDetail }
@@ -408,8 +408,6 @@ interface OSContextType {
   // System
   exportSystem: (mode: 'text_only' | 'media_only' | 'full') => Promise<Blob>;
   importSystem: (fileOrJson: File | string) => Promise<void>; // Accept File or String
-  previewCsySystem: (fileOrJson: File | string) => Promise<CsyMigrationReport>;
-  importCsySystem: (fileOrJson: File | string) => Promise<void>;
   resetSystem: () => Promise<void>;
   sysOperation: { status: 'idle' | 'processing', message: string, progress: number }; // Progress state
 
@@ -450,10 +448,25 @@ export const DEFAULT_PAPER_APPEARANCE = {
   saturation: 14,
   lightness: 46,
   contentColor: '#4b4136',
+  desktopVariant: 'paper',
+} as const;
+
+/** 用户主动选择的最初默认界面：粉绿渐变、白色文字与白色玻璃桌面组件。 */
+export const NOSTALGIA_APPEARANCE = {
+  skin: 'default',
+  desktopVariant: 'nostalgia',
+  hue: 245,
+  saturation: 25,
+  lightness: 65,
+  contentColor: '#ffffff',
+  wallpaper: LEGACY_DEFAULT_WALLPAPER,
+  darkMode: false,
+  nowPlayingWidgetLight: false,
 } as const;
 
 const migrateLegacyDefaultPalette = (theme: OSTheme): OSTheme => {
   const next = { ...theme };
+  next.desktopVariant = 'paper';
   if (!next.contentColor || next.contentColor.toLowerCase() === '#ffffff') {
     next.contentColor = DEFAULT_PAPER_APPEARANCE.contentColor;
   }
@@ -507,11 +520,11 @@ const replaceWallpaperAssetPointer = async (assetId: 'wallpaper' | 'lock_wallpap
  *   · http(s) / 空 / 渐变 → 删除 assets 指针，原样返回。
  * 传入空字符串（重置）时原样返回，交给上层用 DEFAULT_WALLPAPER 兜底。
  */
-const resolveWallpaperStoredValue = async (w: string): Promise<string> => {
+const resolveWallpaperStoredValue = async (w: string, preserveLegacyDefault = false): Promise<string> => {
     const revokePrev = () => {
         if (currentWallpaperObjUrl) { try { URL.revokeObjectURL(currentWallpaperObjUrl); } catch { /* ignore */ } currentWallpaperObjUrl = null; }
     };
-    if (isLegacyDefaultWallpaper(w)) {
+    if (isLegacyDefaultWallpaper(w) && !preserveLegacyDefault) {
         await replaceWallpaperAssetPointer('wallpaper', null);
         revokePrev();
         return DEFAULT_WALLPAPER;
@@ -1171,15 +1184,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         let loadedTheme = { ...defaultTheme };
         if (savedThemeStr) {
              try {
-                const parsed = JSON.parse(savedThemeStr);
-                loadedTheme = { ...loadedTheme, ...parsed };
-                if (isLegacyDefaultWallpaper(loadedTheme.wallpaper) || (isPaperWallpaper(loadedTheme.wallpaper) && loadedTheme.wallpaper !== DEFAULT_WALLPAPER)) {
-                    loadedTheme.wallpaper = DEFAULT_WALLPAPER;
-                    loadedTheme = migrateLegacyDefaultPalette(loadedTheme);
-                }
-                // Strip the legacy Unsplash hard-coded wallpaper, keep user-imported http(s) URLs
-                if (
-                    loadedTheme.wallpaper.includes('unsplash') ||
+                 const parsed = JSON.parse(savedThemeStr);
+                 loadedTheme = { ...loadedTheme, ...parsed };
+                 // 仅迁移旧系统默认值；用户自定义过的壁纸、文字色和主题色全部保留。
+                 const preserveNostalgia = shouldPreserveLegacyDefaultWallpaper(loadedTheme.wallpaper, loadedTheme.desktopVariant);
+                 if ((!preserveNostalgia && isLegacyDefaultWallpaper(loadedTheme.wallpaper)) || (isPaperWallpaper(loadedTheme.wallpaper) && loadedTheme.wallpaper !== DEFAULT_WALLPAPER)) {
+                     loadedTheme.wallpaper = DEFAULT_WALLPAPER;
+                     loadedTheme = migrateLegacyDefaultPalette(loadedTheme);
+                 }
+                 // Strip the legacy Unsplash hard-coded wallpaper, keep user-imported http(s) URLs
+                 if (
+                     loadedTheme.wallpaper.includes('unsplash') ||
                      loadedTheme.wallpaper === ''
                  ) {
                      loadedTheme.wallpaper = DEFAULT_WALLPAPER;
@@ -1230,12 +1245,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                     // assets 'wallpaper' 现在存的是指针（blobref 令牌 / 旧 data: / http）。
                     // 解析成可渲染 url（令牌→objectURL；旧 data: 顺手迁移成 Blob）。
                     const legacyAssetWallpaper = isLegacyDefaultWallpaper(assetMap['wallpaper']);
-                    if (legacyAssetWallpaper || isPaperWallpaper(assetMap['wallpaper'])) {
+                    const preserveNostalgia = shouldPreserveLegacyDefaultWallpaper(assetMap['wallpaper'], loadedTheme.desktopVariant);
+                    if ((legacyAssetWallpaper && !preserveNostalgia) || isPaperWallpaper(assetMap['wallpaper'])) {
                         loadedTheme.wallpaper = DEFAULT_WALLPAPER;
                         if (legacyAssetWallpaper) loadedTheme = migrateLegacyDefaultPalette(loadedTheme);
                         await DB.deleteAsset('wallpaper');
                     } else {
-                        loadedTheme.wallpaper = await resolveWallpaperStoredValue(assetMap['wallpaper']);
+                        loadedTheme.wallpaper = await resolveWallpaperStoredValue(assetMap['wallpaper'], preserveNostalgia);
                     }
                 }
                 if (assetMap['lock_wallpaper']) {
@@ -2538,8 +2554,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     // 不是 blobref 令牌。
     if (wallpaper !== undefined) {
         const legacyWallpaper = isLegacyDefaultWallpaper(wallpaper);
-        newTheme.wallpaper = await resolveWallpaperStoredValue(wallpaper);
-        if (legacyWallpaper) Object.assign(newTheme, migrateLegacyDefaultPalette(newTheme));
+        const preserveNostalgia = shouldPreserveLegacyDefaultWallpaper(wallpaper, newTheme.desktopVariant);
+        newTheme.wallpaper = await resolveWallpaperStoredValue(wallpaper, preserveNostalgia);
+        if (legacyWallpaper && !preserveNostalgia) Object.assign(newTheme, migrateLegacyDefaultPalette(newTheme));
     }
     if ('lockWallpaper' in updates) {
         newTheme.lockWallpaper = await resolveLockWallpaperStoredValue(lockWallpaper);
@@ -3097,7 +3114,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
       // 壁纸改存 Blob：把预设里的指针（blobref 令牌 / 旧 data:）落库并解析成 objectURL 再进 state。
       if (sanitizedPresetTheme.wallpaper !== undefined && typeof sanitizedPresetTheme.wallpaper === 'string') {
-          sanitizedPresetTheme.wallpaper = await resolveWallpaperStoredValue(sanitizedPresetTheme.wallpaper);
+          const legacyWallpaper = isLegacyDefaultWallpaper(sanitizedPresetTheme.wallpaper);
+          const preserveNostalgia = shouldPreserveLegacyDefaultWallpaper(
+              sanitizedPresetTheme.wallpaper,
+              sanitizedPresetTheme.desktopVariant,
+          );
+          sanitizedPresetTheme.wallpaper = await resolveWallpaperStoredValue(sanitizedPresetTheme.wallpaper, preserveNostalgia);
+          if (legacyWallpaper && !preserveNostalgia) {
+              Object.assign(sanitizedPresetTheme, migrateLegacyDefaultPalette(sanitizedPresetTheme));
+          }
       }
       if ('lockWallpaper' in sanitizedPresetTheme) {
           sanitizedPresetTheme.lockWallpaper = await resolveLockWallpaperStoredValue(sanitizedPresetTheme.lockWallpaper);
@@ -3874,29 +3899,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   };
 
-  const previewCsySystem = async (fileOrJson: File | string): Promise<CsyMigrationReport> => {
-      let raw: unknown;
-      if (typeof fileOrJson === 'string') {
-          raw = JSON.parse(fileOrJson);
-      } else if (!fileOrJson.name.toLowerCase().endsWith('.zip')) {
-          raw = JSON.parse(await fileOrJson.text());
-      } else {
-          const JSZip = await loadJSZip();
-          const zip = await JSZip.loadAsync(fileOrJson);
-          if (zip.file('manifest.json')) {
-              throw new Error('这是一份 SullyOS 分片备份，不是 CSY-OS 的 data.json 备份。');
-          }
-          const dataFile = zip.file('data.json');
-          if (!dataFile) throw new Error('CSY-OS 备份损坏：缺少 data.json。');
-          raw = JSON.parse(await dataFile.async('string'));
-      }
-      return inspectCsyBackup(raw);
-  };
-
-  const importSystem = async (
-      fileOrJson: File | string,
-      options: { source?: 'sully' | 'csy' } = {},
-  ): Promise<void> => {
+  const importSystem = async (fileOrJson: File | string): Promise<void> => {
       const sourceName = typeof fileOrJson === 'string' ? 'json' : fileOrJson.name;
       const sourceSize = typeof fileOrJson === 'string'
           ? (typeof Blob !== 'undefined' ? new Blob([fileOrJson]).size : fileOrJson.length)
@@ -3964,7 +3967,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       showImportProgress('parsing', '正在解析备份文件...', 1, { current: '解析备份文件', sourceSize });
       try {
           let data: FullBackupData;
-          let csyReport: CsyMigrationReport | undefined;
           let zip: JSZipLike | null = null;
 
           if (typeof fileOrJson === 'string') {
@@ -4015,15 +4017,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
           }
 
-          if (options.source === 'csy') {
-              if (zip?.file('manifest.json')) {
-                  throw new Error('选择的文件是 SullyOS 备份，不需要走 CSY-OS 迁移入口。');
-              }
-              showImportProgress('converting', '正在转换 CSY-OS 数据...', 32, { current: '转换向量记忆与角色配置' });
-              const prepared = prepareCsyMigration(data);
-              data = prepared.data;
-              csyReport = prepared.report;
-          }
+          // 必须发生在 restoreAssetsInPlace / DB.importFullData 之前：不受支持的第三方
+          // 备份一旦命中特征就整包拒绝，不能出现“导入了一半才报错”的状态。
+          assertSupportedSullyBackup(data);
 
           const hadAssetStoreBackup = data.assets !== undefined;
           const hadCustomIconsBackup = data.customIcons !== undefined;
@@ -4318,12 +4314,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           
           setSysOperation({ status: 'idle', message: '', progress: 100 });
           clearImportInProgress();
-          addToast(
-              csyReport
-                  ? `CSY-OS 迁移完成：${csyReport.vectorMemories} 条记忆，${csyReport.reusableVectors} 条向量已复用。系统即将重启...`
-                  : '恢复成功，系统即将重启...',
-              'success',
-          );
+          addToast('恢复成功，系统即将重启...', 'success');
           setTimeout(() => window.location.reload(), 1500);
 
       } catch (e: any) {
@@ -4342,9 +4333,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           throw new Error(`恢复失败: ${msg}`);
       }
   };
-
-  const importCsySystem = (fileOrJson: File | string): Promise<void> =>
-      importSystem(fileOrJson, { source: 'csy' });
 
   const resetSystem = async () => { try { await DB.deleteDB(); localStorage.clear(); window.location.reload(); } catch (e) { console.error(e); addToast('重置失败，请手动清除浏览器数据', 'error'); } };
   const openApp = (appId: AppID) => setActiveApp(appId);
@@ -4499,8 +4487,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     quickSyncPullDelta,
     exportSystem,
     importSystem,
-    previewCsySystem,
-    importCsySystem,
     resetSystem,
     sysOperation,
     systemLogs,

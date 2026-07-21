@@ -23,6 +23,40 @@ Current known baseline:
 - Vercel deployment after that push succeeded.
 ```
 
+## 2026-07-21 Upstream Refresh to ac7f739
+
+### Result
+
+- Fetched upstream and found `upstream/master` advanced from `98c6c1e` to `ac7f739`.
+- Merged latest upstream into `codex/merge-upstream-20260721`.
+- Resolved conflicts in:
+  - `apps/Settings.tsx`
+  - `context/OSContext.tsx`
+- Built successfully with `pnpm build`.
+
+### Upstream Changes Integrated
+
+- Loyal user recruitment feature:
+  - `components/LoyalUserRecruitmentEvent.tsx`
+  - `utils/loyalUserEligibility.ts`
+  - `utils/loyalUserRecruitment.ts`
+  - `worker/loyal-recruitment/*`
+- Nostalgic desktop appearance option.
+- Chat module card avatar hiding fix.
+- Backup import policy guard replacing the older CSY migration path.
+- Worker build script update for loyal recruitment worker bundling.
+
+### Conflict Notes
+
+- `apps/Settings.tsx`: kept local `cloudRestoreProvider` state for WebDAV/GitHub restore source and upstream `showCommunityMigration` state for the loyal recruitment controller.
+- `context/OSContext.tsx`: kept local music together / QuickSync / backup / XHS / proactive changes while adopting upstream nostalgia-preserving wallpaper migration logic.
+- Removed old CSY migration references in favor of upstream `assertSupportedSullyBackup`.
+
+### Follow-Up Checks
+
+- `pnpm build` passed, including `loyal-recruitment` worker bundling.
+- Manual runtime checks still recommended for Settings, Appearance, backup import/restore, QuickSync, music together, and XHS phone channel.
+
 ## 2026-07-21 Merge Baseline
 
 ### Result
