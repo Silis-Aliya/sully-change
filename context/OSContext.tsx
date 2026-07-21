@@ -433,6 +433,19 @@ interface OSContextType {
 
 export const DEFAULT_WALLPAPER = 'linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%)';
 
+export const DEFAULT_PAPER_APPEARANCE = {
+  hue: 88,
+  saturation: 14,
+  lightness: 46,
+  contentColor: '#4b4136',
+};
+
+export const isPaperWallpaper = (wallpaper?: string) => {
+  if (!wallpaper) return false;
+  const compact = wallpaper.toLowerCase().replace(/\s+/g, '');
+  return compact.includes('#f3ecdf') || compact.includes('rgb(243,236,223)') || compact.includes('#fdfcf9');
+};
+
 // 壁纸改存 Blob（见 utils/blobRef.ts）：assets store 的 'wallpaper' 记录只存一个指针值
 // （blobref 令牌 / 旧 data: / http url），真正二进制在 blob_assets。内存里 theme.wallpaper
 // 必须是能直接喂给 CSS 的 url，所以令牌要解析成 objectURL。全 OS 只有一张壁纸，用一个模块级
