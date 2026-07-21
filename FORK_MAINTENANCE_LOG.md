@@ -33,6 +33,7 @@ Current known baseline:
 - QuickSync delta upload now includes the same local settings snapshot.
 - QuickSync delta pull now restores the local settings snapshot.
 - QuickSync now also includes chat themes and whitelisted settings assets from the IndexedDB `assets` store.
+- QuickSync now scans synced records/settings for `blobref:*` image references and includes the referenced `blob_assets` image bodies incrementally.
 - Built successfully with `pnpm build`.
 
 ### Custom Features Preserved / Covered
@@ -44,11 +45,13 @@ Current known baseline:
 - Upstream loyal recruitment local state and custom base URL via `sullyos_*` keys.
 - Upstream nostalgic appearance via `os_theme.desktopVariant`.
 - Appearance presets, custom icons, widgets, decorations, custom fonts, room custom assets, social profile assets, bank custom furniture assets, and custom chat CSS presets via whitelisted `assets` records.
+- Blob-backed wallpaper, lock wallpaper, avatars, room images, widgets, decorations, and other synced images referenced by `blobref:*`.
 
 ### Notes
 
 - The snapshot is intentionally limited to known small settings and prefixes, not arbitrary large localStorage cache blobs.
-- QuickSync asset coverage is intentionally limited to settings/customization assets, not runtime caches such as generated voice/music blobs.
+- QuickSync asset coverage is intentionally limited to settings/customization assets and referenced image blobs, not runtime caches such as generated voice/music blobs.
+- Referenced image blobs are tracked in the QuickSync manifest so the first sync after this change may upload needed image bodies, then later syncs only upload changed/new referenced blobs.
 - Added `utils/localSettingsBackup.test.ts`.
 - Added `utils/quickSync.test.ts`.
 - Verified:
@@ -367,6 +370,7 @@ Run this when a merge/deploy looks risky:
 - Appearance presets still save/apply/import.
 - Custom icon upload still works.
 - Lock wallpaper behavior still works if used.
+- Desktop wallpaper, lock wallpaper, custom icons, avatars, widgets, room images, and other blob-backed images survive QuickSync upload/pull.
 - XHS Lite cookie, WebDAV/GitHub credentials, MCP tokens, and other user settings survive full backup restore.
 - The same settings/customizations survive QuickSync upload/pull between phone and computer.
 

@@ -1,5 +1,6 @@
 import { DB } from './db';
 import { exportLocalStorageSettings, importLocalStorageSettings } from './localSettingsBackup';
+import { BLOBREF_PREFIX } from './blobRef';
 
 export type QuickSyncManifest = {
     version: 1;
@@ -69,11 +70,41 @@ const QUICK_SYNC_ASSET_PREFIXES = [
     'pixel_home_theme_',
 ] as const;
 
+const escapeRegExp = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const BLOBREF_RE = new RegExp(`${escapeRegExp(BLOBREF_PREFIX)}([A-Za-z0-9_-]+)`, 'g');
+
 export const shouldIncludeQuickSyncRow = (storeName: string, row: any): boolean => {
     if (storeName !== 'assets') return true;
     const id = typeof row?.id === 'string' ? row.id : '';
     if (!id) return false;
     return QUICK_SYNC_ASSET_IDS.has(id) || QUICK_SYNC_ASSET_PREFIXES.some(prefix => id.startsWith(prefix));
+};
+
+export const collectBlobRefIds = (value: any): string[] => {
+    const ids = new Set<string>();
+    const seen = new WeakSet<object>();
+    const visit = (node: any) => {
+        if (node === null || node === undefined) return;
+        if (typeof node === 'string') {
+            for (const match of node.matchAll(BLOBREF_RE)) {
+                if (match[1]) ids.add(match[1]);
+            }
+            return;
+        }
+        if (typeof node !== 'object') return;
+        if (seen.has(node)) return;
+        seen.add(node);
+        if (node instanceof Blob) return;
+        if (Array.isArray(node)) {
+            for (const item of node) visit(item);
+            return;
+        }
+        for (const item of Object.values(node)) visit(item);
+    };
+    visit(value);
+    return Array.from(ids);
 };
 
 const getDeviceId = (): string => {
@@ -106,6 +137,12 @@ const hashText = async (text: string): Promise<string> => {
     const bytes = new TextEncoder().encode(text);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+const hashBlob = async (blob: Blob): Promise<string> => {
+    const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `${blob.type || 'application/octet-stream'}:${blob.size}:${hex}`;
 };
 
 const recordKey = (item: any): string | null => {
@@ -194,9 +231,46 @@ export const buildQuickSyncDelta = async (
         onProgress?.(i + 1, QUICK_SYNC_STORES.length, `${storeName}: ${changed}`);
     }
 
+    const localStorageSettings = exportLocalStorageSettings();
+    const blobRefIds = new Set<string>();
+    for (const map of Object.values(records)) {
+        for (const row of map.values()) {
+            collectBlobRefIds(row).forEach(id => blobRefIds.add(id));
+        }
+    }
+    if (localStorageSettings) {
+        collectBlobRefIds(localStorageSettings).forEach(id => blobRefIds.add(id));
+    }
+    const blobHashes: Record<string, string> = {};
+    const blobEntries = new Map<string, Blob>();
+    for (const id of blobRefIds) {
+        const blob = await DB.getBlobAsset(id).catch(() => null);
+        if (!blob) continue;
+        blobHashes[id] = await hashBlob(blob);
+        blobEntries.set(id, blob);
+    }
+    manifest.stores.blob_assets = blobHashes;
+    const prevBlobHashes = previous?.stores?.blob_assets || {};
+    const blobManifest: Record<string, { type: string; size: number }> = {};
+    let blobUpserts = 0;
+    for (const [id, hash] of Object.entries(blobHashes)) {
+        if (prevBlobHashes[id] === hash) continue;
+        const blob = blobEntries.get(id);
+        if (!blob) continue;
+        zip.file(`blob-assets/${id}`, blob);
+        blobManifest[id] = { type: blob.type || 'application/octet-stream', size: blob.size || 0 };
+        blobUpserts += 1;
+        changed += 1;
+    }
+    if (blobUpserts) {
+        meta.stores.blob_assets = { upserts: blobUpserts, deletes: 0 };
+    }
+    if (blobUpserts) {
+        zip.file('blob-assets-manifest.json', JSON.stringify(blobManifest));
+    }
+
     zip.file('quick-sync-meta.json', JSON.stringify(meta));
     zip.file('quick-sync-manifest.json', JSON.stringify(manifest));
-    const localStorageSettings = exportLocalStorageSettings();
     if (localStorageSettings) {
         zip.file('local-storage-settings.json', JSON.stringify(localStorageSettings));
         changed += Object.keys(localStorageSettings).length;
@@ -219,6 +293,18 @@ export const applyQuickSyncDelta = async (
     let changed = 0;
     const total = Object.values(meta.stores || {}).reduce((sum, store) => sum + store.upserts + store.deletes, 0);
     let done = 0;
+
+    const blobManifestFile = zip.file('blob-assets-manifest.json');
+    if (blobManifestFile) {
+        const blobManifest = JSON.parse(await blobManifestFile.async('string')) as Record<string, { type?: string }>;
+        for (const [id, info] of Object.entries(blobManifest || {})) {
+            const file = zip.file(`blob-assets/${id}`);
+            if (!file) continue;
+            const bytes = await file.async('uint8array');
+            await DB.putBlobAsset(id, new Blob([bytes], { type: info?.type || 'application/octet-stream' }));
+            changed += 1;
+        }
+    }
 
     for (const storeName of QUICK_SYNC_STORES) {
         const file = zip.file(`stores/${storeName}.json`);
