@@ -654,7 +654,10 @@ export const buildWorkbenchCurrentProgressContext = async (sessionId: string, li
                 hour: '2-digit',
                 minute: '2-digit',
             });
-            return `--- ${stamp} ---\n${summary.content.trim()}`;
+            const author = summary.sourceName || (summary.source === 'character' ? '角色' : summary.source === 'codex' ? 'Code' : '');
+            const authorLine = author ? `作者：${author}\n` : '';
+            const content = summary.content.trim();
+            return `--- ${stamp} ---\n${content.includes('作者：') || !authorLine ? '' : authorLine}${content}`;
         }),
     ].join('\n\n');
 };
@@ -681,7 +684,8 @@ export const buildWorkbenchTaskIndex = async (currentSessionId?: string, limit =
             minute: '2-digit',
         });
         const title = session.title || '未命名任务';
-        const content = summary.content.replace(/\s+/g, ' ').trim();
+        const author = summary.sourceName || (summary.source === 'character' ? '角色' : summary.source === 'codex' ? 'Code' : '');
+        const content = `${author ? `作者：${author}；` : ''}${summary.content.replace(/\s+/g, ' ').trim()}`;
         lines.push(`- ${title} · ${stamp}: ${content.slice(0, 260)}`);
         if (lines.length >= limit) break;
     }

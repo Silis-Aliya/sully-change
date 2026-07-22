@@ -89,7 +89,7 @@ const parseProgressCard = (content: string) => {
     for (const rawLine of content.split(/\r?\n/)) {
         const line = rawLine.trim();
         if (!line || /^\[Code\s*进度(?:-[^\]]+)?\]$/i.test(line)) continue;
-        const match = line.match(/^(任务|状态|决策|进度|待办|备注)[：:]\s*(.*)$/);
+        const match = line.match(/^(作者|任务|状态|决策|进度|待办|备注)[：:]\s*(.*)$/);
         if (match) {
             currentKey = match[1];
             fields[currentKey] = match[2].trim();
@@ -155,6 +155,9 @@ const buildUsageStats = (items: WorkbenchMessage[]) => {
 const formatTokens = (value: number) => `${value.toLocaleString('zh-CN')} tokens`;
 
 const cleanWorkbenchContent = (content: string) => content.replace(/\n{3,}/g, '\n\n').trim();
+const ASSISTANT_MENTION_RE = /(^|[\s，。！？、:：])@(AI助理|ai助理|Code|Codex|CLI|代码助理|电脑助理)(?=$|[\s，。！？、:：])/i;
+const hasAssistantMention = (content: string) => ASSISTANT_MENTION_RE.test(content);
+const stripAssistantMention = (content: string) => content.replace(ASSISTANT_MENTION_RE, '$1').replace(/\s{2,}/g, ' ').trim();
 const codeMemoryKey = (content: string) => content
     .toLowerCase()
     .replace(/[\s\p{P}\p{S}]+/gu, '')
@@ -227,7 +230,7 @@ const renderProgressCard = (fields: Record<string, string>) => (
             {fields.__title || 'Code 进度'}
         </div>
         <div className="mt-3 space-y-2">
-            {(['任务', '状态', '决策', '进度', '待办', '备注'] as const).map(key => (
+            {(['作者', '任务', '状态', '决策', '进度', '待办', '备注'] as const).map(key => (
                 <div key={key} className="grid grid-cols-[2.75rem_1fr] gap-2 text-xs leading-relaxed">
                     <span className="font-semibold text-slate-400">{key}</span>
                     <span className="text-slate-700">{fields[key] || '暂无'}</span>
@@ -461,11 +464,17 @@ const WorkbenchMessageRow: React.FC<{
     );
 };
 
-const ensureCharacterProgressCardHeader = (card: string, _charName: string) => {
+const ensureProgressCardAuthor = (card: string, authorName: string) => {
     const trimmed = card.trim();
-    if (/^\[Code 进度-[^\]]+\]/.test(trimmed)) return trimmed.replace(/^\[Code 进度-[^\]]+\]/, '[Code 进度]');
-    if (/^\[Code 进度\]/.test(trimmed)) return trimmed;
-    return `[Code 进度]\n${trimmed}`;
+    const withHeader = /^\[Code 进度-[^\]]+\]/.test(trimmed)
+        ? trimmed.replace(/^\[Code 进度-[^\]]+\]/, '[Code 进度]')
+        : /^\[Code 进度\]/.test(trimmed)
+            ? trimmed
+            : `[Code 进度]\n${trimmed}`;
+    if (/^作者[：:]/m.test(withHeader)) {
+        return withHeader.replace(/^作者[：:].*$/m, `作者：${authorName}`);
+    }
+    return withHeader.replace(/^(\[Code 进度\]\s*)/m, `$1\n作者：${authorName}`).replace(/\n{3,}/g, '\n\n').trim();
 };
 
 const WorkbenchIndex: React.FC<{
@@ -1168,31 +1177,26 @@ const WorkbenchApp: React.FC = () => {
         }
         setSummaryBusy(true);
         try {
-            let source: 'codex' | 'character' = progressSummaryMode;
+            const source: 'codex' | 'character' = progressSummaryMode;
             let card = '';
-            if (progressSummaryMode === 'codex' && workExecutable) {
-                try {
-                    const taskIndex = [
-                        await buildWorkbenchCurrentProgressContext(session.id),
-                        await buildWorkbenchTaskIndex(session.id),
-                    ].filter(Boolean).join('\n\n');
-                    card = await summarizeWorkbenchProgressCardWithBridge(config, {
-                        sessionId: session.id,
-                        sessionTitle: session.title,
-                        messages: activeMessages,
-                        taskIndex,
-                    });
-                } catch (codexError) {
-                    if (!participantEnabled || !selectedParticipant) throw codexError;
+            if (source === 'codex') {
+                if (!workExecutable) {
+                    throw new Error('当前选择的是 Code 总结；请先连接电脑桥接，或切换为角色总结');
                 }
-            }
-            if (!card) {
+                const taskIndex = [
+                    await buildWorkbenchCurrentProgressContext(session.id),
+                    await buildWorkbenchTaskIndex(session.id),
+                ].filter(Boolean).join('\n\n');
+                card = await summarizeWorkbenchProgressCardWithBridge(config, {
+                    sessionId: session.id,
+                    sessionTitle: session.title,
+                    messages: activeMessages,
+                    taskIndex,
+                });
+            } else {
                 if (!participantEnabled || !selectedParticipant) {
-                    throw new Error(progressSummaryMode === 'character'
-                        ? '请先打开一起工作并选择总结角色'
-                        : '未连接 CLI；请先连接电脑桥接，或打开一起工作让角色总结');
+                    throw new Error('当前选择的是角色总结；请先打开一起工作并选择总结角色');
                 }
-                source = 'character';
                 card = await summarizeWorkbenchProgressCardWithCharacter({
                     apiConfig,
                     char: selectedParticipant,
@@ -1203,15 +1207,17 @@ const WorkbenchApp: React.FC = () => {
                     messages: activeMessages,
                 });
             }
-            if (participantEnabled && selectedParticipant) {
-                card = ensureCharacterProgressCardHeader(card, selectedParticipant.name);
-            }
+            const authorName = source === 'character' && selectedParticipant ? selectedParticipant.name : 'Code';
+            card = ensureProgressCardAuthor(card, authorName);
             const now = Date.now();
             const summaryId = makeId('wbs');
             const summaryRow: WorkbenchSummary = {
                 id: summaryId,
                 sessionId: session.id,
                 content: card,
+                source,
+                sourceName: authorName,
+                sourceCharacterId: source === 'character' ? selectedParticipant?.id : undefined,
                 createdAt: now,
             };
             await DB.saveWorkbenchSummary(summaryRow);
@@ -1261,6 +1267,7 @@ const WorkbenchApp: React.FC = () => {
                         workbenchSummaryId: summaryId,
                         progressCard: true,
                         summarySource: source,
+                        summarySourceName: authorName,
                     },
                 } as any);
                 window.dispatchEvent(new CustomEvent('active-msg-progress', {
@@ -1279,6 +1286,7 @@ const WorkbenchApp: React.FC = () => {
                 metadata: {
                     progressCard: true,
                     source,
+                    sourceName: authorName,
                     characterId: participantEnabled ? selectedParticipant?.id : undefined,
                     speakerName: participantEnabled ? selectedParticipant?.name : undefined,
                 },
@@ -1314,90 +1322,30 @@ const WorkbenchApp: React.FC = () => {
         clearMessagePressTimer();
     };
 
-    const send = async (overrideText?: string, options?: { type?: WorkbenchMessage['type']; metadata?: Record<string, any> }) => {
-        const text = (overrideText ?? input).trim();
-        if (!text || busy) return;
-        const readableText = options?.type === 'emoji'
-            ? `[表情: ${options.metadata?.emojiName || '表情包'}]`
-            : text;
-        let s = session || await createWorkbenchSession(activeSpace);
-        if (s.title === '新对话' || s.title === WORKBENCH_SPACES[activeSpace].title) {
-            s = { ...s, title: deriveConversationTitle(readableText) };
-            await DB.saveWorkbenchSession(s);
-        }
-        setSession(s);
-        if (overrideText === undefined) setInput('');
-        setEmojiPanelOpen(false);
-        const replySnapshot = quotedMessage
-            ? {
-                id: quotedMessage.id,
-                content: workbenchMessageText(quotedMessage).slice(0, 180),
-                name: roleLabel(quotedMessage),
-            }
-            : undefined;
-        setQuotedMessage(null);
-        setBusy(true);
-        const userMessage: WorkbenchMessage = {
-            id: makeId('wbm'),
-            sessionId: s.id,
-            role: 'user',
-            kind: 'chat',
-            type: options?.type || 'text',
-            mode: 'codex',
-            content: text,
-            replyTo: replySnapshot,
-            createdAt: Date.now(),
-            status: 'sent',
-            metadata: options?.metadata,
-        };
-        await appendMessage(userMessage);
-        try {
-            setConversations(await loadConversations());
-        } catch (e: any) {
-            addToast(e?.message || '消息保存失败', 'error');
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const nudgeAssistant = async () => {
-        if (busy) return;
-        if (!assistantAvailable) {
-            addToast('CLI 未连接，备用聊天 API 也未配置', 'info');
-            return;
-        }
-        const s = session || await createWorkbenchSession(activeSpace);
-        setSession(s);
-        setEmojiPanelOpen(false);
-        setThinkingSpeaker('codex');
-        setBusy(true);
-        try {
-            const recent = messages
-                .filter(message => message.sessionId === s.id)
-                .slice(-10);
-            if (!recent.length) {
-                addToast('先在 Code 里写一点内容，再请 AI 助理回应', 'info');
-                return;
-            }
-            const taskIndex = await buildWorkbenchTaskIndex(s.id);
-            const contextIndex = [
-                await buildWorkbenchCurrentProgressContext(s.id),
-                taskIndex,
-            ].filter(Boolean).join('\n\n');
-            const bridgeReply = workExecutable
-                ? await sendWorkbenchBridgeMessage(config, {
-                    sessionId: s.id,
-                    mode: 'codex',
-                    capabilityMode: 'execute',
-                    content: '请回应当前 Code 对话中用户尚未得到回应的最新内容。',
-                    recentMessages: recent,
-                    taskIndex: contextIndex,
-                })
-                : await sendWorkbenchFallbackMessage(config, {
-                    content: '请回应当前 Code 对话中用户尚未得到回应的最新内容。',
-                    recentMessages: recent,
-                    taskIndex: contextIndex,
-                });
+    const runAssistantReply = async (
+        s: WorkbenchSession,
+        recent: WorkbenchMessage[],
+        requestContent = '请回应当前 Code 对话中用户尚未得到回应的最新内容。',
+    ) => {
+        const taskIndex = await buildWorkbenchTaskIndex(s.id);
+        const contextIndex = [
+            await buildWorkbenchCurrentProgressContext(s.id),
+            taskIndex,
+        ].filter(Boolean).join('\n\n');
+        const bridgeReply = workExecutable
+            ? await sendWorkbenchBridgeMessage(config, {
+                sessionId: s.id,
+                mode: 'codex',
+                capabilityMode: 'execute',
+                content: requestContent,
+                recentMessages: recent,
+                taskIndex: contextIndex,
+            })
+            : await sendWorkbenchFallbackMessage(config, {
+                content: requestContent,
+                recentMessages: recent,
+                taskIndex: contextIndex,
+            });
             const assistantBase: Omit<WorkbenchMessage, 'id' | 'content' | 'createdAt' | 'type'> = {
                 sessionId: s.id,
                 role: 'codex',
@@ -1443,6 +1391,91 @@ const WorkbenchApp: React.FC = () => {
                 });
             }
             setConversations(await loadConversations());
+    };
+
+    const send = async (overrideText?: string, options?: { type?: WorkbenchMessage['type']; metadata?: Record<string, any> }) => {
+        const text = (overrideText ?? input).trim();
+        if (!text || busy) return;
+        const readableText = options?.type === 'emoji'
+            ? `[表情: ${options.metadata?.emojiName || '表情包'}]`
+            : text;
+        let s = session || await createWorkbenchSession(activeSpace);
+        if (s.title === '新对话' || s.title === WORKBENCH_SPACES[activeSpace].title) {
+            s = { ...s, title: deriveConversationTitle(readableText) };
+            await DB.saveWorkbenchSession(s);
+        }
+        setSession(s);
+        if (overrideText === undefined) setInput('');
+        setEmojiPanelOpen(false);
+        const replySnapshot = quotedMessage
+            ? {
+                id: quotedMessage.id,
+                content: workbenchMessageText(quotedMessage).slice(0, 180),
+                name: roleLabel(quotedMessage),
+            }
+            : undefined;
+        setQuotedMessage(null);
+        setBusy(true);
+        const userMessage: WorkbenchMessage = {
+            id: makeId('wbm'),
+            sessionId: s.id,
+            role: 'user',
+            kind: 'chat',
+            type: options?.type || 'text',
+            mode: 'codex',
+            content: text,
+            replyTo: replySnapshot,
+            createdAt: Date.now(),
+            status: 'sent',
+            metadata: options?.metadata,
+        };
+        await appendMessage(userMessage);
+        try {
+            if (userMessage.type !== 'emoji' && hasAssistantMention(text)) {
+                if (!assistantAvailable) {
+                    addToast('已 @AI 助理，但 CLI 未连接，备用聊天 API 也未配置', 'info');
+                } else {
+                    setThinkingSpeaker('codex');
+                    const recent = [
+                        ...messages.filter(message => message.sessionId === s.id),
+                        userMessage,
+                    ].slice(-10);
+                    await runAssistantReply(
+                        s,
+                        recent,
+                        `用户在 Code 对话里 @ 了 AI 助理，请直接回应这条消息：${stripAssistantMention(text) || text}`,
+                    );
+                }
+            }
+            setConversations(await loadConversations());
+        } catch (e: any) {
+            addToast(e?.message || '消息保存失败', 'error');
+        } finally {
+            setBusy(false);
+            setThinkingSpeaker(null);
+        }
+    };
+
+    const nudgeAssistant = async () => {
+        if (busy) return;
+        if (!assistantAvailable) {
+            addToast('CLI 未连接，备用聊天 API 也未配置', 'info');
+            return;
+        }
+        const s = session || await createWorkbenchSession(activeSpace);
+        setSession(s);
+        setEmojiPanelOpen(false);
+        setThinkingSpeaker('codex');
+        setBusy(true);
+        try {
+            const recent = messages
+                .filter(message => message.sessionId === s.id)
+                .slice(-10);
+            if (!recent.length) {
+                addToast('先在 Code 里写一点内容，再请 AI 助理回应', 'info');
+                return;
+            }
+            await runAssistantReply(s, recent);
         } catch (e: any) {
             addToast(e?.message || 'AI 助理回应失败', 'error');
         } finally {
@@ -1488,7 +1521,7 @@ const WorkbenchApp: React.FC = () => {
                 taskIndex,
                 capability,
             });
-            await appendAssistantReply({
+            const characterReplies = await appendAssistantReply({
                 sessionId: s.id,
                 role: 'character',
                 kind: 'consult',
@@ -1501,6 +1534,21 @@ const WorkbenchApp: React.FC = () => {
                     nudged: true,
                 },
             }, reply, true, recent);
+            const mentionedAssistant = characterReplies.some(message => (
+                message.type !== 'emoji' && hasAssistantMention(message.content)
+            ));
+            if (mentionedAssistant) {
+                if (!assistantAvailable) {
+                    addToast('角色已 @AI 助理，但 CLI 未连接，备用聊天 API 也未配置', 'info');
+                } else {
+                    setThinkingSpeaker('codex');
+                    await runAssistantReply(
+                        s,
+                        [...recent, ...characterReplies].slice(-10),
+                        `一起工作的角色 ${selectedParticipant.name} 在 Code 对话里 @ 了 AI 助理，请回应角色刚才 @ 你的内容。`,
+                    );
+                }
+            }
             setConversations(await loadConversations());
         } catch (e: any) {
             addToast(e?.message || '角色回应失败', 'error');
@@ -1512,6 +1560,11 @@ const WorkbenchApp: React.FC = () => {
 
     const sendEmoji = (emoji: Emoji) => {
         void send(emoji.url, { type: 'emoji', metadata: { emojiName: emoji.name } });
+    };
+
+    const mentionAssistant = () => {
+        const mention = '@AI助理 ';
+        setInput(prev => prev.includes('@AI助理') ? prev : `${mention}${prev}`.trimEnd());
     };
 
     const deleteConversation = async (sessionId: string) => {
@@ -1878,6 +1931,16 @@ const WorkbenchApp: React.FC = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={mentionAssistant}
+                                    disabled={busy}
+                                    className="h-8 w-8 rounded-lg flex items-center justify-center active:scale-95 disabled:opacity-35 bg-white/70 text-slate-500 border border-slate-200 text-sm font-semibold"
+                                    aria-label="@AI 助理"
+                                    title="@AI 助理"
+                                >
+                                    @
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => setEmojiPanelOpen(prev => !prev)}
                                     className={`h-8 w-8 rounded-lg flex items-center justify-center active:scale-95 ${
                                         emojiPanelOpen ? 'bg-slate-900 text-white' : 'bg-white/70 text-slate-500 border border-slate-200'
@@ -1959,7 +2022,7 @@ const WorkbenchApp: React.FC = () => {
                                     disabled={summaryBusy}
                                     className={`h-9 w-9 rounded-lg border flex items-center justify-center active:scale-95 disabled:opacity-35 ${progressModeMenuOpen ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-500'}`}
                                     aria-label="选择进度卡总结模式"
-                                    title={progressSummaryMode === 'codex' ? 'Codex 优先' : '角色总结'}
+                                    title={progressSummaryMode === 'codex' ? 'Code 总结' : '角色总结'}
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h11m0 0-3-3m3 3-3 3M16 17H5m0 0 3 3m-3-3 3-3" />
@@ -1968,7 +2031,7 @@ const WorkbenchApp: React.FC = () => {
                                 {progressModeMenuOpen && (
                                     <div className="absolute right-0 top-11 z-10 w-44 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
                                         {([
-                                            { id: 'codex' as const, label: 'Codex 优先', hint: '失败时回退角色' },
+                                            { id: 'codex' as const, label: 'Code 总结', hint: '由 Codex/CLI 整理' },
                                             { id: 'character' as const, label: '角色总结', hint: selectedParticipant?.name || '需要选择角色' },
                                         ]).map(option => (
                                             <button
@@ -2005,6 +2068,7 @@ const WorkbenchApp: React.FC = () => {
                             ) : progressCards.map((card, index) => {
                                 const fields = parseProgressCard(card.content);
                                 const status = fields['状态'] || '待确认';
+                                const author = fields['作者'] || card.sourceName || (card.source === 'character' ? '角色' : 'Code');
                                 const statusClass = status.includes('已完成')
                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                     : status.includes('阻塞')
@@ -2019,6 +2083,7 @@ const WorkbenchApp: React.FC = () => {
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-[10px] font-semibold text-slate-400">#{progressCards.length - index}</span>
                                                     <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusClass}`}>{status}</span>
+                                                    <span className="px-2 py-0.5 rounded-full border border-violet-100 bg-violet-50 text-[10px] font-semibold text-violet-700">{author} 写</span>
                                                 </div>
                                                 <h3 className="mt-2 text-sm font-semibold text-slate-900 break-words">{fields['任务'] || session?.title || '未命名任务'}</h3>
                                             </div>

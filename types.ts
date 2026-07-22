@@ -107,6 +107,9 @@ export interface WorkbenchSummary {
   id: string;
   sessionId: string;
   content: string;
+  source?: 'codex' | 'character';
+  sourceName?: string;
+  sourceCharacterId?: string;
   createdAt: number;
 }
 
