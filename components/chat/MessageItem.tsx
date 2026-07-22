@@ -48,6 +48,18 @@ const SANS = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, s
 const MONO = '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, "Courier New", monospace';
 const PIXEL = '"Zpix", "Fusion Pixel 12px", "DotGothic16", "Silver", "Courier New", monospace';
 
+const parseCodeProgressCard = (content: string): { title: string; fields: Record<string, string> } | null => {
+    const header = content.match(/\[Code 进度(?:-[^\]]+)?\]/)?.[0];
+    if (!header) return null;
+    const fields: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+        const match = line.match(/^(任务|状态|决策|进度|待办|备注)[：:]([\s\S]*)$/);
+        if (match) fields[match[1]] = match[2].trim();
+    }
+    if (Object.keys(fields).length === 0) return null;
+    return { title: header.replace(/^\[|\]$/g, ''), fields };
+};
+
 export const THINKING_CHAIN_PRESETS: Record<Exclude<ThinkingChainStyleId, 'custom'>, ThinkingChainStyleSpec> = {
     echo: {
         bg: 'linear-gradient(135deg, #2a1f3d 0%, #1d1530 45%, #2a1834 100%)',
@@ -1295,7 +1307,7 @@ const MessageItem = React.memo(({
     thinkingChainOptions,
 }: MessageItemProps) => {
     const isUser = m.role === 'user';
-    const isSystem = m.role === 'system';
+    const isSystem = m.role === 'system' && m.type !== 'code_card';
     const spacingClass = messageSpacing === 'compact' ? (isLastInGroup ? 'mb-3' : 'mb-0.5') : messageSpacing === 'spacious' ? (isLastInGroup ? 'mb-8' : 'mb-2.5') : (isLastInGroup ? 'mb-6' : 'mb-1.5');
     const marginBottom = spacingClass;
     const avatarSizeClass = avatarSize === 'small' ? 'w-7 h-7' : avatarSize === 'large' ? 'w-12 h-12' : 'w-9 h-9';
@@ -2441,6 +2453,50 @@ const MessageItem = React.memo(({
                 candidateItem={meta.luckinCandidate}
             />
         );
+    }
+
+    if (m.type === 'code_card') {
+        const parsed = parseCodeProgressCard(m.content);
+        const fields = parsed?.fields || {};
+        const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const card = (
+            <div className="w-72 max-w-[78vw]">
+                <div
+                    className="overflow-hidden rounded-2xl border shadow-[0_8px_24px_rgba(15,23,42,0.10)]"
+                    style={{
+                        borderColor: 'rgba(196,181,253,0.34)',
+                        background: 'linear-gradient(145deg, rgba(248,246,255,0.98) 0%, rgba(243,240,251,0.98) 58%, rgba(237,233,254,0.94) 100%)',
+                    }}
+                >
+                    <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 border-b border-slate-200/70">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m8 9-3 3 3 3M16 9l3 3-3 3" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M13 6 11 18" />
+                            </svg>
+                        </span>
+                        <div className="min-w-0 flex-1">
+                            <div className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-400">Code · Progress</div>
+                            <div className="truncate text-[12px] font-bold text-slate-900">{parsed?.title || 'Code 进度'}</div>
+                        </div>
+                        <span className="text-[9px] text-slate-400">{timeStr}</span>
+                    </div>
+                    <div className="space-y-2 px-3 py-3">
+                        {(['任务', '状态', '决策', '进度', '待办', '备注'] as const).map(key => (
+                            <div key={key} className="grid grid-cols-[2.5rem_1fr] gap-2 text-[11px] leading-relaxed">
+                                <span className="font-semibold text-slate-400">{key}</span>
+                                <span className="whitespace-pre-wrap text-slate-700">{fields[key] || '暂无'}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-200/70 px-3 py-1.5">
+                        <span className="text-[9px] italic text-slate-400">来自 Code 区</span>
+                        <span className="text-[9px] font-bold tracking-wide text-slate-500">＋记忆</span>
+                    </div>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
     }
 
     if (m.type === 'vr_card') {

@@ -36,6 +36,7 @@ export enum AppID {
   QQBridge = 'qq_bridge', // QQ 桥接 — 通过 NapCat 把 QQ 私聊接入当前角色，共享 IndexedDB 上下文
   HotNews = 'hot_news', // 热点 — 分时段召回的多平台热榜可视化（决定角色可能聊起的话题）
   VRWorld = 'vrworld', // 彼方 — 角色自主登入的虚拟世界（定时驱动，房间里看小说/听歌/留言，产出活动卡注入聊天+记忆）
+  Workbench = 'workbench', // 工作区 — 独立工作对话与电脑端 CLI bridge 管理
   CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
 }
@@ -54,6 +55,99 @@ export interface AppConfig {
   name: string;
   icon: string;
   color: string;
+}
+
+export type WorkbenchMode = 'codex' | 'sully';
+
+export interface WorkbenchSession {
+  id: string;
+  title: string;
+  space?: 'work' | 'inspiration';
+  createdAt: number;
+  updatedAt: number;
+  /** 删除逐句对话后保留的索引墓碑；不再显示为可打开会话。 */
+  deletedAt?: number;
+}
+
+export interface WorkbenchMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'codex' | 'character' | 'sully' | 'system';
+  type?: 'text' | 'emoji' | 'file';
+  kind?: 'chat' | 'action' | 'consult' | 'summary' | 'error';
+  mode: WorkbenchMode;
+  content: string;
+  replyTo?: {
+    id: string;
+    content: string;
+    name: string;
+  };
+  createdAt: number;
+  status?: 'pending' | 'sent' | 'error';
+  metadata?: Record<string, any>;
+}
+
+export interface WorkbenchArtifact {
+  id: string;
+  sessionId: string;
+  messageId?: string;
+  name: string;
+  relativePath?: string;
+  mimeType?: string;
+  size: number;
+  sha256?: string;
+  preview?: string;
+  storageKind: 'bridge' | 'blob';
+  blobRef?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkbenchSummary {
+  id: string;
+  sessionId: string;
+  content: string;
+  createdAt: number;
+}
+
+export interface WorkbenchMemory {
+  id: string;
+  sessionId: string;
+  summaryId?: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkbenchBridgeConfig {
+  bridgeUrl: string;
+  remoteBridgeUrl?: string;
+  cliBridgeUrl?: string;
+  token: string;
+  runtimeMode?: 'computer' | 'cli';
+  defaultAgent: 'codex' | 'claude' | 'custom';
+  customAgentCommand?: string;
+  selectedModel?: string;
+  modelProfile?: 'fast' | 'balanced' | 'deep';
+  customInstructions?: string;
+  codexAvatar?: string;
+  monthlyUsageLimit?: number;
+  participantEnabled?: boolean;
+  participantCharacterId?: string;
+  fallbackApiBaseUrl?: string;
+  fallbackApiKey?: string;
+  fallbackApiModel?: string;
+  fallbackApiName?: string;
+}
+
+export interface WorkbenchOfficialUsage {
+  label?: string;
+  weeklyPercent?: number;
+  remainingPercent?: number;
+  usedPercent?: number;
+  resetAt?: string;
+  updatedAt?: number;
+  raw?: Record<string, any>;
 }
 
 export interface DesktopDecoration {
@@ -3036,7 +3130,7 @@ export interface GameSession {
     lastPlayedAt: number;
 }
 
-export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'music_invite_result' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card';
+export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'music_invite_result' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card' | 'code_card';
 
 export interface Message {
     id: number;
@@ -3115,6 +3209,11 @@ export interface FullBackupData {
     vrSettings?: any[];                        // 彼方设置（独立 API + 调用记录）
     worlds?: WorldProfile[];                   // 家园·世界定义
     worldEpisodes?: WorldEpisode[];            // 家园·演绎历史
+    workbenchSessions?: WorkbenchSession[];    // 工作区会话（与主聊天隔离）
+    workbenchMessages?: WorkbenchMessage[];    // 工作区消息（不进入主聊天/记忆宫殿）
+    workbenchSummaries?: WorkbenchSummary[];   // 工作区摘要便签（主角色只读摘要）
+    workbenchMemories?: WorkbenchMemory[];     // Code Memory（跨 Code 对话的长期偏好/规则）
+    workbenchArtifacts?: WorkbenchArtifact[];  // Code 文件卡元数据（项目大文件不存正文）
     vrPostOffice?: Record<string, string>;     // 邮局本机配置：身份 deviceId / 后端地址（存 localStorage）
     vrSignal?: Record<string, string>;         // 信号坠落处本机记录：句子归属「你·角色」+ 反复用清单（存 localStorage）
     worldHomeLocal?: Record<string, string>;   // 家园本机配置：全局 API + 文风收藏（存 localStorage）

@@ -3410,6 +3410,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // （worldHomeLocal 本机配置也已随导出带走），但这两个 store 之前漏在清单外，
               // 导致导出的备份不含家园数据。
               'worlds', 'world_episodes',
+              'workbench_sessions', 'workbench_messages', 'workbench_summaries', 'workbench_memories', 'workbench_artifacts',
               // 生活记录（档案 App：生理期/药盒/锻炼 + 药盒计划 + 设置；记账走 bank_transactions）
               // 导入端 importFullData 已支持恢复，这里必须同步登记，否则备份不含生活记录。
               'life_records', 'med_plans', 'life_record_settings'
@@ -3658,6 +3659,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               'room_plates', 'digest_reports',
               'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots',
               'character_groups',
+              'workbench_sessions', 'workbench_messages', 'workbench_summaries', 'workbench_memories', 'workbench_artifacts',
               'life_records', 'med_plans', 'life_record_settings'
           ]);
 
@@ -3846,6 +3848,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   // 家园 —— 键名须与 importFullData 读取的字段（data.worlds / data.worldEpisodes）对齐
                   case 'worlds': backupData.worlds = processedData; break;
                   case 'world_episodes': backupData.worldEpisodes = processedData; break;
+                  case 'workbench_sessions': backupData.workbenchSessions = processedData; break;
+                  case 'workbench_messages': backupData.workbenchMessages = processedData; break;
+                  case 'workbench_summaries': backupData.workbenchSummaries = processedData; break;
+                  case 'workbench_memories': backupData.workbenchMemories = processedData; break;
+                  case 'workbench_artifacts': backupData.workbenchArtifacts = processedData; break;
               }
 
               await new Promise(resolve => setTimeout(resolve, 10));

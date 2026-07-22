@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "npm run build:workers && vite build",
     "preview": "vite preview",
+    "workbench:bridge": "node scripts/workbench-cli-bridge.mjs",
     "cap:sync": "cap sync",
     "cap:android": "cap open android",
     "build:workers": "node scripts/build-workers.mjs",

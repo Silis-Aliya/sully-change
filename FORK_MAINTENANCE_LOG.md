@@ -23,6 +23,57 @@ Current known baseline:
 - Vercel deployment after that push succeeded.
 ```
 
+## 2026-07-21 Workbench App
+
+### Result
+
+- Added a standalone `工作区` app for work conversations, isolated from the main chat history and Memory Palace.
+- Added independent IndexedDB stores for workbench sessions, messages, and one-line summaries.
+- Added an in-app `Code 设置` subpage with collapsible connection mode, local CLI / remote connection, CLI routing, work profile, endpoint key, and usage.
+- Work mode sends messages to the configured Workbench API endpoint when the computer/local CLI service is online.
+- The Workbench top bar has an iOS-style `一起工作` switch: off sends to the configured CLI endpoint, on lets the selected character work together temporarily.
+- `一起工作` performs a one-turn character consultation and writes the reply only back into the workbench stream.
+- Main character prompts can read only Code progress cards explicitly written into that same character's normal chat, not full workbench transcripts or other characters' Code notes.
+- Full backup/restore and QuickSync delta sync now include workbench DB stores and workbench local settings.
+- Workbench settings keep CLI routing and work profile separated; they intentionally do not duplicate system API Key/Base URL/main-chat model settings.
+- Workbench UI uses a Codex-like soft warm-white / pale violet-blue gradient surface with a right-side task/project index rail.
+- Workbench usage monitoring shows current session / weekly / monthly / lifetime token counts, using local estimates until the bridge supplies exact CLI usage metadata.
+- `工作区` and `灵感区` are capability modes over one shared Code conversation list. Switching modes never switches or hides conversation history.
+- When the CLI bridge is offline there is no Codex/Claude Code assistant: sending records the user's Code message only, while the lightning button can explicitly invite the selected character to reply. When online, chat mode routes to the CLI without computer writes and work mode enables bridge-enforced project execution.
+- Workbench index conversation list now shows real per-space sessions only when they exist; session titles can be edited inline, first messages generate default titles, and the row-level SVG `X` deletes the whole session history.
+- Code `一起工作` now reuses the normal chat request payload instead of adding a separate workbench role prompt: selected characters read their usual chat context plus the current Code conversation as temporary history, then the reply is written only to Code.
+- Code chat bubbles render `[[SEND_EMOJI: name]]` as local sticker images while keeping heavier chat side-effect actions out of the Code surface.
+- Code input now includes a local sticker picker; sending a sticker creates a Code-only user message and follows the same current-space reply route without writing to normal chat.
+- Code `一起工作` now formats main-chat context as clean role messages instead of raw timestamped chat logs, avoiding log-prefix echoes without adding another prompt rule.
+- Code assistant replies now reuse the chat bubble splitting path (`splitResponse` / `chunkText`) so character replies land as multiple natural Code messages instead of one large block.
+- Code failures show the global red `SYSTEM ERROR` toast only and never create an error message inside the Code transcript.
+- Code `一起工作` is now treated as a chat IF-line: the selected character receives normal main-chat history first, then Code's current user/selected-character messages as the newest temporary history. Code-only assistant/system messages are not converted into system log blocks for the character.
+- Code progress cards are now manual-only: the top-bar card button runs the confirmed Codex progress-card prompt, writes the result to `workbench_summaries`, and renders it inside Code as a structured system card. If `一起工作` is enabled, the same card is also written as a `code_card` system message only to the selected character's normal chat. Automatic per-message workbench summaries are disabled.
+- Code together-work context uses a three-layer priority: latest normal chat keeps character continuity, the current Code conversation owns technical details and execution decisions, and other Code conversations are visible only through progress cards in that character's normal chat.
+- Pure Codex/AI Code chat also receives a compact task index built from other Code sessions' latest progress cards; the current session still owns all technical details and execution decisions.
+
+### Isolation Rules
+
+- Workbench messages must not be stored in the normal `messages` table.
+- Workbench `一起工作` consultations must not create main chat messages.
+- Workbench `一起工作` consultations must not run Memory Palace ingestion or write workbench transcripts into memories.
+- Only manual `[Code 进度]` / `[Code 进度-角色名]` cards may cross from Code into normal chat, and only for the selected `一起工作` character.
+- Workbench API config and participant state must stay covered by both local settings backup and QuickSync.
+- Code backup coverage includes sessions, messages, progress summaries, Code Memory, and artifact metadata. Project file bodies remain on the bridge computer and are not copied into SullyOS backups.
+- Code editable settings travel in `workbench_bridge_config_v1`, including bridge URL/Key, CLI route, selected model, work profile, custom instructions, Code avatar, usage limit, and selected together-work character.
+- Remote and local CLI endpoints are stored separately inside `workbench_bridge_config_v1`: `remoteBridgeUrl` is the phone-to-computer address, while `cliBridgeUrl` is the current-computer address (default `http://localhost:3001`). Switching modes swaps the active URL without overwriting the other one; legacy single-URL configs migrate into the mode that was active when saved.
+- QuickSync must treat local-setting removals as real delta deletes; clearing a Code setting on one device must clear it on the receiving device instead of reviving an older value.
+- Deleting a Code conversation syncs removal of its transcript while preserving its progress-card, Code Memory, and artifact indexes by design.
+
+### Follow-Up Checks
+
+- Manual runtime check still recommended on phone and desktop:
+  - workbench app opens from launcher
+  - Code 设置 subpage saves/restores
+  - work mode handles missing Workbench API gracefully
+  - Sully mode replies without adding main chat messages
+  - QuickSync pull brings workbench records/settings to the other device
+
 ## 2026-07-21 Local Settings Backup / QuickSync
 
 ### Result
@@ -373,7 +424,134 @@ Run this when a merge/deploy looks risky:
 - Desktop wallpaper, lock wallpaper, custom icons, avatars, widgets, room images, and other blob-backed images survive QuickSync upload/pull.
 - XHS Lite cookie, WebDAV/GitHub credentials, MCP tokens, and other user settings survive full backup restore.
 - The same settings/customizations survive QuickSync upload/pull between phone and computer.
+- Code opens with one shared conversation list; switching `工作区` / `灵感区` does not hide or fork history.
+- With CLI offline, normal Code send records only the user message and never fabricates a Codex reply.
+- Lightning produces exactly one selected-character reply and does not start an assistant/character reply loop.
+- Code character replies understand the latest Code user/AI-assistant messages without leaking internal context labels.
+- Code request failures show only the global `SYSTEM ERROR` toast and leave no error bubble/history row.
+- Code quote, single delete, multi-select delete, sticker transparency, and system-gray user bubbles work on mobile and desktop.
+- Creating a manual Code progress card updates the current task index; deleting the transcript preserves its progress/Memory/artifact indexes.
+- Full backup and QuickSync restore Code sessions, messages, summaries, Code Memory, artifact metadata, Code avatar, custom instructions, route/model, and bridge settings.
+- A fresh QuickSync from the complete-vector device reduces vector missing counts on the receiving device; vector deletions also propagate.
+- Pixel Home layout changes and deletions propagate through QuickSync compound keys.
+
+## Code Workspace Notes
+
+- Code app message actions should mirror main chat basics: long press/right click opens quote, delete, and multi-select delete.
+- Code quote/delete state is stored only in `workbench_messages`; deleting Code messages or sessions must not delete main chat messages, summaries, or Memory Palace entries.
+- Together-work character replies in Code can read temporary Code/main-chat context, but replies are written back only to Code.
+- Code together-work should behave like a temporary branch from normal chat: normal chat later sees only the selected character's manual Code progress cards, while Code calls can append the current Code branch onto normal chat history for that one reply.
+- When a character returns to Code after normal chat, they should read the newest normal chat context plus the current Code session; other Code sessions may inspire through progress cards but must not override current-session technical details unless the user explicitly brings them up.
+- Pure Codex/AI mode may reference other Code tasks by title/progress-card summary, but must not load or assume full details from other sessions.
+- Code "工作区" and "灵感区" are capability modes, not separate conversation buckets. The conversation list should stay shared; switching modes should not hide existing Code conversations.
+- The hidden Code device/capability system prompt is generated by SullyOS, not guessed by Codex. In inspiration mode, Code should only produce plans, drafts, small snippets, and thought summaries; it must not claim to read/write project files or output large project files. Only when work mode is available and execution mode is active may it read/write project files or run commands.
+- Code Memory extraction runs only after the user manually creates a Code progress card. It uses a conservative prompt that stores only confirmed long-term user preferences and confirmed architecture/rule/workflow decisions, never code bodies, temporary todos, experiments, unconfirmed ideas, private chat, or model suggestions.
+- A selected character's manual `code_card` remains visible to normal chat and Memory Palace retrieval, but emotion evaluation, relationship/impression extraction, and monthly/manual chat archiving must skip it so technical decisions do not flatten the character into an assistant voice.
+- Code file output uses artifact cards. Project files remain on the bridged computer; SullyOS stores only file metadata, relative path, size, hash, and a small preview, and downloads the full file again from the bridge when requested. QuickSync/full backup include this metadata, not large project bytes. SullyOS-owned small artifacts may use blob-backed storage and travel in full backups.
+- Chat-only Code mode and computer-execution mode share the same conversation history. The bridge must enforce permissions itself: read-only/plan in chat mode and workspace-scoped writes in execution mode. Prompt wording is only behavioral guidance and must never be the sole permission boundary.
+- QuickSync should cover all full-backup user data stores except explicitly excluded music/audio/runtime caches. Memory Palace vectors are first-class delta data: vector upserts and deletes must sync across devices.
+- QuickSync manifest keys must follow each IndexedDB store's real keyPath. `memory_vectors` uses `memoryId` rather than `id`; otherwise vector rows disappear from every delta manifest and processing on one device never reaches another.
+- `pixel_home_layouts` uses the compound key `[charId, roomId]`. QuickSync encodes that key for manifests and restores the array key before IndexedDB deletion, so room/desktop layout changes and removals propagate incrementally.
 
 ## Current Deployment Note
 
 Pushed `ecc01ab` to remote `master` on 2026-07-21 after upstream refresh plus backup/QuickSync settings fixes. Vercel should auto-deploy from `master`; verify the deployment dashboard before treating it as the latest stable deployed baseline.
+
+## 2026-07-22 Code Workspace And Sync Audit
+
+### Final Product Rules
+
+- `Code` is a standalone app and an IF-line from normal chat, not another normal-chat room. Its complete transcript stays in `workbench_messages` and is never written into the normal `messages` stream.
+- The Code conversation list is shared. `工作区` and `灵感区` are capability modes for the current conversation, not independent history folders.
+- CLI offline means there is no Codex/Claude Code assistant. Sending records the user's Code message only. The lightning button explicitly asks the selected character for one reply and never enables an automatic back-and-forth loop.
+- Ordinary send always records the user's message without forcing an immediate reply, even while the CLI is online. The lightning button requests exactly one character turn; the adjacent non-code sparkle SVG requests exactly one connected AI-assistant turn. This lets the user send several short messages before deciding who should respond.
+- CLI online chat mode may answer, plan, explain, and produce small snippets but must not modify project files or run write commands. Work mode enables project execution. The bridge must enforce this boundary; prompt text is not a security boundary.
+- The assistant display name comes from the connected route/bridge identity, such as `Codex` or `Claude Code`; the UI must not pretend an offline generic model is Codex.
+- Code assistant replies are one assistant turn. Character replies may be split into natural IM bubbles through the normal chat splitting/rendering path.
+- Code errors use the global red `SYSTEM ERROR` toast only. They must not create error bubbles or persist error messages in the Code transcript.
+
+### Character Context And Memory Isolation
+
+- A character invited through `一起工作` receives the normal stable character/user/relationship context, a limited recent normal-chat background, volatile realtime context, then the current Code conversation as the newest and highest-priority task context.
+- The current Code context includes messages from the user, the connected AI assistant, and the selected character. Internal labels used to distinguish assistant speakers are prompt-only and must never leak into visible bubbles.
+- Other Code conversations are represented only by their manually generated progress-card index. Their full transcripts and code details are not injected unless a future explicit retrieval flow is added.
+- Character replies are written only into the current Code conversation. They do not become normal-chat messages and do not directly enter Memory Palace.
+- The Code character surface keeps personality, relationship, recent normal-chat background, IM style, stickers, quoting, and bilingual behavior. It excludes voice/action tags, transfer, scheduled-message, diary, search, LIFE, music actions, HTML, MCP/XHS/food-ordering, and other normal-chat side-effect tools.
+- Hidden system context is required in Code, but visible normal-chat system logs are not copied wholesale. Relevant hidden context is limited to character continuity, current time/realtime state, Code capability/device state, the current Code thread, progress indexes, stickers, quote rules, and bilingual rules.
+- Manual `[Code 进度]` cards may be copied to the selected character's normal chat as `code_card`. Normal chat can reference these summaries, while emotion evaluation, relationship/impression extraction, and monthly/manual chat archiving skip `code_card` so technical work does not turn the character into an assistant persona.
+- Code Memory is extracted only when the user manually creates a progress card. It stores at most confirmed long-term preferences and confirmed architecture/rule/workflow decisions; code bodies, temporary todos, experiments, rejected ideas, private chat, and unconfirmed model suggestions are excluded. The settings page provides a visible editor/delete surface for these entries.
+
+### Conversations, Progress Cards, And Files
+
+- Code supports quote, single delete, and multi-select delete. Quote resolution follows the normal-chat matching behavior instead of relying only on the most recent message.
+- Deleting a Code conversation removes its detailed transcript and leaves a session tombstone for cross-device deletion propagation. Existing progress cards, Code Memory, and artifact indexes are intentionally preserved.
+- Manual progress cards are cumulative anchors for a long Code conversation. Codex/Claude receives the current thread's saved progress context plus recent messages, preventing early decisions from falling out of a long context window.
+- Progress-card generation is manual only. The connected CLI assistant is preferred; if it fails and a character is selected, the role-specific fallback may summarize in that character's voice.
+- The header progress icon opens a dedicated visual progress-card panel instead of immediately calling a model. The panel lists every manually generated card for the current Code conversation, renders task/status/decision/progress/todo/note as separate fields, and provides the explicit `生成新卡` command. A successful generation refreshes and opens the newest card; storage remains `workbench_summaries`, so existing backup and QuickSync coverage is unchanged.
+- The progress-card panel has an adjacent SVG source selector. `Codex 优先` remains the default and preserves the existing fallback to the selected character when CLI summarization fails; `角色总结` directly uses the currently selected together-work character. Card persistence, Code Memory extraction, and normal-chat writeback remain identical after either source is chosen.
+- In the Code conversation stream, progress summaries are rendered as standalone system cards. They have no speaker avatar, no `System · time` header, and no outer chat bubble around the existing card surface. Long-press selection/deletion remains attached to the standalone card.
+- When a selected character is participating, normal-chat writeback is stored as that character's `assistant`-side `code_card` rather than a horizontal system log. The normal chat therefore renders the character avatar and its dedicated Code card UI. The card carries the originating Workbench session ID and summary ID, uses the same summary content as the Code-side card, and now renders the `备注` field as well.
+- Large project files remain on the bridged computer. SullyOS stores an artifact card with name, path, size, hash, timestamps, and a short preview; downloading requests the real file from the bridge again. Large project bytes are not copied into IndexedDB, full backups, or QuickSync.
+- Small SullyOS-owned files may use blob-backed artifact storage. Sticker messages render as transparent media without the user's text-bubble background; user text bubbles use the system gray style.
+- Code message avatars follow the ordinary chat appearance settings for vertical alignment, Y offset, size, shape, and AI-avatar visibility. Workbench no longer applies a fixed top margin that leaves short bubbles visually misaligned.
+- Code speaker avatars are isolated by message identity. AI-assistant replies store and render the configured Code avatar; character replies store the selected character ID and neural-link avatar. Neither path may fall back to the other speaker's avatar. The avatar snapshot lives in message metadata, so it is covered by the existing Code backup and QuickSync paths.
+- Pending/thinking UI also tracks the explicit trigger source. Clicking the character lightning shows only that character's avatar; clicking the AI-assistant control shows only the configured Code avatar. It no longer infers the pending speaker from the global together-work switch, and the pending avatar follows ordinary chat appearance settings.
+- Character-side Code context keeps all three speakers structurally separate: the user remains an API `user` message, the selected character remains `assistant`, and CLI/Codex is injected as external `system` context with its discovered agent name. This avoids treating CLI text as user text and avoids visible identity labels that a character may imitate. Any accidental legacy `[用户 ...]`, `[AI 助手 ...]`, or `[角色 ...]` marker is stripped before bubble storage.
+- Browser-to-CLI serialization includes each message's resolved speaker name. The bridge formats recent history as `用户`, `角色 <name>`, `AI 助手 <name>`, or `系统` before invoking Codex/Claude Code, preventing a character's suggestion from being mistaken for a direct user instruction.
+- The CLI bridge prompt begins with a confirmed dynamic `[AI 助手身份]` block. It names the active agent (`Codex`, `Claude Code`, or custom CLI), defines user/assistant/character as three independent participants, treats only `用户` lines as direct user speech, forbids impersonating or continuing character dialogue, and limits each trigger to one assistant reply. Existing device, capability, file-output, model-profile, custom-instruction, task-context, and user-request blocks remain unchanged after it.
+- Character replies in Code reuse ordinary chat's prompt builder for character identity, relationship background, memories, and volatile state, while the structurally typed current Code thread is placed once at the very end of the API request. This ordering is intentional: normal chat supplies background, but cannot override the active Code topic through its recency tail. Code text is also supplied separately as the Memory Palace recall query without duplicating it in normal-chat history.
+
+### Backup And QuickSync Coverage
+
+- Full/text backup and restore include `workbench_sessions`, `workbench_messages`, `workbench_summaries`, `workbench_memories`, and `workbench_artifacts`.
+- QuickSync includes all five Code stores and `workbench_bridge_config_v1` / `workbench_mode_v1`. Bridge URL, Key, CLI route, selected model, profile, Codex-only custom instructions, Code avatar, usage limit, and selected participant travel across devices.
+- Clearing an included setting creates a local-storage delta deletion. A removed value must be removed on the receiving device rather than revived from stale local data.
+- Wallpaper, lock wallpaper, user/character avatars, custom app icons, widgets, room images, and other referenced images sync through asset rows plus `blob_assets`. Code avatar is resized before local-storage persistence to remain inside the portable-settings size limit.
+- Audio/music and runtime caches remain intentionally excluded. Project file bodies also remain excluded.
+- Memory Palace vector rows use IndexedDB keyPath `memoryId`. QuickSync now uses `memoryId` for manifest hashes, upserts, and deletes. The previous generic `id/key/name` lookup silently omitted every vector row.
+- Pixel Home layouts use compound keyPath `[charId, roomId]`. QuickSync now serializes compound keys for manifest comparison and restores the array key before IndexedDB deletion. This covers incremental room/layout changes and removals.
+- Existing delta archives created before the vector-key fix do not retroactively contain vectors. After deployment, upload a fresh QuickSync delta from the device whose vectors are complete, then pull it on the other device. The first new upload treats the existing vectors/layouts as additions and self-heals the old empty manifest.
+
+### Verification Completed
+
+- QuickSync/local-settings focused tests: 8 passed.
+- Full Vitest suite: 103 files, 1117 tests passed.
+- Production build: passed with `pnpm build`.
+- `git diff --check`: passed; only expected Windows LF/CRLF notices remain.
+- Installed official `@openai/codex` CLI (`codex-cli 0.145.0`) and confirmed `Logged in using ChatGPT` on the development PC.
+- Windows may resolve the Codex desktop-app alias before npm's CLI and return `spawn EPERM`. The bridge now automatically prefers npm's native `codex.exe` under the installed `@openai/codex-win32-x64` package, while `WORKBENCH_CODEX_BIN` remains available as an override.
+- Real bridge smoke test passed: `/health` identified `Codex`, `/models` returned account-backed model metadata, and a chat-only `/message` request returned `连接成功` without artifacts.
+- Fixed a settings-state split where `检测连接` could mark the bridge online while leaving the tested draft URL out of the active send config. A successful connection test now saves and activates that exact config immediately, so the next ordinary Code message reaches the connected CLI without requiring a second `保存` action.
+- Bridge status now rechecks the active endpoint every 10 seconds and drives both the settings result text and the AI-assistant sparkle button. A stale manual `连接成功` label can no longer remain while the active endpoint is offline; successful manual tests also avoid a temporary disabled-button flicker during the immediate background recheck.
+
+### Remaining Risks And Required Manual Checks
+
+- Unit tests cannot prove a real phone/WebDAV/browser storage round trip. Before release, perform one phone-to-PC and one PC-to-phone QuickSync using real wallpaper/avatar assets, a deleted setting, Memory Palace vectors, a Pixel Home layout, and a Code conversation.
+- Verify a real Codex bridge and a real Claude Code bridge separately: identity/model discovery, chat-only restrictions, execution permissions, artifact download, official usage reporting, reconnect behavior, and invalid-Key errors.
+- Verify that CLI offline never creates an assistant message; ordinary send only records the user message, while lightning produces exactly one selected-character response.
+- Verify that a character can answer about the newest Code user/assistant exchange, can still reflect recent normal-chat relationship context, and does not repeat internal markers such as `[当前 Code 对话 / 角色名]`.
+- Verify that Code stickers from both user and character render as transparent media and that quote/delete/multi-select work on old as well as recent messages.
+- The current branch contains uncommitted/untracked Workbench files and has not been pushed after this audit. Do not assume Vercel contains these fixes until commit, push, and deployment verification are complete.
+
+## 2026-07-22 Code Automatic Capability And Fallback API
+
+- `工作区` and `灵感区` are no longer user-selected conversation categories. Code keeps one shared conversation list and derives the current capability automatically: an online computer bridge means computer execution; otherwise the app is chat-only.
+- Code settings now include a separate OpenAI-compatible fallback chat API with its own base URL, Key, model ID, and display name. It reuses the existing Code conversation, progress index, device state, and Codex custom instructions without adding a separate fallback persona prompt.
+- The AI sparkle button routes one turn at a time. An online CLI bridge always has priority; when it is offline, the configured fallback API answers; when neither is available, the button is disabled. Ordinary send still only records a message, and the lightning button still requests exactly one character reply.
+- Fallback replies cannot create bridge artifacts and are always chat-only. They do not receive an execution route, workspace file transport, or command result channel.
+- The fallback API fields live inside `workbench_bridge_config_v1`. Full settings export/import and QuickSync local-setting deltas therefore include additions, edits, and deletions for the fallback URL, Key, model, and display name.
+- The fallback API model field can fetch an OpenAI-compatible `/models` list and switch to a selector when models are returned. Providers that do not expose a model list, or return an error, still support manually entering a model ID.
+- A follow-up backup audit found that `workbench_artifacts` was exported and had an import section but was absent from the import writer's available-store whitelist, so full restore silently skipped file-card metadata. The whitelist now includes `workbench_artifacts`; QuickSync already covered it correctly.
+
+### Fallback API Configuration Notes
+
+- The fallback API uses the same OpenAI-compatible base-URL convention as the system API: the saved value is the provider base URL, while Code appends `/models` for discovery and `/chat/completions` for replies.
+- The fallback panel provides `引用系统 API`, which copies the current system API URL, Key, and model into the Code settings draft. This is a one-time copy rather than a permanent binding; later edits remain isolated between system chat and Code fallback.
+- The fallback URL, Key, model, and display name remain part of `workbench_bridge_config_v1`, so full/text backup, GitHub/WebDAV restore, and QuickSync setting upserts/deletions carry them between devices.
+- Risk: not every OpenAI-compatible provider exposes `GET /models`. Failure or an empty list must leave manual model-ID entry available and must not erase the user's existing model value.
+- Risk: copying the system API also copies its Key into Code's portable settings. This is intentional for the owner's cross-device workflow, but exports and cloud backups must still be treated as credential-bearing private data.
+
+### Upstream Check Before Release
+
+- Refreshed `upstream/master` before publishing on 2026-07-22. The latest upstream commit is `680659b` (`Refine neural memory qualification windows` via PR #419), two commits ahead of this branch's previous upstream baseline.
+- The upstream change is concentrated in loyal-user recruitment qualification, tests, documentation, and its worker bundle. Merge and rebuild it after committing the Code workspace changes; pay special attention to `package.json` and generated worker output if Git reports overlap.

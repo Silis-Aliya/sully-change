@@ -9,7 +9,7 @@ import {
     LifeSimState, HandbookEntry, Tracker, TrackerEntry, HotNewsSnapshot,
     LifeRecord, MedPlan, LifeRecordSettings, CharacterGroup,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
-    WorldProfile, WorldEpisode
+    WorldProfile, WorldEpisode, WorkbenchArtifact, WorkbenchMemory, WorkbenchMessage, WorkbenchSession, WorkbenchSummary
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -23,7 +23,10 @@ const DB_NAME = 'AetherOS_Data';
 // v67：两条并行线各自用掉了 v65/v66（A线: blob_assets + 生活记录；B线: room_plates 门牌 + digest_reports 消化日志），
 // 合并后统一推到 67——建表全部走幂等的 if(!contains)，任一侧的 v66 老库升级时都会补齐缺的那组表。
 // v68：character_groups 角色分组（神经链接"文件夹"，见 types.ts CharacterGroup）。
-const DB_VERSION = 68;
+// v69：工作区 Workbench 独立会话 / 消息 / 摘要便签。
+// v70：Code Memory（跨 Code 对话的长期偏好/规则）。
+// v71：Code 文件卡元数据；项目大文件本体留在电脑。
+const DB_VERSION = 71;
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -77,6 +80,11 @@ const STORE_WORLD_EPISODES = 'world_episodes';    // 家园·演绎历史（每�
 const STORE_LIFE_RECORDS = 'life_records';        // 生活记录：生理期/药盒打卡/锻炼（记账走 bank_transactions）
 const STORE_MED_PLANS = 'med_plans';              // 药盒计划（每天几点吃什么药）
 const STORE_LIFE_SETTINGS = 'life_record_settings'; // 生活记录设置单例（id='main'：周期长度等）
+const STORE_WORKBENCH_SESSIONS = 'workbench_sessions';
+const STORE_WORKBENCH_MESSAGES = 'workbench_messages';
+const STORE_WORKBENCH_SUMMARIES = 'workbench_summaries';
+const STORE_WORKBENCH_MEMORIES = 'workbench_memories';
+const STORE_WORKBENCH_ARTIFACTS = 'workbench_artifacts';
 
 // API 调用记录：保留近 5 天，超期丢弃；再加一个硬上限防止异常情况撑爆
 const API_CALL_LOG_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
@@ -339,6 +347,52 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_LIFE_SETTINGS, { keyPath: 'id' });
 
       createStore(STORE_HOTNEWS, { keyPath: 'id' });
+
+      createStore(STORE_WORKBENCH_SESSIONS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_MESSAGES)) {
+          const wbMsgStore = db.createObjectStore(STORE_WORKBENCH_MESSAGES, { keyPath: 'id' });
+          wbMsgStore.createIndex('sessionId', 'sessionId', { unique: false });
+          wbMsgStore.createIndex('createdAt', 'createdAt', { unique: false });
+      } else {
+          const wbMsgStore = (event.target as IDBOpenDBRequest).transaction?.objectStore(STORE_WORKBENCH_MESSAGES);
+          if (wbMsgStore && !wbMsgStore.indexNames.contains('sessionId')) {
+              try { wbMsgStore.createIndex('sessionId', 'sessionId', { unique: false }); } catch {}
+          }
+          if (wbMsgStore && !wbMsgStore.indexNames.contains('createdAt')) {
+              try { wbMsgStore.createIndex('createdAt', 'createdAt', { unique: false }); } catch {}
+          }
+      }
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_SUMMARIES)) {
+          const wbSummaryStore = db.createObjectStore(STORE_WORKBENCH_SUMMARIES, { keyPath: 'id' });
+          wbSummaryStore.createIndex('sessionId', 'sessionId', { unique: false });
+          wbSummaryStore.createIndex('createdAt', 'createdAt', { unique: false });
+      } else {
+          const wbSummaryStore = (event.target as IDBOpenDBRequest).transaction?.objectStore(STORE_WORKBENCH_SUMMARIES);
+          if (wbSummaryStore && !wbSummaryStore.indexNames.contains('sessionId')) {
+              try { wbSummaryStore.createIndex('sessionId', 'sessionId', { unique: false }); } catch {}
+          }
+          if (wbSummaryStore && !wbSummaryStore.indexNames.contains('createdAt')) {
+              try { wbSummaryStore.createIndex('createdAt', 'createdAt', { unique: false }); } catch {}
+          }
+      }
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_MEMORIES)) {
+          const wbMemoryStore = db.createObjectStore(STORE_WORKBENCH_MEMORIES, { keyPath: 'id' });
+          wbMemoryStore.createIndex('sessionId', 'sessionId', { unique: false });
+          wbMemoryStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      } else {
+          const wbMemoryStore = (event.target as IDBOpenDBRequest).transaction?.objectStore(STORE_WORKBENCH_MEMORIES);
+          if (wbMemoryStore && !wbMemoryStore.indexNames.contains('sessionId')) {
+              try { wbMemoryStore.createIndex('sessionId', 'sessionId', { unique: false }); } catch {}
+          }
+          if (wbMemoryStore && !wbMemoryStore.indexNames.contains('updatedAt')) {
+              try { wbMemoryStore.createIndex('updatedAt', 'updatedAt', { unique: false }); } catch {}
+          }
+      }
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_ARTIFACTS)) {
+          const store = db.createObjectStore(STORE_WORKBENCH_ARTIFACTS, { keyPath: 'id' });
+          store.createIndex('sessionId', 'sessionId', { unique: false });
+          store.createIndex('updatedAt', 'updatedAt', { unique: false });
+      }
 
       // ─── Memory Palace (记忆宫殿) stores ───
       if (!db.objectStoreNames.contains('memory_nodes')) {
@@ -1068,6 +1122,277 @@ export const DB = {
           fixedCategories: fixedCategories.map(c => ({ id: c.id, name: c.name })),
           removedEmojiCount: emojisToDelete.length,
       };
+  },
+
+  getWorkbenchSessions: async (): Promise<WorkbenchSession[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_SESSIONS)) return resolve([]);
+      const tx = db.transaction(STORE_WORKBENCH_SESSIONS, 'readonly');
+      const req = tx.objectStore(STORE_WORKBENCH_SESSIONS).getAll();
+      req.onsuccess = () => resolve((req.result || []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  saveWorkbenchSession: async (session: WorkbenchSession): Promise<void> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_SESSIONS, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_SESSIONS).put(session);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchSession aborted'));
+    });
+  },
+
+  getWorkbenchMessages: async (sessionId: string, limit = 200): Promise<WorkbenchMessage[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_MESSAGES)) return resolve([]);
+      const tx = db.transaction(STORE_WORKBENCH_MESSAGES, 'readonly');
+      const store = tx.objectStore(STORE_WORKBENCH_MESSAGES);
+      const out: WorkbenchMessage[] = [];
+      const finish = () => resolve(out.sort((a, b) => a.createdAt - b.createdAt).slice(-limit));
+      if (store.indexNames.contains('sessionId')) {
+        const req = store.index('sessionId').openCursor(IDBKeyRange.only(sessionId), 'prev');
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (cursor && out.length < limit) {
+            out.push(cursor.value as WorkbenchMessage);
+            cursor.continue();
+          } else {
+            finish();
+          }
+        };
+        req.onerror = () => reject(req.error);
+        return;
+      }
+      const req = store.getAll();
+      req.onsuccess = () => {
+        out.push(...(req.result || []).filter((m: WorkbenchMessage) => m.sessionId === sessionId));
+        finish();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  saveWorkbenchMessage: async (message: WorkbenchMessage): Promise<void> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([STORE_WORKBENCH_MESSAGES, STORE_WORKBENCH_SESSIONS], 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_MESSAGES).put(message);
+      const sessionStore = tx.objectStore(STORE_WORKBENCH_SESSIONS);
+      const req = sessionStore.get(message.sessionId);
+      req.onsuccess = () => {
+        const existing = req.result as WorkbenchSession | undefined;
+        if (existing) {
+          sessionStore.put({ ...existing, updatedAt: message.createdAt });
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchMessage aborted'));
+    });
+  },
+
+  updateWorkbenchMessageContent: async (messageId: string, content: string): Promise<void> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORE_WORKBENCH_MESSAGES);
+      const req = store.get(messageId);
+      req.onsuccess = () => {
+        const existing = req.result as WorkbenchMessage | undefined;
+        if (!existing) return;
+        store.put({
+          ...existing,
+          content,
+          metadata: { ...(existing.metadata || {}), editedAt: Date.now() },
+        });
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('updateWorkbenchMessageContent aborted'));
+    });
+  },
+
+  deleteWorkbenchMessage: async (messageId: string): Promise<void> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MESSAGES, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_MESSAGES).delete(messageId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('deleteWorkbenchMessage aborted'));
+    });
+  },
+
+  deleteWorkbenchMessages: async (messageIds: string[]): Promise<void> => {
+    const ids = Array.from(new Set(messageIds.filter(Boolean)));
+    if (!ids.length) return;
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORE_WORKBENCH_MESSAGES);
+      ids.forEach(id => store.delete(id));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('deleteWorkbenchMessages aborted'));
+    });
+  },
+
+  clearWorkbenchSession: async (sessionId: string): Promise<void> => {
+    const db = await openDB();
+    const messages = await DB.getWorkbenchMessages(sessionId, Number.MAX_SAFE_INTEGER);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MESSAGES, 'readwrite');
+      for (const msg of messages) tx.objectStore(STORE_WORKBENCH_MESSAGES).delete(msg.id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('clearWorkbenchSession aborted'));
+    });
+  },
+
+  deleteWorkbenchSession: async (sessionId: string): Promise<void> => {
+    await DB.clearWorkbenchSession(sessionId);
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_SESSIONS, 'readwrite');
+      const store = tx.objectStore(STORE_WORKBENCH_SESSIONS);
+      const req = store.get(sessionId);
+      req.onsuccess = () => {
+        const session = req.result as WorkbenchSession | undefined;
+        if (session) store.put({ ...session, deletedAt: Date.now(), updatedAt: Date.now() });
+      };
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('deleteWorkbenchSession aborted'));
+    });
+  },
+
+  getWorkbenchArtifacts: async (sessionId?: string): Promise<WorkbenchArtifact[]> => {
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(STORE_WORKBENCH_ARTIFACTS)) return [];
+    return new Promise((resolve, reject) => {
+      const store = db.transaction(STORE_WORKBENCH_ARTIFACTS, 'readonly').objectStore(STORE_WORKBENCH_ARTIFACTS);
+      const req = sessionId && store.indexNames.contains('sessionId')
+        ? store.index('sessionId').getAll(IDBKeyRange.only(sessionId))
+        : store.getAll();
+      req.onsuccess = () => resolve((req.result || []).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)));
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  saveWorkbenchArtifact: async (artifact: WorkbenchArtifact): Promise<void> => {
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(STORE_WORKBENCH_ARTIFACTS)) return;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_ARTIFACTS, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_ARTIFACTS).put(artifact);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchArtifact aborted'));
+    });
+  },
+
+  saveWorkbenchSummary: async (summary: WorkbenchSummary): Promise<void> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_SUMMARIES, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_SUMMARIES).put(summary);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchSummary aborted'));
+    });
+  },
+
+  getRecentWorkbenchSummaries: async (limit = 8): Promise<WorkbenchSummary[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_SUMMARIES)) return resolve([]);
+      const tx = db.transaction(STORE_WORKBENCH_SUMMARIES, 'readonly');
+      const store = tx.objectStore(STORE_WORKBENCH_SUMMARIES);
+      const out: WorkbenchSummary[] = [];
+      const req = store.indexNames.contains('createdAt')
+        ? store.index('createdAt').openCursor(null, 'prev')
+        : store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor && out.length < limit) {
+          out.push(cursor.value as WorkbenchSummary);
+          cursor.continue();
+        } else {
+          resolve(out.sort((a, b) => a.createdAt - b.createdAt));
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  saveWorkbenchMemories: async (memories: WorkbenchMemory[]): Promise<void> => {
+    const rows = memories.filter(m => m?.content?.trim());
+    if (!rows.length) return;
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(STORE_WORKBENCH_MEMORIES)) return;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MEMORIES, 'readwrite');
+      const store = tx.objectStore(STORE_WORKBENCH_MEMORIES);
+      for (const memory of rows) store.put(memory);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchMemories aborted'));
+    });
+  },
+
+  saveWorkbenchMemory: async (memory: WorkbenchMemory): Promise<void> => {
+    if (!memory?.content?.trim()) return;
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(STORE_WORKBENCH_MEMORIES)) return;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MEMORIES, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_MEMORIES).put(memory);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('saveWorkbenchMemory aborted'));
+    });
+  },
+
+  deleteWorkbenchMemory: async (memoryId: string): Promise<void> => {
+    if (!memoryId) return;
+    const db = await openDB();
+    if (!db.objectStoreNames.contains(STORE_WORKBENCH_MEMORIES)) return;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKBENCH_MEMORIES, 'readwrite');
+      tx.objectStore(STORE_WORKBENCH_MEMORIES).delete(memoryId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('deleteWorkbenchMemory aborted'));
+    });
+  },
+
+  getRecentWorkbenchMemories: async (limit = 20): Promise<WorkbenchMemory[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains(STORE_WORKBENCH_MEMORIES)) return resolve([]);
+      const tx = db.transaction(STORE_WORKBENCH_MEMORIES, 'readonly');
+      const store = tx.objectStore(STORE_WORKBENCH_MEMORIES);
+      const out: WorkbenchMemory[] = [];
+      const req = store.indexNames.contains('updatedAt')
+        ? store.index('updatedAt').openCursor(null, 'prev')
+        : store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor && out.length < limit) {
+          out.push(cursor.value as WorkbenchMemory);
+          cursor.continue();
+        } else {
+          resolve(out.sort((a, b) => a.updatedAt - b.updatedAt));
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
   },
 
   initializeEmojiData: async (): Promise<void> => {
@@ -2504,7 +2829,7 @@ export const DB = {
   applyRawStorePatch: async (
       storeName: string,
       items: any[],
-      deletedKeys: Array<string | number> = [],
+      deletedKeys: IDBValidKey[] = [],
       onProgress?: (done: number, total: number) => void
   ): Promise<void> => {
       const db = await openDB();
@@ -2523,7 +2848,7 @@ export const DB = {
           return 200;
       };
       const chunkSize = getMobileChunkSize();
-      const writeChunk = async (keys: Array<string | number>, rows: any[]) => {
+      const writeChunk = async (keys: IDBValidKey[], rows: any[]) => {
           if (keys.length === 0 && rows.length === 0) return;
           await new Promise<void>((resolve, reject) => {
               const transaction = db.transaction(storeName, 'readwrite');
@@ -2686,6 +3011,14 @@ export const DB = {
           getAllFromStore(STORE_LIFE_SETTINGS),
       ]);
 
+      const [workbenchSessions, workbenchMessages, workbenchSummaries, workbenchMemories, workbenchArtifacts] = await Promise.all([
+          getAllFromStore<WorkbenchSession>(STORE_WORKBENCH_SESSIONS),
+          getAllFromStore<WorkbenchMessage>(STORE_WORKBENCH_MESSAGES),
+          getAllFromStore<WorkbenchSummary>(STORE_WORKBENCH_SUMMARIES),
+          getAllFromStore<WorkbenchMemory>(STORE_WORKBENCH_MEMORIES),
+          getAllFromStore<WorkbenchArtifact>(STORE_WORKBENCH_ARTIFACTS),
+      ]);
+
       const userProfile = userProfiles.length > 0 ? {
           name: userProfiles[0].name,
           avatar: userProfiles[0].avatar,
@@ -2728,6 +3061,11 @@ export const DB = {
           vrSignal: exportSignalLocal(),         // 信号坠落处本机记录（句子归属「你·角色」+ 反复用清单，存 localStorage）
           worlds,
           worldEpisodes,
+          workbenchSessions,
+          workbenchMessages,
+          workbenchSummaries,
+          workbenchMemories,
+          workbenchArtifacts,
           worldHomeLocal: exportWorldHomeLocal(), // 家园本机配置：全局 API + 文风收藏（存 localStorage）
           luckinLocal: exportLuckinLocal(),       // 瑞幸 token + 启用状态（存 localStorage）
           mcdLocal: exportMcdLocal(),             // 麦当劳 token + 启用状态（存 localStorage）
@@ -2773,6 +3111,7 @@ export const DB = {
           STORE_HOTNEWS,
           STORE_VR_NOVELS, STORE_VR_ANNOTATIONS, STORE_CC_PARTS, STORE_VR_MUSIC, STORE_VR_GUESTBOOK, STORE_VR_SCRIPTS, STORE_VR_PLAYS, STORE_VR_PRESETS, STORE_VR_LETTERS, STORE_VR_SETTINGS,
           STORE_WORLDS, STORE_WORLD_EPISODES,
+          STORE_WORKBENCH_SESSIONS, STORE_WORKBENCH_MESSAGES, STORE_WORKBENCH_SUMMARIES, STORE_WORKBENCH_MEMORIES, STORE_WORKBENCH_ARTIFACTS,
           'memory_nodes', 'memory_vectors', 'memory_links', 'topic_boxes', 'anticipations', 'event_boxes',
           'room_plates', 'digest_reports',
           'memory_batches', 'pixel_home_assets', 'pixel_home_layouts'
@@ -2868,6 +3207,11 @@ export const DB = {
           (data as any).vrPostOffice !== undefined,
           data.worlds !== undefined,
           data.worldEpisodes !== undefined,
+          (data as any).workbenchSessions !== undefined,
+          (data as any).workbenchMessages !== undefined,
+          (data as any).workbenchSummaries !== undefined,
+          (data as any).workbenchMemories !== undefined,
+          (data as any).workbenchArtifacts !== undefined,
           (data as any).worldHomeLocal !== undefined,
           (data as any).luckinLocal !== undefined,
           (data as any).mcdLocal !== undefined,
@@ -3182,6 +3526,26 @@ export const DB = {
           await clearAndAdd(STORE_WORLD_EPISODES, data.worldEpisodes, '家园演绎历史', false);
           data.worldEpisodes = undefined as any;
       }, data.worldEpisodes?.length || 0);
+      await runSection('工作区会话', (data as any).workbenchSessions !== undefined, async () => {
+          await clearAndAdd(STORE_WORKBENCH_SESSIONS, (data as any).workbenchSessions, '工作区会话', false);
+          (data as any).workbenchSessions = undefined;
+      }, (data as any).workbenchSessions?.length || 0);
+      await runSection('工作区消息', (data as any).workbenchMessages !== undefined, async () => {
+          await clearAndAdd(STORE_WORKBENCH_MESSAGES, (data as any).workbenchMessages, '工作区消息', false);
+          (data as any).workbenchMessages = undefined;
+      }, (data as any).workbenchMessages?.length || 0);
+      await runSection('工作区摘要', (data as any).workbenchSummaries !== undefined, async () => {
+          await clearAndAdd(STORE_WORKBENCH_SUMMARIES, (data as any).workbenchSummaries, '工作区摘要', false);
+          (data as any).workbenchSummaries = undefined;
+      }, (data as any).workbenchSummaries?.length || 0);
+      await runSection('Code Memory', (data as any).workbenchMemories !== undefined, async () => {
+          await clearAndAdd(STORE_WORKBENCH_MEMORIES, (data as any).workbenchMemories, 'Code Memory', false);
+          (data as any).workbenchMemories = undefined;
+      }, (data as any).workbenchMemories?.length || 0);
+      await runSection('Code 文件卡', (data as any).workbenchArtifacts !== undefined, async () => {
+          await clearAndAdd(STORE_WORKBENCH_ARTIFACTS, (data as any).workbenchArtifacts, 'Code 文件卡', false);
+          (data as any).workbenchArtifacts = undefined;
+      }, (data as any).workbenchArtifacts?.length || 0);
       await runSection('家园本机配置', (data as any).worldHomeLocal !== undefined, async () => {
           importWorldHomeLocal((data as any).worldHomeLocal); // 全局 API + 文风收藏
           (data as any).worldHomeLocal = undefined;

@@ -76,6 +76,16 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   VRWorld: ({ className }) => <Planet className={className} weight="regular" />,
   CharCreatorDev: ({ className }) => <Wrench className={className} weight="regular" />,
   WorldHome: ({ className }) => <HouseLine className={className} weight="regular" />,
+  Code: ({ className }) => (
+    <svg className={className} viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="36" y="50" width="184" height="156" rx="34" stroke="currentColor" strokeWidth="18" />
+      <path d="M85 106L58 128L85 150" stroke="currentColor" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M171 106L198 128L171 150" stroke="currentColor" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M143 91L113 165" stroke="currentColor" strokeWidth="16" strokeLinecap="round" />
+      <path d="M72 78H76" stroke="currentColor" strokeWidth="16" strokeLinecap="round" />
+      <path d="M101 78H105" stroke="currentColor" strokeWidth="16" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 export const INSTALLED_APPS: AppConfig[] = [
@@ -100,6 +110,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Novel, name: '笔友会', icon: 'Novel', color: 'amber' },
   { id: AppID.Songwriting, name: '写歌', icon: 'Songwriting', color: 'fuchsia' },
   { id: AppID.VRWorld, name: '彼方', icon: 'VRWorld', color: 'indigo' },
+  { id: AppID.Workbench, name: 'Code', icon: 'Code', color: 'slate' },
   { id: AppID.Schedule, name: '时光契约', icon: 'Schedule', color: 'cyan' },
   { id: AppID.Worldbook, name: '世界书', icon: 'Worldbook', color: 'indigo' },
   { id: AppID.HotNews, name: '热点', icon: 'HotNews', color: 'red' },

@@ -18,6 +18,7 @@ export const BACKUP_LOCAL_STORAGE_EXACT_KEYS: readonly string[] = [
     'os_cloud_backup_config',
     'os_dream_collection',
     'os_last_active_char_id',
+    'os_char_groups_expanded',
     'study_api_config',
     'study_tutor_presets',
     'instant_push_config_v1',
@@ -36,10 +37,18 @@ export const BACKUP_LOCAL_STORAGE_EXACT_KEYS: readonly string[] = [
     'browser_use_real_search',
     'bm25_mode',
     'tama_accent_hue',
+    'tama_style_v2',
+    'tama_board_img',
+    'tama_board_fg',
     'spark_char_handles',
     'spark_user_id',
+    'spark_user_bg',
+    'spark_social_profile',
+    'room_custom_assets',
     'world_home_api',
     'world_custom_styles',
+    'cp_tavern_style',
+    'vr_help_seen',
     'aetheros.mcp.servers',
     'aetheros.mcp.useNativeTools',
     'aetheros.luckin.mcpToken',
@@ -48,6 +57,8 @@ export const BACKUP_LOCAL_STORAGE_EXACT_KEYS: readonly string[] = [
     'aetheros.mcd.mcpEnabled',
     'sully_proxy_worker_url_v1',
     'sully_video_parse_key_v1',
+    'workbench_bridge_config_v1',
+    'workbench_mode_v1',
 ] as const;
 
 const BACKUP_LOCAL_STORAGE_PREFIXES: readonly string[] = [
@@ -103,5 +114,20 @@ export const importLocalStorageSettings = (data: Record<string, string> | null |
         }
     } catch {
         /* localStorage unavailable or quota full: keep import best-effort */
+    }
+};
+
+export const applyLocalStorageSettingsPatch = (
+    upserts: Record<string, string> | null | undefined,
+    deletes: string[] | null | undefined,
+): void => {
+    importLocalStorageSettings(upserts);
+    if (!Array.isArray(deletes)) return;
+    try {
+        for (const key of deletes) {
+            if (typeof key === 'string' && shouldBackupLocalStorageKey(key)) localStorage.removeItem(key);
+        }
+    } catch {
+        /* localStorage unavailable: keep sync best-effort */
     }
 };

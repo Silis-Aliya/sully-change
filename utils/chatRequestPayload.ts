@@ -80,6 +80,11 @@ export interface BuildChatPayloadInput {
     luckinMiniSnap?: LuckinMiniAppSnapshot;
     /** 瑞幸聊天点单模式 (点"瑞一杯"激活, 角色直接调真实工具) */
     luckinChat?: LuckinChatState;
+    promptSurface?: {
+        surface?: 'chat' | 'code';
+        codeSessionTitle?: string;
+        taskIndex?: string;
+    };
     /**
      * 把历史里的多模态图片消息（content 数组 + image_url）压平成纯文本占位。
      * 彼方/小小窝等复用聊天历史、但配了独立 API 的场景必须开：目标模型可能不支持
@@ -236,6 +241,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         realtimeConfig, innerState,
         translationConfig, htmlMode, thinkingChain, mcdMiniSnap, luckinMiniSnap, luckinChat,
     } = input;
+    const isCodeSurface = input.promptSurface?.surface === 'code';
     const recentMsgsHint = input.recentMsgsHint ?? historyMsgs;
 
     if (isPromptBuildSkipped()) {
@@ -290,6 +296,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         musicCfg,
         input.musicSnapshot ?? null,
         recentTrackSwitch,
+        input.promptSurface,
     );
     let systemPrompt = parts.stable;
     let volatileTail = parts.volatileState;
@@ -325,13 +332,13 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 5. HTML 卡片模式 ─────────────────────────────────
-    const htmlActive = !!htmlMode?.enabled;
+    const htmlActive = !isCodeSurface && !!htmlMode?.enabled;
     if (htmlActive) {
         systemPrompt += `\n\n${buildHtmlPrompt(htmlMode?.customPrompt)}`;
     }
 
     // ── 6. 思考链提示词 ───────────────────────────────────
-    const thinkingActive = !!thinkingChain?.enabled;
+    const thinkingActive = !isCodeSurface && !!thinkingChain?.enabled;
     if (thinkingActive) {
         const userName = (userProfile?.name && userProfile.name.trim()) || '用户';
         systemPrompt += `\n\n${buildThinkingChainPrompt(char.name, userName)}`;
@@ -358,7 +365,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     );
 
     // ── 9. 麦当劳小程序上下文（购物车/菜单实时快照 → 易变尾段） ──
-    const mcdActive = !!mcdMiniSnap?.open;
+    const mcdActive = !isCodeSurface && !!mcdMiniSnap?.open;
     if (mcdActive) {
         const block = buildMcdMiniAppContextBlock(mcdMiniSnap, userProfile?.name || '用户');
         if (block) {
@@ -367,7 +374,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 9b. 瑞幸小程序上下文（同上，易变尾段） ──
-    const luckinActive = !!luckinMiniSnap?.open;
+    const luckinActive = !isCodeSurface && !!luckinMiniSnap?.open;
     if (luckinActive) {
         const block = buildLuckinMiniAppContextBlock(luckinMiniSnap, userProfile?.name || '用户');
         if (block) {
@@ -376,7 +383,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     }
 
     // ── 9c. 瑞幸聊天点单模式 (角色直接调真实工具；含实时定位/会话状态 → 易变尾段) ──
-    const luckinChatActive = !!luckinChat?.active;
+    const luckinChatActive = !isCodeSurface && !!luckinChat?.active;
     if (luckinChatActive) {
         const block = buildLuckinChatSystemBlock(luckinChat, recentMsgsHint, userProfile?.name || '用户');
         if (block) {
@@ -386,7 +393,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
 
     // ── 9d. 通用 MCP 工具模式 (用户自配的远程 MCP 服务器, 见 docs/mcp-client.md) ──
     // 工具清单来自持久化的发现结果，变化很慢 → 稳定段。
-    const mcpChatActive = isMcpChatAvailable(char.id);
+    const mcpChatActive = !isCodeSurface && isMcpChatAvailable(char.id);
     if (mcpChatActive) {
         const block = buildMcpSystemBlock(userProfile?.name || '用户', char.id);
         if (block) {

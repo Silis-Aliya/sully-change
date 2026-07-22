@@ -623,7 +623,7 @@ const Chat: React.FC = () => {
             const chatScopeMsgs = recent
                 .filter(m => !m.metadata?.hidden)
                 .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
-                .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card' && m.type !== 'music_invite_result'));
+                .filter(m => !(currentChar?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card' && m.type !== 'music_invite_result' && m.type !== 'code_card'));
             setTotalMsgCount(totalCount);
             setMessages(chatScopeMsgs.slice(-requestedVisibleCount));
         };
@@ -776,7 +776,7 @@ const Chat: React.FC = () => {
                 const filtered = allMsgs
                     .filter(m => !m.metadata?.hidden)
                     .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
-                    .filter(m => !(char?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card'));
+                    .filter(m => !(char?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card' && m.type !== 'code_card'));
                 setAllHistoryMessages(filtered);
             });
         }
@@ -2408,7 +2408,7 @@ const Chat: React.FC = () => {
         const base = messages
             .filter(m => m.metadata?.source !== 'date' && m.metadata?.source !== 'call')
             .filter(m => !m.metadata?.proactiveHint)
-            .filter(m => { if (char?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card') return false; return true; });
+            .filter(m => { if (char?.hideSystemLogs && m.role === 'system' && m.type !== 'score_card' && m.type !== 'code_card') return false; return true; });
         if (windowedFocusMsgId !== null) {
             const idx = base.findIndex(m => m.id === windowedFocusMsgId);
             if (idx >= 0) {

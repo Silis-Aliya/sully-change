@@ -365,6 +365,7 @@ export const ContextBuilder = {
         char: CharacterProfile,
         options?: {
             includeDetailedMemories?: boolean;
+            includeEmotionBuff?: boolean;
             memoryPalaceContext?: string;
             timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean };
         },
@@ -379,7 +380,7 @@ export const ContextBuilder = {
             }
         }
 
-        if (isScheduleFeatureOn(char) && char.emotionConfig?.enabled && char.buffInjection) {
+        if (options?.includeEmotionBuff !== false && isScheduleFeatureOn(char) && char.emotionConfig?.enabled && char.buffInjection) {
             context += `${char.buffInjection}\n\n`;
             console.log(`🎭 [Context] Buff injected for ${char.name}:\n`, char.buffInjection);
             console.log(`🎭 [Context] Active buffs:`, JSON.stringify(char.activeBuffs || [], null, 2));

@@ -581,7 +581,9 @@ export const useChatAI = ({
 
                 setEmotionStatus('evaluating');
                 const innerState = await evaluateEmotionBackground(
-                    char, deps.userProfile, payload.systemPrompt, payload.cleanedApiMessages, emotionApi,
+                    char, deps.userProfile, payload.systemPrompt,
+                    payload.cleanedApiMessages.filter((m: any) => !(m.role === 'system' && typeof m.content === 'string' && m.content.includes('[Code 进度'))),
+                    emotionApi,
                 );
                 if (innerState) setEvolvedNarrative(innerState);
                 // 成功后清 pending. 失败不清 → 下次 mount drain 重试.
@@ -797,6 +799,11 @@ export const useChatAI = ({
             }));
             const systemPrompt = payload.systemPrompt;
             const cleanedApiMessages = payload.cleanedApiMessages;
+            const emotionApiMessages = cleanedApiMessages.filter((m: any) => !(
+                m.role === 'system'
+                && typeof m.content === 'string'
+                && m.content.includes('[Code 进度')
+            ));
             const fullMessages = payload.fullMessages;
             const promptBuildSkipped = payload.flags.promptBuildSkipped;
             if (payload.flags.mcdActive) {
@@ -839,7 +846,7 @@ export const useChatAI = ({
             // instant 模式不受影响：worker 端本来就是主回复跑完才跑评估（天然串行）。
             const fireLocalEmotionEval = (emotionEvalEnabled && !instantOn && emotionApi) ? () => {
                 setEmotionStatus('evaluating');
-                evaluateEmotionBackground(charForGen, userProfile, systemPrompt, cleanedApiMessages, emotionApi)
+                evaluateEmotionBackground(charForGen, userProfile, systemPrompt, emotionApiMessages, emotionApi)
                     .then((innerState) => {
                         if (innerState) setEvolvedNarrative(innerState);
                     })
@@ -852,7 +859,7 @@ export const useChatAI = ({
                     // includeContext=false: 不嵌 system prompt + 对话历史 (worker 复用本次请求的 messages 作前文),
                     // 把 emotionEval 块压到最小, 让请求体留在 keepalive 64KB 上限内 (关前端也能跑完).
                     prompt: buildEmotionEvalPrompt(
-                        charForGen, userProfile, systemPrompt, cleanedApiMessages, false,
+                        charForGen, userProfile, systemPrompt, emotionApiMessages, false,
                         shouldRequestAmbient(charForGen.id) ? buildAmbientEvalSection(charForGen) : ''
                     ),
                     api: { baseUrl: emotionApi.baseUrl, apiKey: emotionApi.apiKey, model: emotionApi.model },

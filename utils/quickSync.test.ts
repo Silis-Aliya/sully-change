@@ -1,10 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import { collectBlobRefIds, QUICK_SYNC_STORES, shouldIncludeQuickSyncRow } from './quickSync';
+import {
+    collectBlobRefIds,
+    QUICK_SYNC_STORES,
+    recordKeyForQuickSync,
+    restoreQuickSyncDeleteKey,
+    shouldIncludeQuickSyncRow,
+} from './quickSync';
 
 describe('quickSync settings coverage', () => {
     it('includes theme and settings asset stores', () => {
         expect(QUICK_SYNC_STORES).toContain('themes');
         expect(QUICK_SYNC_STORES).toContain('assets');
+        expect(QUICK_SYNC_STORES).toContain('gallery');
+        expect(QUICK_SYNC_STORES).toContain('user_profile');
+        expect(QUICK_SYNC_STORES).toContain('diaries');
+        expect(QUICK_SYNC_STORES).toContain('tasks');
+        expect(QUICK_SYNC_STORES).toContain('anniversaries');
+        expect(QUICK_SYNC_STORES).toContain('room_todos');
+        expect(QUICK_SYNC_STORES).toContain('room_notes');
+        expect(QUICK_SYNC_STORES).toContain('groups');
+        expect(QUICK_SYNC_STORES).toContain('journal_stickers');
+        expect(QUICK_SYNC_STORES).toContain('social_posts');
+        expect(QUICK_SYNC_STORES).toContain('courses');
+        expect(QUICK_SYNC_STORES).toContain('games');
+        expect(QUICK_SYNC_STORES).toContain('novels');
+        expect(QUICK_SYNC_STORES).toContain('bank_transactions');
+        expect(QUICK_SYNC_STORES).toContain('bank_data');
+        expect(QUICK_SYNC_STORES).toContain('xhs_activities');
+        expect(QUICK_SYNC_STORES).toContain('xhs_stock');
+        expect(QUICK_SYNC_STORES).toContain('quizzes');
+        expect(QUICK_SYNC_STORES).toContain('guidebook');
+        expect(QUICK_SYNC_STORES).toContain('scheduled_messages');
+        expect(QUICK_SYNC_STORES).toContain('life_sim');
+        expect(QUICK_SYNC_STORES).toContain('hotnews_snapshots');
+        expect(QUICK_SYNC_STORES).toContain('pixel_home_assets');
+        expect(QUICK_SYNC_STORES).toContain('pixel_home_layouts');
+        expect(QUICK_SYNC_STORES).toContain('workbench_sessions');
+        expect(QUICK_SYNC_STORES).toContain('workbench_messages');
+        expect(QUICK_SYNC_STORES).toContain('workbench_summaries');
+        expect(QUICK_SYNC_STORES).toContain('workbench_memories');
+        expect(QUICK_SYNC_STORES).toContain('workbench_artifacts');
+        expect(QUICK_SYNC_STORES).toContain('memory_vectors');
     });
 
     it('syncs customization assets but skips runtime cache assets', () => {
@@ -26,5 +62,16 @@ describe('quickSync settings coverage', () => {
                 { content: 'plain text' },
             ],
         }).sort()).toEqual(['img_avatar_2', 'img_card_3', 'img_wallpaper_1']);
+    });
+
+    it('uses memoryId as the incremental key for vector rows', () => {
+        expect(recordKeyForQuickSync('memory_vectors', { memoryId: 'mem-43', vector: new Uint8Array(4) })).toBe('mem-43');
+        expect(recordKeyForQuickSync('messages', { id: 43 })).toBe('43');
+    });
+
+    it('round-trips compound pixel-home layout keys for incremental deletion', () => {
+        const key = recordKeyForQuickSync('pixel_home_layouts', { charId: 'char-1', roomId: 'bedroom' });
+        expect(key).toBe('compound:["char-1","bedroom"]');
+        expect(restoreQuickSyncDeleteKey('pixel_home_layouts', key!)).toEqual(['char-1', 'bedroom']);
     });
 });

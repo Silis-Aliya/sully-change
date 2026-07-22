@@ -1,6 +1,8 @@
 import { DB } from './db';
-import { exportLocalStorageSettings, importLocalStorageSettings } from './localSettingsBackup';
+import { applyLocalStorageSettingsPatch, exportLocalStorageSettings } from './localSettingsBackup';
 import { BLOBREF_PREFIX } from './blobRef';
+import { encodeVectorsForBackup, ensureFloat32 } from './memoryPalace/db';
+import type { VectorIndexEntry } from './backupFormat';
 
 export type QuickSyncManifest = {
     version: 1;
@@ -27,9 +29,34 @@ export const QUICK_SYNC_STORES = [
     'character_groups',
     'messages',
     'themes',
+    'emojis',
+    'emoji_categories',
     'assets',
+    'gallery',
+    'user_profile',
+    'diaries',
+    'tasks',
+    'anniversaries',
+    'room_todos',
+    'room_notes',
+    'groups',
+    'journal_stickers',
+    'social_posts',
+    'courses',
+    'games',
     'worldbooks',
+    'novels',
+    'bank_transactions',
+    'bank_data',
+    'xhs_activities',
+    'xhs_stock',
+    'quizzes',
+    'guidebook',
+    'scheduled_messages',
+    'life_sim',
+    'hotnews_snapshots',
     'memory_nodes',
+    'memory_vectors',
     'memory_links',
     'topic_boxes',
     'anticipations',
@@ -43,9 +70,25 @@ export const QUICK_SYNC_STORES = [
     'handbook',
     'trackers',
     'tracker_entries',
+    'vr_novels',
+    'vr_annotations',
+    'cc_custom_parts',
+    'vr_guestbook',
+    'vr_letters',
+    'vr_settings',
+    'vr_scripts',
+    'vr_plays',
+    'vr_presets',
     'worlds',
     'world_episodes',
     'daily_schedule',
+    'pixel_home_assets',
+    'pixel_home_layouts',
+    'workbench_sessions',
+    'workbench_messages',
+    'workbench_summaries',
+    'workbench_memories',
+    'workbench_artifacts',
 ] as const;
 
 const QUICK_SYNC_ASSET_IDS = new Set([
@@ -145,10 +188,51 @@ const hashBlob = async (blob: Blob): Promise<string> => {
     return `${blob.type || 'application/octet-stream'}:${blob.size}:${hex}`;
 };
 
-const recordKey = (item: any): string | null => {
-    const id = item?.id ?? item?.key ?? item?.name;
+const hashBytes = async (bytes: Uint8Array): Promise<string> => {
+    const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const digest = await crypto.subtle.digest('SHA-256', copy);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+export const recordKeyForQuickSync = (storeName: string, item: any): string | null => {
+    if (storeName === 'pixel_home_layouts') {
+        if (item?.charId === undefined || item?.roomId === undefined) return null;
+        return `compound:${JSON.stringify([item.charId, item.roomId])}`;
+    }
+    const id = storeName === 'memory_vectors' ? item?.memoryId : item?.id ?? item?.key ?? item?.name;
     if (id === undefined || id === null) return null;
     return String(id);
+};
+
+export const restoreQuickSyncDeleteKey = (storeName: string, key: string | number): IDBValidKey => {
+    if (storeName !== 'pixel_home_layouts' || typeof key !== 'string' || !key.startsWith('compound:')) {
+        return key;
+    }
+    try {
+        const compoundKey = JSON.parse(key.slice('compound:'.length));
+        return Array.isArray(compoundKey) ? compoundKey : key;
+    } catch {
+        return key;
+    }
+};
+
+const normalizeVectorRowForHash = async (row: any): Promise<Record<string, any>> => {
+    const f32 = ensureFloat32(row.vector);
+    const bytes = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+    return {
+        memoryId: row.memoryId,
+        charId: row.charId || '',
+        dimensions: f32.length,
+        model: row.model || '',
+        vectorHash: await hashBytes(bytes),
+    };
+};
+
+const hashQuickSyncRow = async (storeName: string, row: any): Promise<string> => {
+    if (storeName === 'memory_vectors') {
+        return hashText(stableStringify(await normalizeVectorRowForHash(row)));
+    }
+    return hashText(stableStringify(row));
 };
 
 export const loadQuickSyncManifest = (): QuickSyncManifest | null => {
@@ -175,9 +259,9 @@ export const buildQuickSyncManifest = async (
         const hashes: Record<string, string> = {};
         const map = new Map<string, any>();
         for (const row of rows) {
-            const key = recordKey(row);
+            const key = recordKeyForQuickSync(storeName, row);
             if (!key) continue;
-            hashes[key] = await hashText(stableStringify(row));
+            hashes[key] = await hashQuickSyncRow(storeName, row);
             map.set(key, row);
         }
         stores[storeName] = hashes;
@@ -224,7 +308,14 @@ export const buildQuickSyncDelta = async (
         }
 
         if (upserts.length || deletes.length) {
-            zip.file(`stores/${storeName}.json`, JSON.stringify({ upserts, deletes }));
+            if (storeName === 'memory_vectors') {
+                const vectorPayload = encodeVectorsForBackup(upserts);
+                zip.file(`stores/${storeName}.json`, JSON.stringify({ upserts: [], deletes }));
+                zip.file('stores/memory_vectors.delta.bin', vectorPayload.bin);
+                zip.file('stores/memory_vectors.delta.index.json', JSON.stringify(vectorPayload.index));
+            } else {
+                zip.file(`stores/${storeName}.json`, JSON.stringify({ upserts, deletes }));
+            }
             meta.stores[storeName] = { upserts: upserts.length, deletes: deletes.length };
             changed += upserts.length + deletes.length;
         }
@@ -232,8 +323,20 @@ export const buildQuickSyncDelta = async (
     }
 
     const localStorageSettings = exportLocalStorageSettings();
+    const localSettingsHashes: Record<string, string> = {};
+    for (const [key, value] of Object.entries(localStorageSettings || {})) {
+        localSettingsHashes[key] = await hashText(value);
+    }
+    manifest.stores.local_storage_settings = localSettingsHashes;
+    const previousLocalSettings = previous?.stores?.local_storage_settings || {};
+    const localSettingsUpserts: Record<string, string> = {};
+    const localSettingsDeletes = Object.keys(previousLocalSettings).filter(key => !(key in localSettingsHashes));
+    for (const [key, hash] of Object.entries(localSettingsHashes)) {
+        if (previousLocalSettings[key] !== hash && localStorageSettings) localSettingsUpserts[key] = localStorageSettings[key];
+    }
     const blobRefIds = new Set<string>();
-    for (const map of Object.values(records)) {
+    for (const [storeName, map] of Object.entries(records)) {
+        if (storeName === 'memory_vectors') continue;
         for (const row of map.values()) {
             collectBlobRefIds(row).forEach(id => blobRefIds.add(id));
         }
@@ -271,9 +374,17 @@ export const buildQuickSyncDelta = async (
 
     zip.file('quick-sync-meta.json', JSON.stringify(meta));
     zip.file('quick-sync-manifest.json', JSON.stringify(manifest));
-    if (localStorageSettings) {
-        zip.file('local-storage-settings.json', JSON.stringify(localStorageSettings));
-        changed += Object.keys(localStorageSettings).length;
+    const localSettingsUpsertCount = Object.keys(localSettingsUpserts).length;
+    if (localSettingsUpsertCount || localSettingsDeletes.length) {
+        zip.file('local-storage-settings.json', JSON.stringify({
+            upserts: localSettingsUpserts,
+            deletes: localSettingsDeletes,
+        }));
+        meta.stores.local_storage_settings = {
+            upserts: localSettingsUpsertCount,
+            deletes: localSettingsDeletes.length,
+        };
+        changed += localSettingsUpsertCount + localSettingsDeletes.length;
     }
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
     return { blob, manifest, meta, changed };
@@ -310,8 +421,25 @@ export const applyQuickSyncDelta = async (
         const file = zip.file(`stores/${storeName}.json`);
         if (!file) continue;
         const patch = JSON.parse(await file.async('string')) as { upserts?: any[]; deletes?: Array<string | number> };
-        const storeTotal = (patch.upserts?.length || 0) + (patch.deletes?.length || 0);
-        await DB.applyRawStorePatch(storeName, patch.upserts || [], patch.deletes || [], (storeDone) => {
+        let upserts = patch.upserts || [];
+        if (storeName === 'memory_vectors') {
+            const indexFile = zip.file('stores/memory_vectors.delta.index.json');
+            const binFile = zip.file('stores/memory_vectors.delta.bin');
+            if (indexFile && binFile) {
+                const index = JSON.parse(await indexFile.async('string')) as VectorIndexEntry[];
+                const bin = await binFile.async('uint8array');
+                upserts = index.map((entry) => ({
+                    memoryId: entry.memoryId,
+                    charId: entry.charId,
+                    dimensions: entry.dimensions,
+                    model: entry.model,
+                    vector: bin.slice(entry.byteOffset, entry.byteOffset + entry.byteLength),
+                }));
+            }
+        }
+        const storeTotal = upserts.length + (patch.deletes?.length || 0);
+        const deleteKeys = (patch.deletes || []).map(key => restoreQuickSyncDeleteKey(storeName, key));
+        await DB.applyRawStorePatch(storeName, upserts, deleteKeys, (storeDone) => {
             onProgress?.(done + storeDone, total || storeTotal);
         });
         done += storeTotal;
@@ -321,9 +449,16 @@ export const applyQuickSyncDelta = async (
 
     const localStorageFile = zip.file('local-storage-settings.json');
     if (localStorageFile) {
-        const localStorageSettings = JSON.parse(await localStorageFile.async('string')) as Record<string, string>;
-        importLocalStorageSettings(localStorageSettings);
-        changed += Object.keys(localStorageSettings || {}).length;
+        const payload = JSON.parse(await localStorageFile.async('string')) as
+            | Record<string, string>
+            | { upserts?: Record<string, string>; deletes?: string[] };
+        const isPatch = payload && typeof payload === 'object' && ('upserts' in payload || 'deletes' in payload);
+        const upserts = isPatch ? (payload as { upserts?: Record<string, string> }).upserts || {} : payload as Record<string, string>;
+        const deletes = isPatch ? (payload as { deletes?: string[] }).deletes || [] : [];
+        applyLocalStorageSettingsPatch(upserts, deletes);
+        changed += Object.keys(upserts || {}).length + deletes.length;
+        done += Object.keys(upserts || {}).length + deletes.length;
+        onProgress?.(done, total || done);
     }
 
     saveQuickSyncManifest(manifest);

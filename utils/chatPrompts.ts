@@ -16,6 +16,7 @@ import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { getLocalDateKey } from './localDate';
 import { getLocalDailySchedule } from './dailySchedule';
+import { getCharNameById } from './charNameRegistry';
 
 // 语音格式指导按当前 TTS 服务商二选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
 // 用鱼声则注入鱼声版（去掉 MiniMax 专属标记，改用标点 / 省略号控制停顿）。
@@ -217,7 +218,14 @@ export const ChatPrompts = {
         // 不传也能用，只是 char 的 block 2 只有歌名 + 艺人，没有歌词。
         musicCfg?: MusicCfg,
         musicSnapshot?: MusicPlaybackSnapshot | null,
+        _recentTrackSwitch?: unknown,
+        promptSurface?: {
+            surface?: 'chat' | 'code';
+            codeSessionTitle?: string;
+            taskIndex?: string;
+        },
     ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
+        const isCodeSurface = promptSurface?.surface === 'code';
         // ── 分段计时（定位瓶颈用）──
         const perfT0 = performance.now();
         const timings: Record<string, number> = {};
@@ -244,8 +252,11 @@ export const ChatPrompts = {
         // ── 易变状态段（volatileState）──
         // 开头一行框定，让模型明白这条出现在历史之后的 system 消息是"此刻的状态"，
         // 人设与规则仍以最上方的系统设定为准。
-        let volatileState = `\n[System: 实时状态 (Live Context)]\n（以下是此刻的实时状态——当前时间、你正在做的事、你的情绪底色、周边动态。你的人设与聊天规则见最上方的系统设定，此处不再重复。）\n\n`;
-        volatileState += ContextBuilder.buildVolatileCoreState(char, { includeDetailedMemories: true });
+        let volatileState = `\n[System: 实时状态 (Live Context)]\n（以下是此刻的实时状态——当前时间、你正在做的事、周边动态。你的人设与聊天规则见最上方的系统设定，此处不再重复。）\n\n`;
+        volatileState += ContextBuilder.buildVolatileCoreState(char, {
+            includeDetailedMemories: true,
+            includeEmotionBuff: !isCodeSurface,
+        });
 
         // ── 并发发起所有独立的异步取数（网络 + IndexedDB），下面按原顺序拼接 ──
         // 原来是 7 段串行 await，总耗时 = 各段之和；现在取 max。
@@ -309,9 +320,14 @@ export const ChatPrompts = {
                 if (recentGroupMsgs.length === 0) return '';
                 const groupLogStr = recentGroupMsgs.map(m => {
                     const dateStr = new Date(m.timestamp).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-                    return `[${dateStr}] [Group: ${m.groupName}] ${m.role === 'user' ? userProfile.name : 'Member'}: ${summarizeGroupMsgContent(m)}`;
+                    const speaker = m.role === 'user'
+                        ? userProfile.name
+                        : m.charId === char.id
+                            ? `你（${char.name}）`
+                            : getCharNameById(m.charId) || '群友';
+                    return `[${dateStr}] [Group: ${m.groupName}] ${speaker}: ${summarizeGroupMsgContent(m)}`;
                 }).join('\n');
-                return `\n### [Background Context: Recent Group Activities]\n(注意：你是以下群聊的成员...)\n${groupLogStr}\n`;
+                return `\n### 你亲历的近期群聊\n以下是你实际参与的群聊记录。发言人会标明为“用户名”“你（角色名）”或真实群成员名；这些只是背景，不要把群聊消息误当成当前用户刚刚对你说的话。\n\n${groupLogStr}\n`;
             } catch (e) {
                 console.error("Failed to load group context", e);
                 return '';
@@ -403,7 +419,7 @@ export const ChatPrompts = {
         // 2b. 音乐氛围（复用同一份 schedule）
         //     - 同步：从 schedule 里算 char 当前"正在听"哪首歌
         //     - 异步（可选）：拉一段歌词片段让这首歌真能影响 char 心境
-        try {
+        if (!isCodeSurface) try {
             let charListening: {
                 songId?: number; songName: string; artists: string; vibe?: string; lyricSnippet?: string[];
             } | null = null;
@@ -444,10 +460,12 @@ export const ChatPrompts = {
 
         // 群聊背景带时间戳、随群消息实时滚动 → 易变；日记标题/生活记录变化很慢 → 稳定。
         volatileState += groupContextText;
-        baseSystemPrompt += notionDiaryText;
-        baseSystemPrompt += feishuDiaryText;
-        baseSystemPrompt += notionNotesText;
-        baseSystemPrompt += lifeRecordText;
+        if (!isCodeSurface) {
+            baseSystemPrompt += notionDiaryText;
+            baseSystemPrompt += feishuDiaryText;
+            baseSystemPrompt += notionNotesText;
+            baseSystemPrompt += lifeRecordText;
+        }
 
         // 彼方常驻设定：仅对启用了「彼方」的角色注入。让角色在聊天里始终知道彼方是什么，
         // 不再依赖累积的 vr_card 动态 / 记忆总结（那些会被压缩、丢掉"彼方=VR游戏"的框定，
@@ -489,6 +507,32 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         const xhsLiteSimpleMode = !!(xhsEnabled && realtimeConfig?.xhsMcpConfig?.serverUrl?.includes('/api') && realtimeConfig?.xhsMcpConfig?.liteMode === 'simple');
         const pendingXhsPhoneResult = xhsPhoneEnabled ? await timed('pendingXhsPhoneResult', consumePendingXhsPhoneResult(char.id)) : '';
 
+        if (isCodeSurface) {
+            baseSystemPrompt = `### Code 区行为规范
+
+这里是${userProfile.name}邀请你加入并一起使用编程AI对话应用。普通聊天最近内容只作为关系、情绪和语气背景。
+
+阅读当前 Code 对话的最近消息。技术细节、待办、已确认决策和当前问题，以当前 Code 对话为准。
+
+其他 Code 对话的进度卡只作为背景索引，除非用户明确提到，否则不要把它们的代码细节混入当前任务。
+
+- 不要输出行为。
+  - 保持你的性格和想法，使用 IM 口语化风格。
+  - 你有自己的生活、想法和观察，保持独立。
+  - 拒绝空话，用具体记忆和细节回应。
+  - 情绪要有层次。
+  - 回复可用换行拆成多条气泡。
+-不使用语音、字幕、动作标签、电话口吻、音乐动作或普通聊天专属工具指令。
+
+- 禁止时间戳、名字前缀、系统日志格式。
+- 表情包只能用：\`[[SEND_EMOJI: 表情名称]]\`
+- 引用只能用：\`[[QUOTE: 引用内容]]\`
+
+### 表情包可用列表
+${emojiContextStr}
+
+${promptSurface?.taskIndex?.trim() ? `### 其他 Code 对话进度索引\n${promptSurface.taskIndex.trim()}\n\n` : ''}${baseSystemPrompt}`;
+        } else {
         baseSystemPrompt += `### 聊天 App 行为规范 (Chat App Rules)
             **严格注意，你正在手机聊天，无论之前是什么模式，哪怕上一句话你们还面对面在一起，当前，你都是已经处于线上聊天状态了，请不要输出你的行为**
 1. **沉浸感**: 保持角色扮演。使用适合即时通讯(IM)的口语化风格。
@@ -857,6 +901,7 @@ ${pendingXhsPhoneResult}
 ` : ''}
 
 `;
+        }
 
         // 「刚结束见面/通话」的切换提示由倒数第二条消息推导，随对话推进而变 → 易变段
         const previousMsg = currentMsgs.length > 1 ? currentMsgs[currentMsgs.length - 2] : null;
@@ -868,7 +913,7 @@ ${pendingXhsPhoneResult}
         }
 
         // Voice message prompt injection
-        if (char.chatVoiceEnabled) {
+        if (!isCodeSurface && char.chatVoiceEnabled) {
             const VOICE_LANG_LABELS: Record<string, string> = { en: 'English', ja: '日本語', ko: '한국어', fr: 'Français', es: 'Español', de: 'Deutsch', ru: 'Русский' };
             const voiceLang = char.chatVoiceLang || '';
             const langLabel = voiceLang ? (VOICE_LANG_LABELS[voiceLang] || voiceLang) : '';
@@ -929,7 +974,7 @@ ${voiceActingGuide()}`;
 
 ${voiceActingGuide()}`;
             }
-        } else {
+        } else if (!isCodeSurface) {
             // Voice is disabled — explicitly prohibit voice tags to prevent inertia from call/date history
             baseSystemPrompt += `\n\n[系统提示: 语音消息功能当前未开启。严禁使用 <语音>...</语音> 和 <字幕>...</字幕> 标签。所有回复必须是纯文字消息。]`;
         }

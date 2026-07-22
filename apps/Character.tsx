@@ -518,6 +518,7 @@ const Character: React.FC = () => {
           const allMsgs = await DB.getMessagesByCharId(targetId, true);
           // 忽略 hideBeforeMessageId —— 这是强制重总结的关键
           const dayMsgs = allMsgs.filter(m => {
+              if (m.type === 'code_card') return false;
               const d = new Date(m.timestamp);
               const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
               return key === dateStr;
@@ -640,7 +641,7 @@ const Character: React.FC = () => {
             const validMsgs = msgs.filter(m => !formData.hideBeforeMessageId || m.id >= formData.hideBeforeMessageId);
             const msgsByDate: Record<string, any[]> = {};
             
-            msgs.forEach(m => {
+            msgs.filter(m => m.type !== 'code_card').forEach(m => {
                 const d = new Date(m.timestamp);
                 const year = d.getFullYear();
                 const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -772,7 +773,9 @@ const Character: React.FC = () => {
           // 记忆部分已包含在 buildCoreContext 中（精炼月度总结 + 点亮月份的详细记忆），
           // 与聊天时角色能看到的记忆完全一致，不再额外抓取。
           // 重置模式下大幅减少近期聊天的数量，避免近因偏差
-          const recentMsgs = await DB.getRecentMessagesByCharId(targetId, type === 'initial' ? 15 : 50);
+          const recentMsgs = (await DB.getRecentMessagesByCharId(targetId, type === 'initial' ? 30 : 100))
+              .filter(m => m.type !== 'code_card')
+              .slice(-(type === 'initial' ? 15 : 50));
           const msgText = recentMsgs
               .map(m => formatMessageForPrompt(m, charName, boundUser.name))
               .join('\n');
