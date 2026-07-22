@@ -89,7 +89,7 @@ const resolveWorkbenchXhsNote = async (
     addToast: (message: string, type?: 'success' | 'error' | 'info') => void,
 ): Promise<Record<string, any> | null> => {
     const xhsFullMatch = text.match(/xiaohongshu\.com\/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/i);
-    const xhsShortMatch = text.match(/(?:https?:\/\/)?(?:www\.)?xhslink\.com\/[A-Za-z0-9/_-]+/i);
+    const xhsShortMatch = text.match(/(?:https?:\/\/)?(?:www\.)?xhslink\.(?:com|cn)\/[A-Za-z0-9/_-]+/i);
     if (!xhsFullMatch && !xhsShortMatch) return null;
 
     let noteId = xhsFullMatch?.[1] || '';
@@ -2546,7 +2546,7 @@ const WorkbenchApp: React.FC = () => {
                                     <p><strong className="text-slate-800">一起工作：</strong>打开后选择一个角色。角色能看到当前 Code 对话和 AI 助理的发言，但回复只留在 Code。</p>
                                     <p><strong className="text-slate-800">@Codex：</strong>你可以手动输入 @Codex；角色如果需要 AI 助理接手，会在话说完后触发 @Codex，系统会显示这条 @ 并让 AI 助理回应。</p>
                                     <p><strong className="text-slate-800">消息操作：</strong>长按或右键消息可复制、引用、编辑、删除或进入多选删除；表情包保持透明底。</p>
-                                    <p><strong className="text-slate-800">小红书链接：</strong>Code 不会自己去小红书找素材。你主动贴 xiaohongshu.com 或 xhslink.com 链接时，若小红书 MCP/Lite 可用，Code 会读取该笔记的标题、正文、作者、封面和评论摘录用于分析。</p>
+                                    <p><strong className="text-slate-800">小红书链接：</strong>Code 不会自己去小红书找素材。你主动贴 xiaohongshu.com、xhslink.com 或 xhslink.cn 链接时，若小红书 MCP/Lite 可用，Code 会读取该笔记的标题、正文、作者、封面和评论摘录用于分析。</p>
                                 </div>
                             </section>
 
