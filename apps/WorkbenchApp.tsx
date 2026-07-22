@@ -4,6 +4,8 @@ import { DB } from '../utils/db';
 import { ChatParser } from '../utils/chatParser';
 import { processImage } from '../utils/file';
 import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
+import { XhsMcpClient, normalizeNote } from '../utils/xhsMcpClient';
+import { expandShortUrl } from '../utils/webpageExtractor';
 import type { Emoji, EmojiCategory, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchSession, WorkbenchSummary } from '../types';
 import {
     DEFAULT_WORKBENCH_CONFIG,
@@ -79,6 +81,89 @@ const roleLabel = (m: WorkbenchMessage) => {
     if (m.kind === 'error') return 'SYSTEM ERROR';
     if (m.role === 'system') return 'System';
     return m.metadata?.speakerName || m.metadata?.displayName || 'CLI';
+};
+
+const resolveWorkbenchXhsNote = async (
+    text: string,
+    realtimeConfig: any,
+    addToast: (message: string, type?: 'success' | 'error' | 'info') => void,
+): Promise<Record<string, any> | null> => {
+    const xhsFullMatch = text.match(/xiaohongshu\.com\/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/i);
+    const xhsShortMatch = text.match(/(?:https?:\/\/)?(?:www\.)?xhslink\.com\/[A-Za-z0-9/_-]+/i);
+    if (!xhsFullMatch && !xhsShortMatch) return null;
+
+    let noteId = xhsFullMatch?.[1] || '';
+    let xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
+    let shortLinkError = '';
+
+    if (!noteId && xhsShortMatch) {
+        try {
+            const shortUrl = /^https?:\/\//i.test(xhsShortMatch[0]) ? xhsShortMatch[0] : `https://${xhsShortMatch[0]}`;
+            const finalUrl = await expandShortUrl(shortUrl);
+            noteId = finalUrl.match(/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/)?.[1] || '';
+            xsecToken = xsecToken || finalUrl.match(/xsec_token=([^&\s]+)/)?.[1];
+        } catch (e: any) {
+            shortLinkError = e?.message || '短链展开失败';
+        }
+    }
+
+    const titleFromText = (text.match(/【(.+?)】/)?.[1] || '')
+        .replace(/\s*[|｜]\s*小红书.*$/, '')
+        .trim();
+
+    if (!noteId) {
+        addToast(`小红书链接解析失败，Code 会先保留原链接。${shortLinkError ? `（${shortLinkError}）` : ''}`, 'error');
+        return null;
+    }
+
+    let note: Record<string, any> = {
+        noteId,
+        title: titleFromText || '',
+        desc: '',
+        author: '',
+        authorId: '',
+        likes: 0,
+        xsecToken,
+        sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}${xsecToken ? `?xsec_token=${xsecToken}&xsec_source=pc_share` : ''}`,
+    };
+
+    const mcpUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
+    if (mcpUrl && realtimeConfig?.xhsMcpConfig?.enabled) {
+        try {
+            addToast('Code 正在读取小红书链接…', 'info');
+            const result = await XhsMcpClient.getNoteDetail(mcpUrl, note.sourceUrl, xsecToken, { loadAllComments: true });
+            if (result.success && result.data) {
+                const dataRoot = (result.data as any)?.data || result.data;
+                const noteObj = dataRoot?.note || (result.data as any)?.note || result.data;
+                const fetched = normalizeNote(noteObj);
+                note = {
+                    ...note,
+                    ...fetched,
+                    noteId: fetched.noteId || note.noteId,
+                    title: titleFromText || fetched.title || note.title,
+                    xsecToken: fetched.xsecToken || xsecToken,
+                };
+                const rawComments = dataRoot?.comments?.list || dataRoot?.comments
+                    || (noteObj as any)?.comments?.list || (noteObj as any)?.comments || [];
+                const comments = (Array.isArray(rawComments) ? rawComments : [])
+                    .map((c: any) => ({
+                        author: c.userInfo?.nickname || c.nickname || c.userName || c.author || '匿名',
+                        content: c.content || '',
+                        likes: c.likeCount || c.like_count || c.likes || 0,
+                    }))
+                    .filter((c: any) => c.content)
+                    .slice(0, 15);
+                if (comments.length) note.comments = comments;
+            } else if (!result.success) {
+                addToast(`小红书正文读取失败，Code 已保留基础链接信息。${result.error ? `（${result.error}）` : ''}`, 'info');
+            }
+        } catch (e: any) {
+            console.warn('Workbench XHS link fetch failed:', e);
+            addToast('小红书正文读取失败，Code 已保留基础链接信息。', 'info');
+        }
+    }
+
+    return note;
 };
 
 const parseProgressCard = (content: string) => {
@@ -241,6 +326,43 @@ const renderProgressCard = (fields: Record<string, string>) => (
     </div>
 );
 
+const renderWorkbenchXhsNoteCard = (note: Record<string, any>) => (
+    <span className="mt-2 block overflow-hidden rounded-2xl border border-red-100 bg-white/82 shadow-sm">
+        {note.coverUrl && (
+            <img
+                src={note.coverUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="block h-28 w-full object-cover"
+            />
+        )}
+        <span className="block p-3">
+            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-red-400">
+                <span>小红书</span>
+                <span className="text-slate-300">·</span>
+                <span className="text-slate-400">Code 可读取</span>
+            </span>
+            <span className="mt-1 block text-sm font-semibold text-slate-900 line-clamp-2">
+                {note.title || '小红书笔记'}
+            </span>
+            {note.desc && (
+                <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500 line-clamp-3">
+                    {String(note.desc)}
+                </span>
+            )}
+            {(note.author || note.comments?.length) && (
+                <span className="mt-2 block text-[10px] text-slate-400">
+                    {note.author ? `作者：${note.author}` : ''}
+                    {note.author && note.comments?.length ? ' · ' : ''}
+                    {note.comments?.length ? `评论 ${note.comments.length} 条已读` : ''}
+                </span>
+            )}
+        </span>
+    </span>
+);
+
 const formatFileSize = (size: number) => size >= 1024 * 1024
     ? `${(size / (1024 * 1024)).toFixed(1)} MB`
     : size >= 1024 ? `${Math.round(size / 1024)} KB` : `${size || 0} B`;
@@ -259,6 +381,14 @@ const renderWorkbenchMessageContent = (
             || message.metadata?.speakerName
             || (message.metadata?.source === 'character' || message.metadata?.summarySource === 'character' ? '角色' : 'Code');
         return renderProgressCard(progressCard);
+    }
+    if (message.metadata?.xhsNote) {
+        return (
+            <>
+                {renderWorkbenchContent(message.content, emojiMap)}
+                {renderWorkbenchXhsNoteCard(message.metadata.xhsNote)}
+            </>
+        );
     }
     if (message.type === 'emoji') {
         const name = message.metadata?.emojiName || '表情';
@@ -600,7 +730,7 @@ const WorkbenchApp: React.FC = () => {
     const [progressCards, setProgressCards] = useState<WorkbenchSummary[]>([]);
     const [progressSummaryMode, setProgressSummaryMode] = useState<'codex' | 'character'>('codex');
     const [progressModeMenuOpen, setProgressModeMenuOpen] = useState(false);
-    const [indexOpen, setIndexOpen] = useState(true);
+    const [indexOpen, setIndexOpen] = useState(false);
     const [activeSpace, setActiveSpace] = useState<WorkbenchSpace>('work');
     const [instructionsOpen, setInstructionsOpen] = useState(false);
     const [connectionOpen, setConnectionOpen] = useState(true);
@@ -1432,6 +1562,13 @@ const WorkbenchApp: React.FC = () => {
             : undefined;
         setQuotedMessage(null);
         setBusy(true);
+        let messageMetadata = options?.metadata ? { ...options.metadata } : undefined;
+        if ((options?.type || 'text') === 'text') {
+            const xhsNote = await resolveWorkbenchXhsNote(text, realtimeConfig, addToast);
+            if (xhsNote) {
+                messageMetadata = { ...(messageMetadata || {}), xhsNote };
+            }
+        }
         const userMessage: WorkbenchMessage = {
             id: makeId('wbm'),
             sessionId: s.id,
@@ -1443,7 +1580,7 @@ const WorkbenchApp: React.FC = () => {
             replyTo: replySnapshot,
             createdAt: Date.now(),
             status: 'sent',
-            metadata: options?.metadata,
+            metadata: messageMetadata,
         };
         await appendMessage(userMessage);
         try {
@@ -1625,7 +1762,7 @@ const WorkbenchApp: React.FC = () => {
             }}
         >
             <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}`}</style>
-            <div className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl" style={{ paddingTop: 'var(--safe-top)' }}>
+            <div className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl">
                 <div className="min-h-16 px-3 py-2 flex items-center gap-2">
                     <IconButton label="退出" onClick={closeApp} className="h-8 w-8 bg-white/54 border-white/70">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2244,7 +2381,7 @@ const WorkbenchApp: React.FC = () => {
                             </span>
                             <div className="min-w-0">
                                 <h2 className="text-base font-semibold">Code 使用指南</h2>
-                                <p className="mt-0.5 text-[11px] text-slate-500">连接 AI 助理、操作电脑，并邀请角色一起工作</p>
+                                <p className="mt-0.5 text-[11px] text-slate-500">手机远程连接、读取分享素材，并邀请角色一起工作</p>
                             </div>
                         </div>
                     </header>
@@ -2259,11 +2396,11 @@ const WorkbenchApp: React.FC = () => {
                                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                                     <div className="rounded-lg border border-white bg-white/75 px-3 py-3">
                                         <div className="text-xs font-semibold text-slate-800">仅聊天</div>
-                                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">电脑桥接未连接。配置备用聊天 API 后，星光可催动 AI 助理讨论；闪电催动角色。两者都不能操作电脑。</p>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">电脑桥接未连接。配置备用聊天 API 后，星光可催动 AI 助理讨论；闪电催动角色。两者都不能操作电脑或读取文件。</p>
                                     </div>
                                     <div className="rounded-lg border border-emerald-100 bg-emerald-50/65 px-3 py-3">
                                         <div className="text-xs font-semibold text-emerald-800">电脑已连接</div>
-                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">连接的是电脑上独立运行的 bridge。SullyOS 页面不用在电脑上打开，也能使用 Codex、Claude Code 或自定义 CLI。</p>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">连接的是电脑上独立运行的 bridge。电脑上的 SullyOS 页面不用打开；手机通过远程地址使用 Codex、Claude Code 或自定义 CLI。</p>
                                     </div>
                                 </div>
                             </section>
@@ -2289,7 +2426,7 @@ const WorkbenchApp: React.FC = () => {
                                     </li>
                                 </ol>
                                 <div className="mt-3 border-l-2 border-violet-300 pl-3 text-[11px] leading-relaxed text-slate-500">
-                                    电脑关闭后桥接会离线。电脑开机并登录用户后，启动任务会拉起 bridge；手机只需要填电脑 IP、Tailscale 或 Cloudflare 地址和同一个 Key。
+                                    电脑关闭后桥接会离线。电脑开机并登录用户后，启动任务会拉起 bridge；手机只需要填电脑 IP、Tailscale 或 Cloudflare 私有地址和同一个 Key。当前 Code 只保留手机远程模式，不再区分本机电脑模式。
                                 </div>
                             </section>
 
@@ -2326,7 +2463,9 @@ const WorkbenchApp: React.FC = () => {
                                     <p><strong className="text-slate-800">星光：</strong>只催动 AI 助理回复一次。CLI 在线时使用当前 CLI，离线时使用已配置的备用 API。</p>
                                     <p><strong className="text-slate-800">闪电：</strong>只催动当前选择的角色回复一次。</p>
                                     <p><strong className="text-slate-800">一起工作：</strong>打开后选择一个角色。角色能看到当前 Code 对话和 AI 助理的发言，但回复只留在 Code。</p>
+                                    <p><strong className="text-slate-800">@Codex：</strong>你可以手动输入 @Codex；角色如果需要 AI 助理接手，会在话说完后触发 @Codex，系统会显示这条 @ 并让 AI 助理回应。</p>
                                     <p><strong className="text-slate-800">消息操作：</strong>长按或右键消息可引用、编辑、删除或进入多选删除；表情包保持透明底。</p>
+                                    <p><strong className="text-slate-800">小红书链接：</strong>Code 不会自己去小红书找素材。你主动贴 xiaohongshu.com 或 xhslink.com 链接时，若小红书 MCP/Lite 可用，Code 会读取该笔记的标题、正文、作者、封面和评论摘录用于分析。</p>
                                 </div>
                             </section>
 
@@ -2336,7 +2475,7 @@ const WorkbenchApp: React.FC = () => {
                                     <h3 className="text-sm font-semibold">对话、进度卡和备份</h3>
                                 </div>
                                 <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-slate-600">
-                                    <p><strong className="text-slate-800">右侧索引：</strong>新建、切换、改名或删除独立对话。每个对话保存自己的完整历史。</p>
+                                    <p><strong className="text-slate-800">右侧索引：</strong>默认收起，点右侧的 &gt; 才打开；可新建、切换、改名或删除独立对话。每个对话保存自己的完整历史。</p>
                                     <p><strong className="text-slate-800">进度卡：</strong>打开面板后手动生成，并可选择 AI 助理或当前角色总结。角色参与时，卡片会同步到该角色的普通聊天；完整代码不会写回。</p>
                                     <p><strong className="text-slate-800">删除对话：</strong>删除逐句历史；已经生成的进度卡和 Code Memory 仍作为任务索引保留。</p>
                                     <p><strong className="text-slate-800">文件卡：</strong>电脑执行产生的大文件保留在电脑项目中，Code 只保存名称、路径、大小、摘要等卡片信息；下载时再向在线电脑读取文件。</p>
@@ -2364,7 +2503,7 @@ const WorkbenchApp: React.FC = () => {
 
             {settingsOpen && (
                 <div className="absolute inset-0 z-50 bg-white flex flex-col text-slate-900">
-                    <div className="shrink-0 border-b border-slate-200 bg-white/95" style={{ paddingTop: 'var(--safe-top)' }}>
+                    <div className="shrink-0 border-b border-slate-200 bg-white/95">
                         <div className="px-3 py-2.5 flex items-center gap-2">
                             <IconButton label="返回 Code" onClick={() => setSettingsOpen(false)}>
                                 <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2379,6 +2518,23 @@ const WorkbenchApp: React.FC = () => {
                     </div>
                     <div className="flex-1 overflow-y-auto bg-[#f8fafc] workbench-index-scroll">
                         <div className="p-4 space-y-5">
+                            <button
+                                type="button"
+                                onClick={() => setHelpOpen(true)}
+                                className="flex w-full items-center gap-3 rounded-xl border border-violet-100 bg-violet-50/70 px-3 py-3 text-left active:scale-[0.995]"
+                            >
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-violet-600 shadow-sm">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="12" cy="12" r="9" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.8 9a2.35 2.35 0 1 1 3.5 2.05c-.8.46-1.3.96-1.3 1.95" />
+                                        <path strokeLinecap="round" d="M12 17h.01" />
+                                    </svg>
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-xs font-semibold text-slate-800">Code 使用指南</span>
+                                    <span className="mt-0.5 block truncate text-[11px] text-slate-500">手机远程、一起工作、进度卡和素材链接</span>
+                                </span>
+                            </button>
                             <section className="space-y-3">
                                 <h3 className="text-xs font-semibold text-slate-500">连接地址</h3>
                                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">

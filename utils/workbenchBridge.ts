@@ -719,11 +719,40 @@ const formatWorkbenchContextTime = (timestamp?: number): string => {
     });
 };
 
+const formatWorkbenchXhsNoteForContext = (note: any): string => {
+    if (!note || typeof note !== 'object') return '';
+    const parts = [
+        '[小红书笔记]',
+        note.title ? `标题：${note.title}` : '',
+        note.author ? `作者：${note.author}` : '',
+        note.likes ? `点赞：${note.likes}` : '',
+        note.noteId ? `noteId：${note.noteId}` : '',
+        note.sourceUrl ? `链接：${note.sourceUrl}` : '',
+        note.desc ? `正文：${String(note.desc).slice(0, 1800)}` : '',
+    ].filter(Boolean);
+    const comments = Array.isArray(note.comments)
+        ? note.comments
+            .slice(0, 8)
+            .map((comment: any, index: number) => {
+                const author = comment?.author || '匿名';
+                const content = String(comment?.content || '').trim();
+                if (!content) return '';
+                return `${index + 1}. ${author}：${content.slice(0, 220)}`;
+            })
+            .filter(Boolean)
+        : [];
+    if (comments.length) {
+        parts.push(`评论摘录：\n${comments.join('\n')}`);
+    }
+    return parts.join('\n');
+};
+
 const workbenchContentForContext = (m: WorkbenchMessage): string => {
     const content = m.type === 'emoji'
         ? `[表情: ${m.metadata?.emojiName || '表情包'}]`
         : m.content;
-    return `[${formatWorkbenchContextTime(m.createdAt)}] ${content}`;
+    const xhsNote = formatWorkbenchXhsNoteForContext(m.metadata?.xhsNote);
+    return `[${formatWorkbenchContextTime(m.createdAt)}] ${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
 };
 
 const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({
