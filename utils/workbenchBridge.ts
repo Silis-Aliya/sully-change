@@ -14,6 +14,7 @@ import type {
     WorkbenchSummary,
 } from '../types';
 import { extractContent, safeResponseJson } from './safeApi';
+import { normalizeMessageContent } from './messageFormat';
 
 export const WORKBENCH_CONFIG_KEY = 'workbench_bridge_config_v1';
 export const WORKBENCH_MODE_KEY = 'workbench_mode_v1';
@@ -748,11 +749,22 @@ const formatWorkbenchXhsNoteForContext = (note: any): string => {
 };
 
 const workbenchContentForContext = (m: WorkbenchMessage): string => {
+    if (m.type === 'xhs_card') {
+        return normalizeMessageContent({
+            id: m.id,
+            charId: m.sessionId,
+            role: m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant',
+            type: 'xhs_card' as any,
+            content: m.content,
+            timestamp: m.createdAt,
+            metadata: m.metadata,
+        } as Message, '角色', '用户');
+    }
     const content = m.type === 'emoji'
         ? `[表情: ${m.metadata?.emojiName || '表情包'}]`
         : m.content;
     const xhsNote = formatWorkbenchXhsNoteForContext(m.metadata?.xhsNote);
-    return `时间：${formatWorkbenchContextTime(m.createdAt)}\n内容：${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
+    return `${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
 };
 
 const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({

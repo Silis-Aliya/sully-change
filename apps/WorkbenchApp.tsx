@@ -250,6 +250,8 @@ const codeMemoryKey = (content: string) => content
 const sanitizeWorkbenchReply = (content: string) => ChatParser.sanitize(content, { keepCitations: true })
     .replace(/^\s*\[当前\s*Code\s*对话\s*\/[^\]]+\]\s*/i, '')
     .replace(/\[\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}\]\s*/g, '')
+    .replace(/(?:^|\n)\s*时间：\s*\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}\s*/g, '\n')
+    .replace(/(^|\n)\s*内容：\s*/g, '$1')
     .replace(/\[(?:用户|角色|AI\s*助手)\s+[^\]\n]{1,80}\]\s*/gi, '')
     .replace(/<\s*\/?\s*[语語]音[^>]*>/g, '')
     .replace(/<#[\s\S]*?#>/g, '')
@@ -1358,9 +1360,11 @@ const WorkbenchApp: React.FC = () => {
     const canEditMessage = (message: WorkbenchMessage) => (
         message.type !== 'emoji'
         && message.type !== 'file'
+        && message.type !== 'xhs_card'
         && message.kind !== 'summary'
         && message.kind !== 'error'
         && !message.metadata?.progressCard
+        && !message.metadata?.xhsNote
     );
 
     const startEditingMessage = (message: WorkbenchMessage) => {
@@ -1629,13 +1633,11 @@ const WorkbenchApp: React.FC = () => {
             : undefined;
         setQuotedMessage(null);
         setBusy(true);
-        let messageMetadata = options?.metadata ? { ...options.metadata } : undefined;
-        if ((options?.type || 'text') === 'text') {
-            const xhsNote = await resolveWorkbenchXhsNote(text, realtimeConfig, addToast);
-            if (xhsNote) {
-                messageMetadata = { ...(messageMetadata || {}), xhsNote };
-            }
-        }
+        const messageMetadata = options?.metadata ? { ...options.metadata } : undefined;
+        const xhsNote = (options?.type || 'text') === 'text'
+            ? await resolveWorkbenchXhsNote(text, realtimeConfig, addToast)
+            : null;
+        const now = Date.now();
         const userMessage: WorkbenchMessage = {
             id: makeId('wbm'),
             sessionId: s.id,
@@ -1645,11 +1647,29 @@ const WorkbenchApp: React.FC = () => {
             mode: 'codex',
             content: text,
             replyTo: replySnapshot,
-            createdAt: Date.now(),
+            createdAt: now,
             status: 'sent',
             metadata: messageMetadata,
         };
         await appendMessage(userMessage);
+        const xhsCardMessage: WorkbenchMessage | null = xhsNote
+            ? {
+                id: makeId('wbm'),
+                sessionId: s.id,
+                role: 'user',
+                kind: 'chat',
+                type: 'xhs_card',
+                mode: 'codex',
+                content: xhsNote.title || '小红书笔记',
+                createdAt: now + 1,
+                status: 'sent',
+                metadata: { xhsNote },
+            }
+            : null;
+        if (xhsCardMessage) {
+            await appendMessage(xhsCardMessage);
+        }
+        const savedTurnMessages = xhsCardMessage ? [userMessage, xhsCardMessage] : [userMessage];
         try {
             if (userMessage.type !== 'emoji' && hasAssistantMention(text)) {
                 if (!assistantAvailable) {
@@ -1658,7 +1678,7 @@ const WorkbenchApp: React.FC = () => {
                     setThinkingSpeaker('codex');
                     const recent = [
                         ...messages.filter(message => message.sessionId === s.id),
-                        userMessage,
+                        ...savedTurnMessages,
                     ].slice(-10);
                     await runAssistantReply(
                         s,

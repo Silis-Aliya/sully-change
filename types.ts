@@ -73,7 +73,7 @@ export interface WorkbenchMessage {
   id: string;
   sessionId: string;
   role: 'user' | 'codex' | 'character' | 'sully' | 'system';
-  type?: 'text' | 'emoji' | 'file';
+  type?: 'text' | 'emoji' | 'file' | 'xhs_card';
   kind?: 'chat' | 'action' | 'consult' | 'summary' | 'error';
   mode: WorkbenchMode;
   content: string;
