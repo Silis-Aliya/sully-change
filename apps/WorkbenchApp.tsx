@@ -2604,7 +2604,10 @@ const WorkbenchApp: React.FC = () => {
 
             {settingsOpen && (
                 <div className="absolute inset-0 z-50 bg-white flex flex-col text-slate-900">
-                    <div className="shrink-0 border-b border-slate-200 bg-white/95">
+                    <div
+                        className="shrink-0 border-b border-slate-200 bg-white/95"
+                        style={{ paddingTop: 'var(--safe-top)' }}
+                    >
                         <div className="px-3 py-2.5 flex items-center gap-2">
                             <IconButton label="返回 Code" onClick={() => setSettingsOpen(false)}>
                                 <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
