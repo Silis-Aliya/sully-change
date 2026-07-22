@@ -77,6 +77,30 @@ export const detectWorkbenchClientDevice = (): WorkbenchClientDevice => {
     return coarsePointer && narrowViewport ? 'mobile' : 'desktop';
 };
 
+const LOCAL_BRIDGE_URL_RE = /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/.*)?$/i;
+
+const normalizeBridgeUrl = (value?: string): string => String(value || '').trim().replace(/\/+$/, '');
+
+const isLocalBridgeUrl = (value?: string): boolean => LOCAL_BRIDGE_URL_RE.test(normalizeBridgeUrl(value));
+
+export const resolveWorkbenchBridgeConfigForClient = (
+    config: WorkbenchBridgeConfig,
+    device: WorkbenchClientDevice = detectWorkbenchClientDevice(),
+): WorkbenchBridgeConfig => {
+    const remoteBridgeUrl = normalizeBridgeUrl(config.remoteBridgeUrl);
+    const cliBridgeUrl = normalizeBridgeUrl(config.cliBridgeUrl || DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl);
+    const legacyUrl = normalizeBridgeUrl(config.bridgeUrl);
+    const activeUrl = device === 'mobile'
+        ? (remoteBridgeUrl || (!isLocalBridgeUrl(legacyUrl) ? legacyUrl : ''))
+        : (cliBridgeUrl || legacyUrl || remoteBridgeUrl);
+    return {
+        ...config,
+        remoteBridgeUrl,
+        cliBridgeUrl,
+        bridgeUrl: activeUrl,
+    };
+};
+
 export type WorkbenchDeviceCapability = {
     space: WorkbenchCapabilityMode;
     bridgeOnline: boolean;
@@ -93,30 +117,29 @@ export type WorkbenchBridgeReply = {
 export const loadWorkbenchBridgeConfig = (): WorkbenchBridgeConfig => {
     try {
         const raw = localStorage.getItem(WORKBENCH_CONFIG_KEY);
-        if (!raw) return { ...DEFAULT_WORKBENCH_CONFIG };
+        if (!raw) return resolveWorkbenchBridgeConfigForClient({ ...DEFAULT_WORKBENCH_CONFIG });
         const parsed = JSON.parse(raw) as Partial<WorkbenchBridgeConfig>;
         const runtimeMode = parsed.runtimeMode === 'cli' ? 'cli' : 'computer';
         const legacyUrl = String(parsed.bridgeUrl || '').trim();
         const remoteBridgeUrl = String(parsed.remoteBridgeUrl ?? (runtimeMode === 'computer' ? legacyUrl : '')).trim();
         const cliBridgeUrl = String(parsed.cliBridgeUrl ?? (runtimeMode === 'cli' ? legacyUrl : DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl)).trim();
-        return {
+        return resolveWorkbenchBridgeConfigForClient({
             ...DEFAULT_WORKBENCH_CONFIG,
             ...parsed,
             runtimeMode,
             remoteBridgeUrl,
             cliBridgeUrl,
             bridgeUrl: runtimeMode === 'cli' ? cliBridgeUrl : remoteBridgeUrl,
-        };
+        });
     } catch {
-        return { ...DEFAULT_WORKBENCH_CONFIG };
+        return resolveWorkbenchBridgeConfigForClient({ ...DEFAULT_WORKBENCH_CONFIG });
     }
 };
 
 export const saveWorkbenchBridgeConfig = (config: WorkbenchBridgeConfig): void => {
     const runtimeMode = config.runtimeMode === 'cli' ? 'cli' : 'computer';
-    const normalizeUrl = (value?: string) => String(value || '').trim().replace(/\/+$/, '');
-    const remoteBridgeUrl = normalizeUrl(config.remoteBridgeUrl ?? (runtimeMode === 'computer' ? config.bridgeUrl : ''));
-    const cliBridgeUrl = normalizeUrl(config.cliBridgeUrl ?? (runtimeMode === 'cli' ? config.bridgeUrl : DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl));
+    const remoteBridgeUrl = normalizeBridgeUrl(config.remoteBridgeUrl ?? (runtimeMode === 'computer' ? config.bridgeUrl : ''));
+    const cliBridgeUrl = normalizeBridgeUrl(config.cliBridgeUrl ?? (runtimeMode === 'cli' ? config.bridgeUrl : DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl));
     localStorage.setItem(WORKBENCH_CONFIG_KEY, JSON.stringify({
         ...config,
         bridgeUrl: runtimeMode === 'cli' ? cliBridgeUrl : remoteBridgeUrl,
@@ -132,7 +155,7 @@ export const saveWorkbenchBridgeConfig = (config: WorkbenchBridgeConfig): void =
         monthlyUsageLimit: Number(config.monthlyUsageLimit || 0),
         participantEnabled: !!config.participantEnabled,
         participantCharacterId: config.participantCharacterId || '',
-        fallbackApiBaseUrl: normalizeUrl(config.fallbackApiBaseUrl),
+        fallbackApiBaseUrl: normalizeBridgeUrl(config.fallbackApiBaseUrl),
         fallbackApiKey: config.fallbackApiKey?.trim() || '',
         fallbackApiModel: config.fallbackApiModel?.trim() || '',
         fallbackApiName: config.fallbackApiName?.trim() || 'AI 助理',

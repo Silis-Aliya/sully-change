@@ -24,6 +24,33 @@ Current known baseline:
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
 
+## 2026-07-22 Code Bridge Startup / Mobile Remote Fix
+
+### Result
+
+- Clarified and enforced the Code bridge model: the CLI bridge is an independent computer-side HTTP service and does not require SullyOS to be open in the computer browser.
+- Added `pnpm workbench:bridge:startup`, backed by `scripts/install-workbench-bridge-startup.ps1`, to register the bridge as a Windows user-logon scheduled task.
+- Workbench bridge config now resolves addresses by client device:
+  - mobile clients prefer `remoteBridgeUrl` and will not accidentally use `localhost`
+  - desktop clients prefer `cliBridgeUrl` / `http://localhost:3001`
+  - both URLs are still stored separately in `workbench_bridge_config_v1`
+- Updated Code settings/help copy so users configure phone remote address separately from the local computer address.
+- Code token monitoring in settings now shows only local estimated `本周` and `本月` usage.
+- Code AI assistant avatar uploads are compressed, stored in `blob_assets`, and saved as `codexAvatar: "blobref:*"` inside `workbench_bridge_config_v1`.
+- Code message/thinking/settings avatar rendering now resolves `blobref:*`, so the AI assistant avatar survives backup/restore and QuickSync delta pull.
+
+### Verification
+
+- `pnpm vitest run utils/workbenchBridge.test.ts utils/localSettingsBackup.test.ts utils/quickSync.test.ts` passed.
+- `pnpm build` passed.
+- PowerShell startup installer parsed successfully with `[scriptblock]::Create(...)`.
+
+### Manual Setup Note
+
+- On the computer, run `pnpm workbench:bridge:startup -- -Token YOUR_KEY` once to start the bridge automatically after Windows login.
+- On the phone, Code remote address must be the computer LAN/Tailscale address such as `http://电脑IP:3001`, not `http://localhost:3001`.
+- Vercel should be updated after pushing this fix to `master`.
+
 ## 2026-07-22 Upstream Refresh to ece65a3
 
 ### Result

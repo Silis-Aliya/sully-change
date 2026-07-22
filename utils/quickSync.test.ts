@@ -57,11 +57,14 @@ describe('quickSync settings coverage', () => {
         expect(collectBlobRefIds({
             theme: { wallpaper: 'blobref:img_wallpaper_1' },
             char: { avatar: 'blobref:img_avatar_2' },
+            localStorageSettings: {
+                workbench_bridge_config_v1: JSON.stringify({ codexAvatar: 'blobref:img_code_avatar_4' }),
+            },
             messages: [
                 { metadata: { cardImage: 'url(blobref:img_card_3)' } },
                 { content: 'plain text' },
             ],
-        }).sort()).toEqual(['img_avatar_2', 'img_card_3', 'img_wallpaper_1']);
+        }).sort()).toEqual(['img_avatar_2', 'img_card_3', 'img_code_avatar_4', 'img_wallpaper_1']);
     });
 
     it('uses memoryId as the incremental key for vector rows', () => {

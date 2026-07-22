@@ -3,7 +3,8 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { ChatParser } from '../utils/chatParser';
 import { processImage } from '../utils/file';
-import type { Emoji, EmojiCategory, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchOfficialUsage, WorkbenchSession, WorkbenchSummary } from '../types';
+import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
+import type { Emoji, EmojiCategory, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchSession, WorkbenchSummary } from '../types';
 import {
     DEFAULT_WORKBENCH_CONFIG,
     buildWorkbenchCurrentProgressContext,
@@ -14,7 +15,6 @@ import {
     downloadWorkbenchArtifact,
     fetchWorkbenchModels,
     fetchWorkbenchFallbackModels,
-    fetchWorkbenchOfficialUsage,
     loadWorkbenchBridgeConfig,
     saveWorkbenchBridgeConfig,
     sendWorkbenchBridgeMessage,
@@ -320,6 +320,26 @@ const IconButton: React.FC<{
     </button>
 );
 
+const WorkbenchAvatarImage: React.FC<{
+    src: string;
+    alt?: string;
+    className: string;
+    style?: React.CSSProperties;
+}> = ({ src, alt = 'avatar', className, style }) => {
+    const resolvedSrc = useBlobRefUrl(src);
+    if (!resolvedSrc) return null;
+    return (
+        <img
+            src={resolvedSrc}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            style={style}
+            className={className}
+        />
+    );
+};
+
 const WorkbenchMessageRow: React.FC<{
     message: WorkbenchMessage;
     avatar: string;
@@ -357,11 +377,9 @@ const WorkbenchMessageRow: React.FC<{
     return (
         <div className={`flex gap-2.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
             {!isUser && (avatar ? (
-                <img
+                <WorkbenchAvatarImage
                     src={avatar}
                     alt="avatar"
-                    loading="lazy"
-                    decoding="async"
                     className="mt-5 h-8 w-8 rounded-full object-cover shadow-sm ring-1 ring-black/5 shrink-0"
                 />
             ) : (
@@ -582,8 +600,6 @@ const WorkbenchApp: React.FC = () => {
     const [quotedMessage, setQuotedMessage] = useState<WorkbenchMessage | null>(null);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(() => new Set());
-    const [officialUsage, setOfficialUsage] = useState<WorkbenchOfficialUsage | null>(null);
-    const [officialUsageStatus, setOfficialUsageStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
     const [modelOptions, setModelOptions] = useState<WorkbenchModelOption[]>([]);
     const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
     const [fallbackModelOptions, setFallbackModelOptions] = useState<WorkbenchModelOption[]>([]);
@@ -606,6 +622,7 @@ const WorkbenchApp: React.FC = () => {
         ? `本月 ${usageStats.month.toLocaleString('zh-CN')}/${usageLimit.toLocaleString('zh-CN')}`
         : `本月 ${usageStats.month.toLocaleString('zh-CN')} tokens`;
     const participantEnabled = !!config.participantEnabled;
+    const draftCodexAvatarUrl = useBlobRefUrl(draftConfig.codexAvatar);
     const avatarRowAlign = 'items-center';
     const avatarSizeClass = osTheme.chatAvatarSize === 'small'
         ? 'h-7 w-7'
@@ -650,24 +667,6 @@ const WorkbenchApp: React.FC = () => {
     useEffect(() => {
         setActiveSpace(workExecutable ? 'work' : 'inspiration');
     }, [workExecutable]);
-    const officialUsagePercent = officialUsage?.usedPercent ?? officialUsage?.weeklyPercent;
-    const officialUsageTitle = officialUsageStatus === 'loading'
-        ? '同步中'
-        : officialUsageStatus === 'ready'
-            ? officialUsage?.label || (officialUsagePercent === undefined ? '已连接' : `本周 ${officialUsagePercent}%`)
-            : workExecutable
-                ? '不可读取'
-                : '需要电脑桥接';
-    const officialUsageHint = officialUsageStatus === 'ready'
-        ? [
-            officialUsage?.resetAt ? `重置 ${new Date(officialUsage.resetAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '',
-            officialUsage?.updatedAt ? `更新 ${new Date(officialUsage.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '',
-        ].filter(Boolean).join(' · ') || '来自电脑端'
-        : officialUsageStatus === 'loading'
-            ? '正在从电脑端读取'
-        : workExecutable
-            ? '电脑端暂未提供 /usage'
-            : '连接电脑后读取官方用量';
     const visibleEmojiCategories = useMemo(() => {
         const charId = selectedParticipant?.id;
         return emojiCategories.filter(cat => (
@@ -816,8 +815,6 @@ const WorkbenchApp: React.FC = () => {
         if (!config.bridgeUrl.trim()) {
             setBridgeStatus('idle');
             setTestResult('');
-            setOfficialUsage(null);
-            setOfficialUsageStatus('idle');
             return;
         }
         setBridgeStatus(previous => previous === 'online' ? 'online' : 'checking');
@@ -842,30 +839,6 @@ const WorkbenchApp: React.FC = () => {
             window.clearInterval(interval);
         };
     }, [config.bridgeUrl, config.token, config.runtimeMode, config.defaultAgent, config.customAgentCommand]);
-
-    useEffect(() => {
-        let cancelled = false;
-        if (bridgeStatus !== 'online') {
-            setOfficialUsage(null);
-            setOfficialUsageStatus(bridgeStatus === 'idle' ? 'idle' : 'unavailable');
-            return;
-        }
-        setOfficialUsageStatus('loading');
-        void fetchWorkbenchOfficialUsage(config)
-            .then(data => {
-                if (cancelled) return;
-                setOfficialUsage(data);
-                setOfficialUsageStatus('ready');
-            })
-            .catch(() => {
-                if (cancelled) return;
-                setOfficialUsage(null);
-                setOfficialUsageStatus('unavailable');
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [bridgeStatus, config.bridgeUrl, config.token, config.runtimeMode]);
 
     useEffect(() => {
         if (!settingsOpen || bridgeStatus !== 'online') {
@@ -1022,8 +995,11 @@ const WorkbenchApp: React.FC = () => {
         });
     };
 
-    const savePanelConfig = () => {
-        const next = { ...DEFAULT_WORKBENCH_CONFIG, ...draftConfig };
+    const savePanelConfig = async () => {
+        const avatar = draftConfig.codexAvatar?.startsWith('data:')
+            ? await migrateDataUrlToRef(draftConfig.codexAvatar)
+            : draftConfig.codexAvatar;
+        const next = { ...DEFAULT_WORKBENCH_CONFIG, ...draftConfig, codexAvatar: avatar || '' };
         saveWorkbenchBridgeConfig(next);
         const stored = loadWorkbenchBridgeConfig();
         setConfig(stored);
@@ -1063,7 +1039,6 @@ const WorkbenchApp: React.FC = () => {
             setDraftConfig(stored);
             setBridgeStatus('online');
             setTestResult(`连接成功 · ${result}`);
-            void refreshOfficialUsage(stored);
         } catch (e: any) {
             setBridgeStatus('offline');
             setTestResult(e?.message || '连接失败');
@@ -1072,28 +1047,14 @@ const WorkbenchApp: React.FC = () => {
         }
     };
 
-    const refreshOfficialUsage = async (sourceConfig = config) => {
-        if (!sourceConfig.bridgeUrl.trim()) {
-            setOfficialUsage(null);
-            setOfficialUsageStatus('idle');
-            return;
-        }
-        setOfficialUsageStatus('loading');
-        try {
-            const data = await fetchWorkbenchOfficialUsage(sourceConfig);
-            setOfficialUsage(data);
-            setOfficialUsageStatus('ready');
-        } catch {
-            setOfficialUsage(null);
-            setOfficialUsageStatus('unavailable');
-        }
-    };
-
     const updateCodexAvatar = async (file?: File | null) => {
         if (!file) return;
         try {
             const dataUrl = await processImage(file, { maxWidth: 256, quality: 0.82 });
-            if (dataUrl) setDraftConfig(prev => ({ ...prev, codexAvatar: dataUrl }));
+            if (dataUrl) {
+                const stored = dataUrl.startsWith('data:') ? await migrateDataUrlToRef(dataUrl) : dataUrl;
+                setDraftConfig(prev => ({ ...prev, codexAvatar: stored }));
+            }
         } catch (error) {
             addToast(error instanceof Error ? error.message : '头像读取失败', 'error');
         }
@@ -1692,11 +1653,9 @@ const WorkbenchApp: React.FC = () => {
                                 return (
                                 <div key={m.id} className={`flex gap-2.5 ${m.role === 'user' ? 'justify-end' : `justify-start ${avatarRowAlign}`}`}>
                                     {m.role !== 'user' && showAssistantAvatar && (avatar ? (
-                                        <img
+                                        <WorkbenchAvatarImage
                                             src={avatar}
                                             alt="avatar"
-                                            loading="lazy"
-                                            decoding="async"
                                             style={{ transform: `translateY(${avatarOffsetY}px)` }}
                                             className={`${avatarSizeClass} ${avatarRadiusClass} object-cover shadow-sm ring-1 ring-black/5 shrink-0`}
                                         />
@@ -1758,11 +1717,9 @@ const WorkbenchApp: React.FC = () => {
                             {busy && thinkingSpeaker && (
                                 <div className={`flex gap-2.5 ${avatarRowAlign}`}>
                                     {showAssistantAvatar && (thinkingAvatar ? (
-                                        <img
+                                        <WorkbenchAvatarImage
                                             src={thinkingAvatar}
                                             alt="avatar"
-                                            loading="lazy"
-                                            decoding="async"
                                             style={{ transform: `translateY(${avatarOffsetY}px)` }}
                                             className={`${avatarSizeClass} ${avatarRadiusClass} object-cover shadow-sm ring-1 ring-black/5 shrink-0`}
                                         />
@@ -2223,7 +2180,7 @@ const WorkbenchApp: React.FC = () => {
                                     </div>
                                     <div className="rounded-lg border border-emerald-100 bg-emerald-50/65 px-3 py-3">
                                         <div className="text-xs font-semibold text-emerald-800">电脑已连接</div>
-                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">自动使用已连接的 Codex、Claude Code 或自定义 CLI。电脑执行能力可读取项目、修改文件和运行命令。</p>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">连接的是电脑上独立运行的 bridge。SullyOS 页面不用在电脑上打开，也能使用 Codex、Claude Code 或自定义 CLI。</p>
                                     </div>
                                 </div>
                             </section>
@@ -2243,9 +2200,13 @@ const WorkbenchApp: React.FC = () => {
                                         <strong className="text-slate-800">手机访问电脑：</strong>让桥接监听局域网，并设置 Key。
                                         <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">pnpm workbench:bridge -- --host 0.0.0.0 --port 3001 --token YOUR_KEY</code>
                                     </li>
+                                    <li>
+                                        <strong className="text-slate-800">开电脑自动启动：</strong>在电脑上注册登录自启动任务。
+                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">pnpm workbench:bridge:startup -- -Token YOUR_KEY</code>
+                                    </li>
                                 </ol>
                                 <div className="mt-3 border-l-2 border-violet-300 pl-3 text-[11px] leading-relaxed text-slate-500">
-                                    电脑关闭后桥接会离线。手机仍可保存对话、催动角色；配置备用聊天 API 后，AI 助理仍可聊天，但不能操作电脑。
+                                    电脑关闭后桥接会离线。电脑开机并登录用户后，启动任务会拉起 bridge；手机只需要填电脑 IP / Tailscale 地址和同一个 Key。
                                 </div>
                             </section>
 
@@ -2256,7 +2217,7 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="mt-3 divide-y divide-slate-200/70 text-[11px]">
                                     {[
-                                        ['模式', '远程用于手机连接电脑地址；CLI 用于当前电脑上的本机地址。两边分别保存。'],
+                                        ['地址', '远程地址给手机连接电脑；本机地址给电脑自己连接 localhost。手机会自动优先远程地址，电脑会自动优先本机地址。'],
                                         ['CLI 路由', '选择 Codex、Claude Code 或自定义命令；连接后显示的 AI 名称来自实际路由。'],
                                         ['地址与 Key', '本机通常填写 http://localhost:3001；手机填写电脑局域网或 Tailscale 地址，并使用启动桥接时的 Key。'],
                                         ['自定义指令', '只提供给 AI 助理，例如“修改 prompt 前先给完整版本确认”。不会改变角色人格。'],
@@ -2336,7 +2297,7 @@ const WorkbenchApp: React.FC = () => {
                     <div className="flex-1 overflow-y-auto bg-[#f8fafc] workbench-index-scroll">
                         <div className="p-4 space-y-5">
                             <section className="space-y-3">
-                                <h3 className="text-xs font-semibold text-slate-500">模式</h3>
+                                <h3 className="text-xs font-semibold text-slate-500">连接地址</h3>
                                 <div className="grid grid-cols-2 gap-2">
                                     {(['computer', 'cli'] as const).map(runtimeMode => (
                                         <button
@@ -2350,7 +2311,7 @@ const WorkbenchApp: React.FC = () => {
                                             }))}
                                             className={`h-10 rounded-xl border text-xs font-semibold ${draftConfig.runtimeMode === runtimeMode ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
                                         >
-                                            {runtimeMode === 'computer' ? '远程' : 'CLI'}
+                                            {runtimeMode === 'computer' ? '手机远程' : '本机电脑'}
                                         </button>
                                     ))}
                                 </div>
@@ -2362,8 +2323,8 @@ const WorkbenchApp: React.FC = () => {
                                 >
                                     <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-slate-400 truncate">
                                         {draftConfig.runtimeMode === 'cli'
-                                            ? 'CLI 连接当前设备上的 CLI 服务'
-                                            : '远程用于手机连接电脑上的 CLI 服务'}
+                                            ? '本机电脑使用 localhost；SullyOS 页面不开也不影响 bridge'
+                                            : '手机使用电脑 IP / Tailscale 地址连接 bridge'}
                                     </span>
                                     <span className="max-w-[42%] truncate text-[10px] text-slate-300">
                                         {draftConfig.bridgeUrl || '未填写地址'}
@@ -2390,7 +2351,7 @@ const WorkbenchApp: React.FC = () => {
                                                     ? { cliBridgeUrl: e.target.value }
                                                     : { remoteBridgeUrl: e.target.value }),
                                             }))}
-                                            placeholder={draftConfig.runtimeMode === 'cli' ? 'http://localhost:3001' : 'http://电脑IP:3001'}
+                                            placeholder={draftConfig.runtimeMode === 'cli' ? 'http://localhost:3001' : 'http://电脑IP或Tailscale:3001'}
                                             className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-mono outline-none focus:bg-white focus:border-slate-400"
                                         />
                                         <input
@@ -2482,8 +2443,8 @@ const WorkbenchApp: React.FC = () => {
                                                 aria-label="更换 Code 头像"
                                                 title="更换 Code 头像"
                                             >
-                                                {draftConfig.codexAvatar ? (
-                                                    <img src={draftConfig.codexAvatar} alt="Code 头像" className="h-full w-full object-cover" />
+                                                {draftCodexAvatarUrl ? (
+                                                    <img src={draftCodexAvatarUrl} alt="Code 头像" className="h-full w-full object-cover" />
                                                 ) : (
                                                     <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l-4 3 4 3" />
@@ -2757,37 +2718,13 @@ const WorkbenchApp: React.FC = () => {
                             <section className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <h3 className="text-xs font-semibold text-slate-500">用量监控</h3>
-                                    <span className="text-[11px] text-slate-400">官方 + 本地</span>
+                                    <span className="text-[11px] text-slate-400">本地估算</span>
                                 </div>
                                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
-                                    <div className="rounded-lg border border-white bg-white px-3 py-2.5 space-y-2">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <div>
-                                                <div className="text-[11px] text-slate-400">官方用量</div>
-                                                <div className="mt-1 text-sm font-semibold text-slate-800">{officialUsageTitle}</div>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                onClick={() => void refreshOfficialUsage(draftConfig)}
-                                                disabled={officialUsageStatus === 'loading' || !draftConfig.bridgeUrl.trim()}
-                                                className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-500 active:scale-95 disabled:opacity-40"
-                                            >
-                                                {officialUsageStatus === 'loading' ? '同步中' : '刷新'}
-                                            </button>
-                                        </div>
-                                        {officialUsagePercent !== undefined && (
-                                            <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                                <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${officialUsagePercent}%` }} />
-                                            </div>
-                                        )}
-                                        <div className="text-[11px] text-slate-400">{officialUsageHint}</div>
-                                    </div>
                                     <div className="grid grid-cols-2 gap-2">
                                         {[
-                                            ['当前', usageStats.current],
                                             ['本周', usageStats.week],
                                             ['本月', usageStats.month],
-                                            ['累计', usageStats.total],
                                         ].map(([label, value]) => (
                                             <div key={label} className="rounded-lg border border-white bg-white px-3 py-2">
                                                 <div className="text-[11px] text-slate-400">{label}</div>
@@ -2821,7 +2758,7 @@ const WorkbenchApp: React.FC = () => {
                                 <button onClick={testBridge} disabled={testing || !draftConfig.bridgeUrl.trim()} className="h-10 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-600 active:scale-95 disabled:opacity-40">
                                     {testing ? '测试中' : '测试连接'}
                                 </button>
-                                <button onClick={savePanelConfig} className="h-10 rounded-xl bg-slate-900 text-white text-xs font-semibold active:scale-95">
+                                <button onClick={() => void savePanelConfig()} className="h-10 rounded-xl bg-slate-900 text-white text-xs font-semibold active:scale-95">
                                     保存设置
                                 </button>
                             </div>
