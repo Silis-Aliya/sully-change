@@ -85,19 +85,18 @@ const isLocalBridgeUrl = (value?: string): boolean => LOCAL_BRIDGE_URL_RE.test(n
 
 export const resolveWorkbenchBridgeConfigForClient = (
     config: WorkbenchBridgeConfig,
-    device: WorkbenchClientDevice = detectWorkbenchClientDevice(),
+    _device: WorkbenchClientDevice = detectWorkbenchClientDevice(),
 ): WorkbenchBridgeConfig => {
     const remoteBridgeUrl = normalizeBridgeUrl(config.remoteBridgeUrl);
     const cliBridgeUrl = normalizeBridgeUrl(config.cliBridgeUrl || DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl);
     const legacyUrl = normalizeBridgeUrl(config.bridgeUrl);
-    const activeUrl = device === 'mobile'
-        ? (remoteBridgeUrl || (!isLocalBridgeUrl(legacyUrl) ? legacyUrl : ''))
-        : (cliBridgeUrl || legacyUrl || remoteBridgeUrl);
+    const activeUrl = remoteBridgeUrl || (!isLocalBridgeUrl(legacyUrl) ? legacyUrl : '');
     return {
         ...config,
         remoteBridgeUrl,
         cliBridgeUrl,
         bridgeUrl: activeUrl,
+        runtimeMode: 'computer',
     };
 };
 
@@ -119,17 +118,20 @@ export const loadWorkbenchBridgeConfig = (): WorkbenchBridgeConfig => {
         const raw = localStorage.getItem(WORKBENCH_CONFIG_KEY);
         if (!raw) return resolveWorkbenchBridgeConfigForClient({ ...DEFAULT_WORKBENCH_CONFIG });
         const parsed = JSON.parse(raw) as Partial<WorkbenchBridgeConfig>;
-        const runtimeMode = parsed.runtimeMode === 'cli' ? 'cli' : 'computer';
         const legacyUrl = String(parsed.bridgeUrl || '').trim();
-        const remoteBridgeUrl = String(parsed.remoteBridgeUrl ?? (runtimeMode === 'computer' ? legacyUrl : '')).trim();
-        const cliBridgeUrl = String(parsed.cliBridgeUrl ?? (runtimeMode === 'cli' ? legacyUrl : DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl)).trim();
+        const cliBridgeUrl = String(parsed.cliBridgeUrl ?? DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl).trim();
+        const remoteBridgeUrl = String(
+            parsed.remoteBridgeUrl
+            ?? (!isLocalBridgeUrl(legacyUrl) ? legacyUrl : '')
+            ?? '',
+        ).trim();
         return resolveWorkbenchBridgeConfigForClient({
             ...DEFAULT_WORKBENCH_CONFIG,
             ...parsed,
-            runtimeMode,
+            runtimeMode: 'computer',
             remoteBridgeUrl,
             cliBridgeUrl,
-            bridgeUrl: runtimeMode === 'cli' ? cliBridgeUrl : remoteBridgeUrl,
+            bridgeUrl: remoteBridgeUrl,
         });
     } catch {
         return resolveWorkbenchBridgeConfigForClient({ ...DEFAULT_WORKBENCH_CONFIG });
@@ -137,12 +139,13 @@ export const loadWorkbenchBridgeConfig = (): WorkbenchBridgeConfig => {
 };
 
 export const saveWorkbenchBridgeConfig = (config: WorkbenchBridgeConfig): void => {
-    const runtimeMode = config.runtimeMode === 'cli' ? 'cli' : 'computer';
-    const remoteBridgeUrl = normalizeBridgeUrl(config.remoteBridgeUrl ?? (runtimeMode === 'computer' ? config.bridgeUrl : ''));
-    const cliBridgeUrl = normalizeBridgeUrl(config.cliBridgeUrl ?? (runtimeMode === 'cli' ? config.bridgeUrl : DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl));
+    const runtimeMode: WorkbenchBridgeConfig['runtimeMode'] = 'computer';
+    const bridgeCandidate = normalizeBridgeUrl(config.bridgeUrl);
+    const remoteBridgeUrl = normalizeBridgeUrl(config.remoteBridgeUrl) || (!isLocalBridgeUrl(bridgeCandidate) ? bridgeCandidate : '');
+    const cliBridgeUrl = normalizeBridgeUrl(config.cliBridgeUrl ?? DEFAULT_WORKBENCH_CONFIG.cliBridgeUrl);
     localStorage.setItem(WORKBENCH_CONFIG_KEY, JSON.stringify({
         ...config,
-        bridgeUrl: runtimeMode === 'cli' ? cliBridgeUrl : remoteBridgeUrl,
+        bridgeUrl: remoteBridgeUrl,
         remoteBridgeUrl,
         cliBridgeUrl,
         token: config.token.trim(),
@@ -321,7 +324,7 @@ export const sendWorkbenchFallbackMessage = async (
 
     const history = args.recentMessages.map(message => ({
         role: message.role === 'user' ? 'user' : 'assistant',
-        content: `[${message.role === 'user' ? '用户' : message.role === 'character' || message.role === 'sully' ? `角色 ${message.metadata?.speakerName || ''}`.trim() : `AI 助手 ${message.metadata?.speakerName || ''}`.trim()}]\n${message.content}`,
+        content: `[${message.role === 'user' ? '用户' : message.role === 'character' || message.role === 'sully' ? `角色 ${message.metadata?.speakerName || ''}`.trim() : `AI 助手 ${message.metadata?.speakerName || ''}`.trim()}]\n${workbenchContentForContext(message)}`,
     }));
     const systemParts = [
         config.customInstructions?.trim(),
@@ -704,9 +707,23 @@ const workbenchSpeaker = (m: WorkbenchMessage): string => {
     return m.metadata?.speakerName || '一起工作的角色';
 };
 
+const formatWorkbenchContextTime = (timestamp?: number): string => {
+    const date = new Date(Number(timestamp) || Date.now());
+    return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    });
+};
+
 const workbenchContentForContext = (m: WorkbenchMessage): string => {
-    if (m.type === 'emoji') return `[表情: ${m.metadata?.emojiName || '表情包'}]`;
-    return m.content;
+    const content = m.type === 'emoji'
+        ? `[表情: ${m.metadata?.emojiName || '表情包'}]`
+        : m.content;
+    return `[${formatWorkbenchContextTime(m.createdAt)}] ${content}`;
 };
 
 const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({

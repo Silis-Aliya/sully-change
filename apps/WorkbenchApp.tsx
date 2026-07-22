@@ -38,7 +38,7 @@ const WORKBENCH_SPACES: Record<WorkbenchSpace, {
         sessionId: 'main',
         title: '工作区',
         emptyTitle: '从这里安排电脑上的工作',
-        emptyDescription: '开关关闭时交给本机 CLI 或远程电脑；打开时由选中的角色一起工作。',
+        emptyDescription: '开关关闭时交给远程桥接的 AI 助理；打开时由选中的角色一起工作。',
     },
     inspiration: {
         sessionId: 'inspiration',
@@ -171,6 +171,7 @@ const sanitizeWorkbenchReply = (content: string) => ChatParser.sanitize(content,
     .replace(/\[[^\[\]\n]{0,24}发送了表情包[：:][^\]\n]{1,120}\]/g, '')
     .trim();
 const SEND_EMOJI_RE = /\[\[SEND_EMOJI:\s*([^\]]+?)\s*\]\]/g;
+const MENTION_CODEX_RE = /\[\[(?:MENTION_CODEX|MENTION_AI_ASSISTANT|CALL_CODEX|CALL_AI_ASSISTANT)\]\]/i;
 const QUOTE_RE_DOUBLE = /\[\[(?:QU[OA]TE|引用)[：:]\s*([\s\S]*?)\]\]/;
 const QUOTE_RE_SINGLE = /\[(?:QU[OA]TE|引用)[：:]\s*([^\]]*)\]/;
 const REPLY_RE_CN = /\[回复\s*[""“]([^""”]*?)[""”](?:\.{0,3})\]\s*[：:]?\s*/;
@@ -251,7 +252,14 @@ const renderWorkbenchMessageContent = (
 ) => {
     if (message.kind === 'error') return 'SYSTEM ERROR';
     const progressCard = message.metadata?.progressCard ? parseProgressCard(message.content) : null;
-    if (progressCard) return renderProgressCard(progressCard);
+    if (progressCard) {
+        progressCard['作者'] = progressCard['作者']
+            || message.metadata?.sourceName
+            || message.metadata?.summarySourceName
+            || message.metadata?.speakerName
+            || (message.metadata?.source === 'character' || message.metadata?.summarySource === 'character' ? '角色' : 'Code');
+        return renderProgressCard(progressCard);
+    }
     if (message.type === 'emoji') {
         const name = message.metadata?.emojiName || '表情';
         return (
@@ -1008,7 +1016,15 @@ const WorkbenchApp: React.FC = () => {
         const avatar = draftConfig.codexAvatar?.startsWith('data:')
             ? await migrateDataUrlToRef(draftConfig.codexAvatar)
             : draftConfig.codexAvatar;
-        const next = { ...DEFAULT_WORKBENCH_CONFIG, ...draftConfig, codexAvatar: avatar || '' };
+        const remoteBridgeUrl = draftConfig.remoteBridgeUrl || draftConfig.bridgeUrl || '';
+        const next = {
+            ...DEFAULT_WORKBENCH_CONFIG,
+            ...draftConfig,
+            runtimeMode: 'computer' as const,
+            bridgeUrl: remoteBridgeUrl,
+            remoteBridgeUrl,
+            codexAvatar: avatar || '',
+        };
         saveWorkbenchBridgeConfig(next);
         const stored = loadWorkbenchBridgeConfig();
         setConfig(stored);
@@ -1521,6 +1537,7 @@ const WorkbenchApp: React.FC = () => {
                 taskIndex,
                 capability,
             });
+            const requestedCodex = MENTION_CODEX_RE.test(reply);
             const characterReplies = await appendAssistantReply({
                 sessionId: s.id,
                 role: 'character',
@@ -1534,7 +1551,29 @@ const WorkbenchApp: React.FC = () => {
                     nudged: true,
                 },
             }, reply, true, recent);
-            const mentionedAssistant = characterReplies.some(message => (
+            const codexMentionMessage: WorkbenchMessage | null = requestedCodex
+                ? {
+                    id: makeId('wbm'),
+                    sessionId: s.id,
+                    role: 'character',
+                    kind: 'consult',
+                    type: 'text',
+                    mode: 'sully',
+                    content: '@Codex',
+                    createdAt: Date.now(),
+                    status: 'sent',
+                    metadata: {
+                        speakerName: selectedParticipant.name,
+                        speakerAvatar: selectedParticipant.avatar || '',
+                        characterId: selectedParticipant.id,
+                        mentionAssistant: true,
+                    },
+                }
+                : null;
+            if (codexMentionMessage) {
+                await appendMessage(codexMentionMessage);
+            }
+            const mentionedAssistant = !!codexMentionMessage || characterReplies.some(message => (
                 message.type !== 'emoji' && hasAssistantMention(message.content)
             ));
             if (mentionedAssistant) {
@@ -1544,7 +1583,7 @@ const WorkbenchApp: React.FC = () => {
                     setThinkingSpeaker('codex');
                     await runAssistantReply(
                         s,
-                        [...recent, ...characterReplies].slice(-10),
+                        [...recent, ...characterReplies, ...(codexMentionMessage ? [codexMentionMessage] : [])].slice(-10),
                         `一起工作的角色 ${selectedParticipant.name} 在 Code 对话里 @ 了 AI 助理，请回应角色刚才 @ 你的内容。`,
                     );
                 }
@@ -1560,11 +1599,6 @@ const WorkbenchApp: React.FC = () => {
 
     const sendEmoji = (emoji: Emoji) => {
         void send(emoji.url, { type: 'emoji', metadata: { emojiName: emoji.name } });
-    };
-
-    const mentionAssistant = () => {
-        const mention = '@AI助理 ';
-        setInput(prev => prev.includes('@AI助理') ? prev : `${mention}${prev}`.trimEnd());
     };
 
     const deleteConversation = async (sessionId: string) => {
@@ -1592,8 +1626,8 @@ const WorkbenchApp: React.FC = () => {
         >
             <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}`}</style>
             <div className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl" style={{ paddingTop: 'var(--safe-top)' }}>
-                <div className="px-3 py-2.5 flex items-center gap-2">
-                    <IconButton label="退出" onClick={closeApp} className="bg-white/54 border-white/70">
+                <div className="min-h-16 px-3 py-2 flex items-center gap-2">
+                    <IconButton label="退出" onClick={closeApp} className="h-8 w-8 bg-white/54 border-white/70">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M15 18l-6-6 6-6" />
                         </svg>
@@ -1605,54 +1639,48 @@ const WorkbenchApp: React.FC = () => {
                         </div>
                         <p className="text-[11px] text-slate-500 truncate mt-1">{modeCopy}</p>
                     </div>
-                    <IconButton label="Code 使用教程" onClick={() => setHelpOpen(true)} className="bg-white/54 border-white/70 rounded-full">
+                    <div className="shrink-0 flex items-center gap-1.5">
+                        <button
+                            type="button"
+                            onClick={() => updateWorkbenchConfig({ participantEnabled: !participantEnabled, participantCharacterId: selectedParticipant?.id || config.participantCharacterId || '' })}
+                            className={`h-7 w-12 rounded-full p-0.5 transition-colors ${participantEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                            aria-label="一起工作开关"
+                            title={participantEnabled ? '一起工作' : '仅 AI 助理'}
+                        >
+                            <span className={`block h-6 w-6 rounded-full bg-white shadow-sm transition-transform ${participantEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                        <select
+                            value={selectedParticipant?.id || ''}
+                            onChange={e => updateWorkbenchConfig({ participantCharacterId: e.target.value, participantEnabled: true })}
+                            disabled={!characters.length}
+                            className="h-8 w-[5.75rem] rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:opacity-40"
+                            aria-label="选择一起工作的角色"
+                        >
+                            {characters.length === 0 && <option value="">无角色</option>}
+                            {characters.map(char => (
+                                <option key={char.id} value={char.id}>{char.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <IconButton label="Code 使用教程" onClick={() => setHelpOpen(true)} className="hidden sm:flex h-8 w-8 bg-white/54 border-white/70 rounded-full">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <circle cx="12" cy="12" r="9" />
                             <path strokeLinecap="round" strokeLinejoin="round" d="M9.8 9a2.35 2.35 0 1 1 3.5 2.05c-.8.46-1.3.96-1.3 1.95" />
                             <path strokeLinecap="round" d="M12 17h.01" />
                         </svg>
                     </IconButton>
-                    <IconButton label="查看 Code 进度卡" onClick={() => { void loadProgressCards(session?.id); setProgressPanelOpen(true); }} className="bg-white/54 border-white/70">
+                    <IconButton label="查看 Code 进度卡" onClick={() => { void loadProgressCards(session?.id); setProgressPanelOpen(true); }} className="h-8 w-8 bg-white/54 border-white/70">
                         <svg xmlns="http://www.w3.org/2000/svg" className={`w-4 h-4 ${summaryBusy ? 'animate-pulse' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M8 6h8M8 10h8M8 14h5" />
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
                         </svg>
                     </IconButton>
-                    <IconButton label="Code 设置" onClick={() => { setDraftConfig(config); setSettingsOpen(true); setTestResult(''); }} className="bg-white/54 border-white/70">
+                    <IconButton label="Code 设置" onClick={() => { setDraftConfig(config); setSettingsOpen(true); setTestResult(''); }} className="h-8 w-8 bg-white/54 border-white/70">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 0 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 0 1-4 0v-.06A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 0 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 0 1 0-4h.06A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 0 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 0 1 4 0v.06A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 0 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9" />
                         </svg>
                     </IconButton>
-                </div>
-                <div className="px-3 pb-2.5 flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => updateWorkbenchConfig({ participantEnabled: !participantEnabled, participantCharacterId: selectedParticipant?.id || config.participantCharacterId || '' })}
-                        className={`h-8 w-14 rounded-full p-0.5 transition-colors ${participantEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                        aria-label="一起工作开关"
-                        title="一起工作开关"
-                    >
-                        <span className={`block h-7 w-7 rounded-full bg-white shadow-sm transition-transform ${participantEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                    </button>
-                    <div className="text-[11px] font-semibold text-slate-500 shrink-0">
-                        {participantEnabled ? '一起工作' : '仅 AI 助理'}
-                    </div>
-                    <select
-                        value={selectedParticipant?.id || ''}
-                        onChange={e => updateWorkbenchConfig({ participantCharacterId: e.target.value, participantEnabled: true })}
-                        disabled={!characters.length}
-                        className="min-w-0 max-w-[38%] h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:opacity-40"
-                        aria-label="选择一起工作的角色"
-                    >
-                        {characters.length === 0 && <option value="">无角色</option>}
-                        {characters.map(char => (
-                            <option key={char.id} value={char.id}>{char.name}</option>
-                        ))}
-                    </select>
-                    <div className="ml-auto text-[11px] text-slate-400 truncate max-w-[42%]">
-                        {usageText}
-                    </div>
                 </div>
                 {usageLimit > 0 && (
                     <div className="h-0.5 bg-slate-100">
@@ -1928,16 +1956,6 @@ const WorkbenchApp: React.FC = () => {
                                         <path strokeLinecap="round" strokeLinejoin="round" d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" />
                                         <path strokeLinecap="round" d="M18.5 15.5v3M20 17h-3M5.5 4.5v2M6.5 5.5h-2" />
                                     </svg>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={mentionAssistant}
-                                    disabled={busy}
-                                    className="h-8 w-8 rounded-lg flex items-center justify-center active:scale-95 disabled:opacity-35 bg-white/70 text-slate-500 border border-slate-200 text-sm font-semibold"
-                                    aria-label="@AI 助理"
-                                    title="@AI 助理"
-                                >
-                                    @
                                 </button>
                                 <button
                                     type="button"
@@ -2271,7 +2289,7 @@ const WorkbenchApp: React.FC = () => {
                                     </li>
                                 </ol>
                                 <div className="mt-3 border-l-2 border-violet-300 pl-3 text-[11px] leading-relaxed text-slate-500">
-                                    电脑关闭后桥接会离线。电脑开机并登录用户后，启动任务会拉起 bridge；手机只需要填电脑 IP / Tailscale 地址和同一个 Key。
+                                    电脑关闭后桥接会离线。电脑开机并登录用户后，启动任务会拉起 bridge；手机只需要填电脑 IP、Tailscale 或 Cloudflare 地址和同一个 Key。
                                 </div>
                             </section>
 
@@ -2282,9 +2300,9 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="mt-3 divide-y divide-slate-200/70 text-[11px]">
                                     {[
-                                        ['地址', '远程地址给手机连接电脑；本机地址给电脑自己连接 localhost。手机会自动优先远程地址，电脑会自动优先本机地址。'],
+                                        ['地址', '填写电脑 IP、Tailscale 或 Cloudflare 域名等远程 bridge 地址。'],
                                         ['CLI 路由', '选择 Codex、Claude Code 或自定义命令；连接后显示的 AI 名称来自实际路由。'],
-                                        ['地址与 Key', '本机通常填写 http://localhost:3001；手机填写电脑局域网或 Tailscale 地址，并使用启动桥接时的 Key。'],
+                                        ['地址与 Key', '手机和电脑都使用同一个远程地址与启动 bridge 时设置的 Key。'],
                                         ['自定义指令', '只提供给 AI 助理，例如“修改 prompt 前先给完整版本确认”。不会改变角色人格。'],
                                         ['模型与档位', '桥接在线后读取 CLI 可用模型；档位控制速度与思考强度。'],
                                         ['Code Memory', '保存跨对话仍有用的偏好和已确认规则，可查看、修改或删除。'],
@@ -2355,7 +2373,7 @@ const WorkbenchApp: React.FC = () => {
                             </IconButton>
                             <div className="min-w-0 flex-1">
                                 <h2 className="text-sm font-semibold">Code 设置</h2>
-                                <p className="text-[11px] text-slate-500 mt-0.5">执行模式、CLI 路由、模型、工作档位和用量</p>
+                                <p className="text-[11px] text-slate-500 mt-0.5">手机远程桥接、CLI 路由、模型、工作档位和用量</p>
                             </div>
                         </div>
                     </div>
@@ -2363,22 +2381,9 @@ const WorkbenchApp: React.FC = () => {
                         <div className="p-4 space-y-5">
                             <section className="space-y-3">
                                 <h3 className="text-xs font-semibold text-slate-500">连接地址</h3>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {(['computer', 'cli'] as const).map(runtimeMode => (
-                                        <button
-                                            key={runtimeMode}
-                                            onClick={() => setDraftConfig(prev => ({
-                                                ...prev,
-                                                runtimeMode,
-                                                bridgeUrl: runtimeMode === 'cli'
-                                                    ? (prev.cliBridgeUrl || 'http://localhost:3001')
-                                                    : (prev.remoteBridgeUrl || ''),
-                                            }))}
-                                            className={`h-10 rounded-xl border text-xs font-semibold ${draftConfig.runtimeMode === runtimeMode ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-                                        >
-                                            {runtimeMode === 'computer' ? '手机远程' : '本机电脑'}
-                                        </button>
-                                    ))}
+                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                    <div className="text-xs font-semibold text-slate-700">手机远程</div>
+                                    <p className="mt-1 text-[11px] leading-relaxed text-slate-400">使用电脑 IP、Tailscale 或 Cloudflare 域名连接 bridge。电脑上的 SullyOS 页面不用打开。</p>
                                 </div>
                                 <button
                                     type="button"
@@ -2387,9 +2392,7 @@ const WorkbenchApp: React.FC = () => {
                                     aria-expanded={connectionOpen}
                                 >
                                     <span className="min-w-0 flex-1 text-[11px] leading-relaxed text-slate-400 truncate">
-                                        {draftConfig.runtimeMode === 'cli'
-                                            ? '本机电脑使用 localhost；SullyOS 页面不开也不影响 bridge'
-                                            : '手机使用电脑 IP / Tailscale 地址连接 bridge'}
+                                        手机使用远程地址连接 bridge
                                     </span>
                                     <span className="max-w-[42%] truncate text-[10px] text-slate-300">
                                         {draftConfig.bridgeUrl || '未填写地址'}
@@ -2412,11 +2415,10 @@ const WorkbenchApp: React.FC = () => {
                                             onChange={e => setDraftConfig(prev => ({
                                                 ...prev,
                                                 bridgeUrl: e.target.value,
-                                                ...(prev.runtimeMode === 'cli'
-                                                    ? { cliBridgeUrl: e.target.value }
-                                                    : { remoteBridgeUrl: e.target.value }),
+                                                remoteBridgeUrl: e.target.value,
+                                                runtimeMode: 'computer',
                                             }))}
-                                            placeholder={draftConfig.runtimeMode === 'cli' ? 'http://localhost:3001' : 'http://电脑IP或Tailscale:3001'}
+                                            placeholder="https://code.example.com 或 http://电脑IP:3001"
                                             className="w-full h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-mono outline-none focus:bg-white focus:border-slate-400"
                                         />
                                         <input

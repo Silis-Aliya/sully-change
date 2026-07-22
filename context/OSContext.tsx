@@ -60,6 +60,29 @@ interface ProactiveQueueEntry {
   reason?: ProactiveRunReason;
 }
 
+const resolveLocalStorageSettingsBlobRefsForExport = async (
+  settings: Record<string, string> | undefined,
+): Promise<void> => {
+  if (!settings) return;
+  for (const [key, value] of Object.entries(settings)) {
+    if (!value || (!value.includes(BLOBREF_PREFIX) && !isBlobRef(value))) continue;
+    if (isBlobRef(value)) {
+      const wrapper = { value };
+      await resolveBlobRefsDeep(wrapper);
+      settings[key] = wrapper.value;
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(value);
+      if (!parsed || typeof parsed !== 'object') continue;
+      await resolveBlobRefsDeep(parsed);
+      settings[key] = JSON.stringify(parsed);
+    } catch {
+      /* Non-JSON localStorage values can be restored as-is. */
+    }
+  }
+};
+
 const normalizeProactiveAiContent = (raw: string): string => {
   let cleaned = raw;
   cleaned = cleaned.replace(/\[(?:(?:你|User|用户|System)\s*)?发送了表情包[:：]\s*(.*?)\]/g, '[[SEND_EMOJI: $1]]');
@@ -3590,6 +3613,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               gotchiAccentHue: (mode === 'text_only' || mode === 'full') ? (() => { try { const s = localStorage.getItem('tama_accent_hue'); return s !== null ? s : undefined; } catch { return undefined; } })() : undefined,
               localStorageSettings: (mode === 'text_only' || mode === 'full') ? exportLocalStorageSettings() : undefined,
           };
+          if (mode !== 'text_only') {
+              await resolveLocalStorageSettingsBlobRefsForExport(backupData.localStorageSettings);
+          }
 
           // 桌面皮肤偏好（电子宠物/手游风的界面配色 + 看板 banner）——异步（看板图令牌需解析为
           // data URL 才能跨设备），所以在对象字面量外单独 await。text_only 只带配色偏好、跳过看板大图。

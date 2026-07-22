@@ -1845,11 +1845,9 @@ const MessageItem = React.memo(({
     // HTML 卡片（280px 定宽模块）默认位置就是"视觉居中"的约定：包装层打上 sully-html-wrap，
     // 让「聊天细节微调」的贴边/缩进规则 :not() 绕开它——美化怎么开卡片都不挪窝。
     const isHtmlCard = m.type === 'html_card';
-    // 音乐卡片（一起听 / 收歌单）与 HTML 卡片同为定宽模块，跟随同一套 chatModuleAlign 约定。
-    // 条件与下方渲染分支一致：没有 song 元数据会落回普通气泡，不按模块排版。
-    const isMusicCard = m.type === 'music_card' && !!m.metadata?.song;
-    const isModuleCard = isHtmlCard || isMusicCard;
-    // 聊天细节微调 chatModuleAlign：HTML 卡片 / 心象卡片 / 音乐卡片默认水平居中，'anchor' 才贴气泡列。
+    // 音乐卡片属于聊天消息本身：谁发起就跟随谁的头像和左右位置，不能按居中模块处理。
+    const isModuleCard = isHtmlCard;
+    // 聊天细节微调 chatModuleAlign：HTML 卡片默认水平居中，'anchor' 才贴气泡列。
     // 心象居中时抽出到气泡行上方的独立行（不带 .group 类，注入的钉位 CSS 自然不命中）。
     const centerModules = moduleAlign !== 'anchor';
     // 心象卡片（思考链）：默认渲染在气泡包装层内、气泡上方；居中模式挪到独立行。
@@ -1891,7 +1889,7 @@ const MessageItem = React.memo(({
                     </div>
                 )}
 
-                {/* HTML / 音乐卡片是独立模块，不继承普通消息外壳的角色头像。卡片内部自己的头像不受影响。 */}
+                {/* HTML 卡片是独立模块，不继承普通消息外壳的角色头像。卡片内部自己的头像不受影响。 */}
                 {!isUser && !isModuleCard && (
                     <div className={`absolute bottom-0 z-0 ${selectionMode ? 'left-14' : 'left-3'} transition-[left] duration-300`}>
                         {renderAvatar(charAvatar)}
