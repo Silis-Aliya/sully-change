@@ -29,6 +29,8 @@ Current known baseline:
 ### Result
 
 - Clarified and enforced the Code bridge model: the CLI bridge is an independent computer-side HTTP service and does not require SullyOS to be open in the computer browser.
+- Bridge `/health` now reports the HTTP bridge as online even if the CLI probe fails, returning `cliStatus` / `cliError` separately so mobile Code settings do not show "not connected" when only the Codex/Claude executable probe failed.
+- Bridge CORS responses now include `Access-Control-Allow-Private-Network: true` for HTTPS SullyOS pages calling a LAN bridge from Chrome-like browsers.
 - Added `pnpm workbench:bridge:startup`, backed by `scripts/install-workbench-bridge-startup.ps1`, to register the bridge as a Windows user-logon scheduled task.
 - Workbench bridge config now resolves addresses by client device:
   - mobile clients prefer `remoteBridgeUrl` and will not accidentally use `localhost`

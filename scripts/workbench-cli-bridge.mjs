@@ -76,6 +76,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Private-Network': 'true',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -485,12 +486,25 @@ const server = createServer(async (req, res) => {
   try {
     if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/health') {
       const body = req.method === 'POST' ? await readBody(req) : {};
-      const agentInfo = await runProbe(body);
+      const requestedAgentInfo = commandFor(body || {});
+      let agentInfo = requestedAgentInfo;
+      let cliStatus = 'unknown';
+      let cliError = '';
+      try {
+        agentInfo = await runProbe(body);
+        cliStatus = 'ready';
+      } catch (error) {
+        cliStatus = 'unavailable';
+        cliError = error.message || 'CLI probe failed';
+        if (DEBUG) console.warn(`[workbench-bridge] health CLI probe failed: ${cliError}`);
+      }
       json(res, 200, {
         status: 'ok',
         bridge: 'sullyos-workbench-cli',
         agent: agentInfo.agent,
         displayName: agentInfo.displayName,
+        cliStatus,
+        cliError,
         cwd: WORKDIR,
       });
       return;
