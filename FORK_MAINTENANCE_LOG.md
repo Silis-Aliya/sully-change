@@ -17,11 +17,44 @@ Important rules:
 - Keep this file updated with what changed, risk points, and follow-up checks.
 
 Current known baseline:
-- upstream/master merged through 98c6c1e.
-- Remote master was updated to c5155c7.
-- Last verified build passed.
-- Vercel deployment after that push succeeded.
+- upstream/master merged through ece65a3.
+- Local merge commit is 9740321 on codex/merge-upstream-20260721.
+- Last verified build passed after the 2026-07-22 upstream refresh.
+- This maintenance state is intended for remote `master`; if this note is visible on `master`, the push has happened.
+- Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
+
+## 2026-07-22 Upstream Refresh to ece65a3
+
+### Result
+
+- Fetched upstream and found `upstream/master` advanced from `680659b` to `ece65a3`.
+- Merged latest upstream into `codex/merge-upstream-20260721`.
+- Git auto-merged cleanly with no conflict markers.
+- Built successfully with `pnpm build`.
+
+### Upstream Changes Integrated
+
+- Spark request race fixes:
+  - prevent duplicate refresh/comment/reply requests
+  - avoid stale feed snapshots overwriting newer posts or comments
+  - add `utils/socialFeedMerge.ts` and focused tests
+- API call log ambient context snapshot:
+  - request logging keeps the app context from request start instead of later navigation state
+- Phone contact alias editing:
+  - real contacts can have a manual remark name / relationship label
+  - `identityManual` prevents later scans from overwriting a user-confirmed alias, including intentionally blank aliases
+
+### Conflict / Risk Notes
+
+- `context/OSContext.tsx` and `types.ts` were changed on both sides but auto-merged cleanly.
+- No prompt files were edited.
+- Custom fork areas for Workbench, QuickSync, music together, XHS phone channel, chat prompts, and assistant post-processing were not directly changed by this upstream refresh.
+- Existing untracked `AGENTS.md` was left untouched.
+
+### Follow-Up Checks
+
+- Manual runtime check recommended for Spark feed refresh/comments and Check Phone contact detail alias editing.
 
 ## 2026-07-21 Workbench App
 
@@ -455,7 +488,7 @@ Run this when a merge/deploy looks risky:
 
 ## Current Deployment Note
 
-Pushed `ecc01ab` to remote `master` on 2026-07-21 after upstream refresh plus backup/QuickSync settings fixes. Vercel should auto-deploy from `master`; verify the deployment dashboard before treating it as the latest stable deployed baseline.
+Last recorded stable deployment was `ecc01ab` on remote `master` from 2026-07-21. The 2026-07-22 Code workspace / QuickSync work plus upstream refresh is merged through `9740321`, with the maintenance log updated for publishing to remote `master`. Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 
 ## 2026-07-22 Code Workspace And Sync Audit
 
@@ -531,7 +564,7 @@ Pushed `ecc01ab` to remote `master` on 2026-07-21 after upstream refresh plus ba
 - Verify that CLI offline never creates an assistant message; ordinary send only records the user message, while lightning produces exactly one selected-character response.
 - Verify that a character can answer about the newest Code user/assistant exchange, can still reflect recent normal-chat relationship context, and does not repeat internal markers such as `[当前 Code 对话 / 角色名]`.
 - Verify that Code stickers from both user and character render as transparent media and that quote/delete/multi-select work on old as well as recent messages.
-- The current branch contains uncommitted/untracked Workbench files and has not been pushed after this audit. Do not assume Vercel contains these fixes until commit, push, and deployment verification are complete.
+- Do not assume Vercel contains these fixes until the remote `master` push completes and the deployment dashboard reports success.
 
 ## 2026-07-22 Code Automatic Capability And Fallback API
 
@@ -553,5 +586,5 @@ Pushed `ecc01ab` to remote `master` on 2026-07-21 after upstream refresh plus ba
 
 ### Upstream Check Before Release
 
-- Refreshed `upstream/master` before publishing on 2026-07-22. The latest upstream commit is `680659b` (`Refine neural memory qualification windows` via PR #419), two commits ahead of this branch's previous upstream baseline.
-- The upstream change is concentrated in loyal-user recruitment qualification, tests, documentation, and its worker bundle. Merge and rebuild it after committing the Code workspace changes; pay special attention to `package.json` and generated worker output if Git reports overlap.
+- Refreshed `upstream/master` before publishing on 2026-07-22. The latest upstream commit is `ece65a3` (PR #421, manual phone contact aliases), with PR #420's Spark request-race fixes included.
+- The upstream changes were merged locally in `9740321` with no conflicts. Rebuild and focused tests passed after the merge; release requires remote `master` push plus Vercel deployment verification.
