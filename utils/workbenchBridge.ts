@@ -752,7 +752,7 @@ const workbenchContentForContext = (m: WorkbenchMessage): string => {
         ? `[表情: ${m.metadata?.emojiName || '表情包'}]`
         : m.content;
     const xhsNote = formatWorkbenchXhsNoteForContext(m.metadata?.xhsNote);
-    return `[${formatWorkbenchContextTime(m.createdAt)}] ${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
+    return `时间：${formatWorkbenchContextTime(m.createdAt)}\n内容：${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
 };
 
 const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({

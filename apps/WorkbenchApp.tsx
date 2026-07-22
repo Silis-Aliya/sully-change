@@ -249,6 +249,7 @@ const codeMemoryKey = (content: string) => content
     .slice(0, 24);
 const sanitizeWorkbenchReply = (content: string) => ChatParser.sanitize(content, { keepCitations: true })
     .replace(/^\s*\[当前\s*Code\s*对话\s*\/[^\]]+\]\s*/i, '')
+    .replace(/\[\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}\]\s*/g, '')
     .replace(/\[(?:用户|角色|AI\s*助手)\s+[^\]\n]{1,80}\]\s*/gi, '')
     .replace(/<\s*\/?\s*[语語]音[^>]*>/g, '')
     .replace(/<#[\s\S]*?#>/g, '')
@@ -327,7 +328,7 @@ const renderProgressCard = (fields: Record<string, string>) => (
 );
 
 const renderWorkbenchXhsNoteCard = (note: Record<string, any>) => (
-    <span className="mt-2 block overflow-hidden rounded-2xl border border-red-100 bg-white/82 shadow-sm">
+    <span className="block overflow-hidden rounded-2xl border border-red-100 bg-white/82 shadow-sm">
         {note.coverUrl && (
             <img
                 src={note.coverUrl}
@@ -342,7 +343,7 @@ const renderWorkbenchXhsNoteCard = (note: Record<string, any>) => (
             <span className="flex items-center gap-1.5 text-[10px] font-semibold text-red-400">
                 <span>小红书</span>
                 <span className="text-slate-300">·</span>
-                <span className="text-slate-400">Code 可读取</span>
+                <span className="text-slate-400">分享给 Code</span>
             </span>
             <span className="mt-1 block text-sm font-semibold text-slate-900 line-clamp-2">
                 {note.title || '小红书笔记'}
@@ -383,12 +384,7 @@ const renderWorkbenchMessageContent = (
         return renderProgressCard(progressCard);
     }
     if (message.metadata?.xhsNote) {
-        return (
-            <>
-                {renderWorkbenchContent(message.content, emojiMap)}
-                {renderWorkbenchXhsNoteCard(message.metadata.xhsNote)}
-            </>
-        );
+        return renderWorkbenchXhsNoteCard(message.metadata.xhsNote);
     }
     if (message.type === 'emoji') {
         const name = message.metadata?.emojiName || '表情';
@@ -443,6 +439,38 @@ const workbenchMessageText = (message: WorkbenchMessage) => (
         ? `[表情: ${message.metadata?.emojiName || '表情包'}]`
         : message.content
 );
+
+const workbenchMessageTextForCopy = (message: WorkbenchMessage) => {
+    const note = message.metadata?.xhsNote;
+    if (note) {
+        const comments = Array.isArray(note.comments) ? note.comments : [];
+        return [
+            `小红书笔记：${note.title || message.content || '未命名笔记'}`,
+            note.author ? `作者：${note.author}` : '',
+            note.desc ? `正文：${note.desc}` : '',
+            note.noteId ? `noteId：${note.noteId}` : '',
+            note.sourceUrl || note.url || message.content,
+            comments.length ? `评论摘录：\n${comments.slice(0, 5).map((comment: any) => {
+                if (typeof comment === 'string') return comment;
+                const author = comment?.author || comment?.nickname || '';
+                const content = comment?.content || comment?.text || '';
+                return [author, content].filter(Boolean).join('：');
+            }).filter(Boolean).join('\n')}` : '',
+        ].filter(Boolean).join('\n');
+    }
+
+    const artifact = message.type === 'file' ? message.metadata?.artifact as WorkbenchArtifact | undefined : undefined;
+    if (artifact) {
+        return [
+            `文件：${artifact.name}`,
+            artifact.relativePath ? `路径：${artifact.relativePath}` : '',
+            artifact.mimeType ? `类型：${artifact.mimeType}` : '',
+            artifact.preview ? `预览：\n${artifact.preview}` : '',
+        ].filter(Boolean).join('\n');
+    }
+
+    return workbenchMessageText(message);
+};
 
 const IconButton: React.FC<{
     label: string;
@@ -1263,6 +1291,45 @@ const WorkbenchApp: React.FC = () => {
         setSelectedMessageIds(new Set([message.id]));
     };
 
+    const copyMessageText = async (message: WorkbenchMessage) => {
+        const text = workbenchMessageTextForCopy(message).trim();
+        if (!text) {
+            setActionTarget(null);
+            addToast('这条消息没有可复制的文字', 'info');
+            return;
+        }
+
+        let copied = false;
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                copied = true;
+            }
+        } catch {
+            copied = false;
+        }
+
+        if (!copied) {
+            try {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.setAttribute('readonly', 'true');
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                textarea.style.top = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                copied = document.execCommand('copy');
+                document.body.removeChild(textarea);
+            } catch {
+                copied = false;
+            }
+        }
+
+        setActionTarget(null);
+        addToast(copied ? '已复制消息' : '复制失败，请手动选择文本', copied ? 'success' : 'error');
+    };
+
     const deleteMessagesById = async (ids: string[]) => {
         const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
         if (!uniqueIds.length) return;
@@ -1761,8 +1828,11 @@ const WorkbenchApp: React.FC = () => {
                     'linear-gradient(135deg, #fbf5ed 0%, #f7f0ef 30%, #f4f1fb 68%, #edf5ff 100%)',
             }}
         >
-            <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}`}</style>
-            <div className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl">
+            <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}body.ios-keyboard-open .sully-workbench-inputbar{padding-bottom:0!important;}`}</style>
+            <div
+                className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl"
+                style={{ paddingTop: 'var(--safe-top)' }}
+            >
                 <div className="min-h-16 px-3 py-2 flex items-center gap-2">
                     <IconButton label="退出" onClick={closeApp} className="h-8 w-8 bg-white/54 border-white/70">
                         <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1959,7 +2029,7 @@ const WorkbenchApp: React.FC = () => {
                     </div>
 
                     <div
-                        className="shrink-0 px-3 pt-2 pb-3 border-t border-white/70"
+                        className="sully-workbench-inputbar shrink-0 px-3 pt-2 pb-3 border-t border-white/70"
                         style={{
                             paddingBottom: 'max(0.75rem, var(--safe-bottom))',
                             background: 'linear-gradient(135deg, #fbf5ed 0%, #f7f0ef 35%, #f4f1fb 72%, #edf5ff 100%)',
@@ -2284,6 +2354,17 @@ const WorkbenchApp: React.FC = () => {
                         )}
                         <button
                             type="button"
+                            onClick={() => void copyMessageText(actionTarget)}
+                            className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.99]"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 8h10v12H8Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                            复制
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => {
                                 setQuotedMessage(actionTarget);
                                 setActionTarget(null);
@@ -2464,7 +2545,7 @@ const WorkbenchApp: React.FC = () => {
                                     <p><strong className="text-slate-800">闪电：</strong>只催动当前选择的角色回复一次。</p>
                                     <p><strong className="text-slate-800">一起工作：</strong>打开后选择一个角色。角色能看到当前 Code 对话和 AI 助理的发言，但回复只留在 Code。</p>
                                     <p><strong className="text-slate-800">@Codex：</strong>你可以手动输入 @Codex；角色如果需要 AI 助理接手，会在话说完后触发 @Codex，系统会显示这条 @ 并让 AI 助理回应。</p>
-                                    <p><strong className="text-slate-800">消息操作：</strong>长按或右键消息可引用、编辑、删除或进入多选删除；表情包保持透明底。</p>
+                                    <p><strong className="text-slate-800">消息操作：</strong>长按或右键消息可复制、引用、编辑、删除或进入多选删除；表情包保持透明底。</p>
                                     <p><strong className="text-slate-800">小红书链接：</strong>Code 不会自己去小红书找素材。你主动贴 xiaohongshu.com 或 xhslink.com 链接时，若小红书 MCP/Lite 可用，Code 会读取该笔记的标题、正文、作者、封面和评论摘录用于分析。</p>
                                 </div>
                             </section>
