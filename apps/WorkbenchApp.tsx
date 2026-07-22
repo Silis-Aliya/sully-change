@@ -2223,7 +2223,7 @@ const WorkbenchApp: React.FC = () => {
                                     </div>
                                     <div className="rounded-lg border border-emerald-100 bg-emerald-50/65 px-3 py-3">
                                         <div className="text-xs font-semibold text-emerald-800">电脑已连接</div>
-                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">自动切换到已连接的 CLI 助理，可读取和修改当前项目、运行命令。</p>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700/75">自动使用已连接的 Codex、Claude Code 或自定义 CLI。电脑执行能力可读取项目、修改文件和运行命令。</p>
                                     </div>
                                 </div>
                             </section>
@@ -2262,7 +2262,7 @@ const WorkbenchApp: React.FC = () => {
                                         ['自定义指令', '只提供给 AI 助理，例如“修改 prompt 前先给完整版本确认”。不会改变角色人格。'],
                                         ['模型与档位', '桥接在线后读取 CLI 可用模型；档位控制速度与思考强度。'],
                                         ['Code Memory', '保存跨对话仍有用的偏好和已确认规则，可查看、修改或删除。'],
-                                        ['备用聊天 API', 'CLI 离线时接替 AI 助理。复用同一段 Code 历史与自定义指令，但没有文件和命令权限。'],
+                                        ['备用聊天 API', 'CLI 离线时接替 AI 助理。地址格式与系统 API 相同，可引用系统 URL、Key 和模型，也可从 /models 拉取或手填模型 ID；没有文件和命令权限。'],
                                     ].map(([title, body]) => (
                                         <div key={title} className="grid grid-cols-[5.25rem_1fr] gap-3 py-2.5">
                                             <span className="font-semibold text-slate-800">{title}</span>
@@ -2279,9 +2279,10 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-slate-600">
                                     <p><strong className="text-slate-800">发送：</strong>只把你的消息加入当前 Code 对话，不会自动让两个人轮流说下去。</p>
-                                    <p><strong className="text-slate-800">星光：</strong>只催动已连接的 AI 助理回复一次。</p>
+                                    <p><strong className="text-slate-800">星光：</strong>只催动 AI 助理回复一次。CLI 在线时使用当前 CLI，离线时使用已配置的备用 API。</p>
                                     <p><strong className="text-slate-800">闪电：</strong>只催动当前选择的角色回复一次。</p>
                                     <p><strong className="text-slate-800">一起工作：</strong>打开后选择一个角色。角色能看到当前 Code 对话和 AI 助理的发言，但回复只留在 Code。</p>
+                                    <p><strong className="text-slate-800">消息操作：</strong>长按或右键消息可引用、编辑、删除或进入多选删除；表情包保持透明底。</p>
                                 </div>
                             </section>
 
@@ -2292,15 +2293,16 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-slate-600">
                                     <p><strong className="text-slate-800">右侧索引：</strong>新建、切换、改名或删除独立对话。每个对话保存自己的完整历史。</p>
-                                    <p><strong className="text-slate-800">进度卡：</strong>手动总结当前任务。可由 AI 助理或角色生成；角色版会同步成该角色普通聊天里的卡片。</p>
+                                    <p><strong className="text-slate-800">进度卡：</strong>打开面板后手动生成，并可选择 AI 助理或当前角色总结。角色参与时，卡片会同步到该角色的普通聊天；完整代码不会写回。</p>
                                     <p><strong className="text-slate-800">删除对话：</strong>删除逐句历史；已经生成的进度卡和 Code Memory 仍作为任务索引保留。</p>
-                                    <p><strong className="text-slate-800">同步与导出：</strong>Code 设置、对话、进度卡、Memory 和交互数据都随 SullyOS 完整备份、普通导入导出与增量同步处理。</p>
+                                    <p><strong className="text-slate-800">文件卡：</strong>电脑执行产生的大文件保留在电脑项目中，Code 只保存名称、路径、大小、摘要等卡片信息；下载时再向在线电脑读取文件。</p>
+                                    <p><strong className="text-slate-800">同步与导出：</strong>Code 设置、对话、进度卡、Memory、文件卡元数据和删除状态会进入完整/文字备份、GitHub/WebDAV 恢复与增量同步；大型项目文件本体不会上传。</p>
                                 </div>
                             </section>
 
                             <section className="py-5">
                                 <h3 className="text-sm font-semibold">最短使用流程</h3>
-                                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">设置 CLI，按需再填备用聊天 API → 新建对话 → 发送需求 → 按星光叫当前可用的 AI 助理，或按闪电叫角色 → 阶段完成后手动生成进度卡。</p>
+                                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">设置 CLI；需要离线聊天时再配置备用 API → 新建对话并连续发送需求 → 按星光叫 AI 助理，或按闪电叫角色 → 电脑在线时执行项目 → 阶段完成后选择总结者并手动生成进度卡。</p>
                             </section>
 
                             <button
