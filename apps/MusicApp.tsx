@@ -47,7 +47,7 @@ const MusicApp: React.FC = () => {
     lyric, tlyric, activeLyricIdx,
     profile, playSong, togglePlay, nextSong, prevSong, seek,
     liked, toggleLike, setToastHandler,
-    listeningTogetherWith, listeningTogetherStartedAt, removeListeningPartner,
+    listeningTogetherWith, listeningTogetherInviterByCharId, listeningTogetherStartedAt, removeListeningPartner,
     addLocalSong, removeLocalSong, localAlbumSongs,
     playMode, setPlayMode,
     regeneratingId, regeneratingStatus,
@@ -96,6 +96,8 @@ const MusicApp: React.FC = () => {
   }, [listeningTogetherWith, characters]);
 
   const primaryCompanion = companions[0];
+  const primaryInviteFromCharacter = !!primaryCompanion
+    && listeningTogetherInviterByCharId[primaryCompanion.id] === 'character';
   const extraCompanionCount = Math.max(0, companions.length - 1);
 
   useEffect(() => {
@@ -607,7 +609,9 @@ const MusicApp: React.FC = () => {
               }}
             >
               <div className="flex items-center justify-center gap-2.5 w-full">
-                {renderTogetherAvatar(userProfile?.avatar, userProfile?.name || '你', C.glow)}
+                {primaryInviteFromCharacter
+                  ? renderTogetherAvatar(primaryCompanion.avatar, primaryCompanion.name, C.sakura)
+                  : renderTogetherAvatar(userProfile?.avatar, userProfile?.name || '你', C.glow)}
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center"
                   style={{
@@ -619,7 +623,9 @@ const MusicApp: React.FC = () => {
                 >
                   ♥
                 </div>
-                {renderTogetherAvatar(primaryCompanion.avatar, primaryCompanion.name, C.sakura)}
+                {primaryInviteFromCharacter
+                  ? renderTogetherAvatar(userProfile?.avatar, userProfile?.name || '你', C.glow)
+                  : renderTogetherAvatar(primaryCompanion.avatar, primaryCompanion.name, C.sakura)}
                 {extraCompanionCount > 0 && (
                   <div
                     className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 bg-white/80"

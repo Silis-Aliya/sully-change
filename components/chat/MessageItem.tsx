@@ -2024,7 +2024,7 @@ const MessageItem = React.memo(({
     const isModuleCard = isHtmlCard || isMusicCard;
     // 聊天细节微调 chatModuleAlign：HTML 卡片默认水平居中，'anchor' 才贴气泡列。
     // 心象居中时抽出到气泡行上方的独立行（不带 .group 类，注入的钉位 CSS 自然不命中）。
-    const centerModules = moduleAlign !== 'anchor';
+    const centerModules = moduleAlign !== 'anchor' && !isMusicCard;
     // 心象卡片（思考链）：默认渲染在气泡包装层内、气泡上方；居中模式挪到独立行。
     const thinkingChainNode = !isUser && m.metadata?.thinkingChain ? (
         <div className={`relative w-full ${selectionMode ? 'pl-7' : ''}`}>
@@ -2065,7 +2065,7 @@ const MessageItem = React.memo(({
                 )}
 
                 {/* HTML 卡片是独立模块，不继承普通消息外壳的角色头像。卡片内部自己的头像不受影响。 */}
-                {!isUser && !isModuleCard && (
+                {!isUser && !isHtmlCard && (
                     <div className={`absolute bottom-0 z-0 ${selectionMode ? 'left-14' : 'left-3'} transition-[left] duration-300`}>
                         {renderAvatar(charAvatar)}
                     </div>
@@ -2088,7 +2088,7 @@ const MessageItem = React.memo(({
                     Added min-w-0 to prevent flexbox overflow issues.
                     Added explicit margins to clear absolute avatars.
                 */}
-                <div className={`relative max-w-[72%] min-w-0 ${isModuleCard && centerModules ? 'mx-auto' : (!isUser ? 'ml-12' : 'mr-12')} ${isModuleCard ? 'sully-html-wrap' : ''}`}>
+                <div className={`relative max-w-[72%] min-w-0 ${isModuleCard && centerModules ? 'mx-auto' : (!isUser ? 'ml-12' : 'mr-12')} ${isHtmlCard ? 'sully-html-wrap' : ''}`}>
                     <div
                         aria-hidden="true"
                         className={`absolute -right-10 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center pointer-events-none transition-all duration-150 ${isReplyReady ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-white/90 text-slate-400 shadow-sm'}`}
@@ -2125,7 +2125,7 @@ const MessageItem = React.memo(({
                 </div>
 
                 {/* 用户侧若存在导入/历史模块卡，也保持同一条“卡片不带消息外侧头像”规则。 */}
-                {isUser && !isModuleCard && (
+                {isUser && !isHtmlCard && (
                     <div className={`absolute right-3 bottom-0 z-0 transition-[left] duration-300`}>
                         {renderAvatar(userAvatar)}
                     </div>
@@ -2192,7 +2192,9 @@ const MessageItem = React.memo(({
             if (status === 'accepted') {
                 const hooks = loadMusicHooks();
                 await hooks?.playSharedSong?.(song as any);
-                hooks?.joinListeningTogether?.(m.charId);
+                window.setTimeout(() => {
+                    loadMusicHooks()?.joinListeningTogether?.(m.charId, 'character');
+                }, 0);
             }
         };
 
@@ -2273,6 +2275,16 @@ const MessageItem = React.memo(({
                 )}
             </div>
         );
+        const inviteFromCharacter = isTogetherRequestFromCharacter
+            || m.metadata?.inviterRole === 'character';
+        const inviterName = inviteFromCharacter ? (charName || 'TA') : '你';
+        const inviteeName = inviteFromCharacter ? '你' : (charName || 'TA');
+        const firstAvatar = inviteFromCharacter
+            ? { src: charAvatar, name: charName || 'TA', ring: '#c3b2ff' }
+            : { src: userAvatar, name: '你', ring: '#ffb5cf' };
+        const secondAvatar = inviteFromCharacter
+            ? { src: userAvatar, name: '你', ring: '#ffb5cf' }
+            : { src: charAvatar, name: charName || 'TA', ring: '#c3b2ff' };
 
         return commonLayout(
             <div className="relative w-64 rounded-2xl overflow-hidden shadow-sm border cursor-pointer active:opacity-90 transition-opacity"
@@ -2292,14 +2304,14 @@ const MessageItem = React.memo(({
                             }} />
                         {/* 居中：用户头像 · ♥ · 角色头像 */}
                         <div className="relative flex items-center justify-center gap-2">
-                            {renderAvatar(userAvatar, '你', '#ffb5cf')}
+                            {renderAvatar(firstAvatar.src, firstAvatar.name, firstAvatar.ring)}
                             <svg width="16" height="15" viewBox="0 0 24 22" fill="none"
                                 className="animate-pulse"
                                 style={{ color: '#ff7fae', filter: 'drop-shadow(0 0 5px rgba(255,127,174,0.55))' }}>
                                 <path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z"
                                     fill="currentColor" />
                             </svg>
-                            {renderAvatar(charAvatar, charName, '#c3b2ff')}
+                            {renderAvatar(secondAvatar.src, secondAvatar.name, secondAvatar.ring)}
                         </div>
                         {/* 标签 */}
                         <div className="relative mt-1.5 text-center text-[9px] tracking-[0.3em] uppercase font-semibold"
@@ -2314,9 +2326,9 @@ const MessageItem = React.memo(({
                         </div>
                         <div className="relative mt-0.5 text-center text-[11px]"
                             style={{ color: '#5a49a8', fontFamily: `'Noto Serif','Georgia',serif` }}>
-                            <span className="font-medium">你</span>
+                            <span className="font-medium">{inviterName}</span>
                             <span className="mx-1.5 opacity-50">×</span>
-                            <span className="font-medium">{charName || 'Ta'}</span>
+                            <span className="font-medium">{inviteeName}</span>
                             {intent === 'join_and_add' && (
                                 <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded-full align-middle"
                                     style={{ background: 'rgba(195,178,255,0.3)', color: '#7a5db0', border: '1px solid rgba(195,178,255,0.5)' }}>
@@ -2400,7 +2412,9 @@ const MessageItem = React.memo(({
                                     boxShadow: inviteAccepted ? '0 2px 10px rgba(143,132,189,0.2)' : undefined,
                                 }}
                             >
-                                {charName}{inviteAccepted ? ' 接受了邀请' : ' 拒绝了邀请'}
+                                {inviteFromCharacter
+                                    ? `你${inviteAccepted ? '接受了' : '拒绝了'}${charName || 'TA'}的邀请`
+                                    : `${charName || 'TA'}${inviteAccepted ? '接受了你的邀请' : '拒绝了你的邀请'}`}
                             </div>
                         </div>
                     )}

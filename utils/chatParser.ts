@@ -42,7 +42,7 @@ export interface MusicActionHooks {
     getListeningSnapshot: () => MusicActionSnapshot | null;
     /** 将 charId 加入"一起听"名单（chatParser 不维护状态，只通知） */
     isListeningTogether?: (charId: string) => boolean;
-    joinListeningTogether: (charId: string) => void;
+    joinListeningTogether: (charId: string, inviter?: 'user' | 'character') => void;
     leaveListeningTogether?: (charId: string) => void;
     nextSong?: () => void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;

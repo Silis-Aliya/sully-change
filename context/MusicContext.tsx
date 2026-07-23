@@ -160,6 +160,7 @@ export interface MusicPlaybackSnapshot {
   lyric: LyricLine[];
   activeLyricIdx: number;
   listeningTogetherWith: string[];
+  listeningTogetherInviterByCharId: Record<string, 'user' | 'character'>;
   listeningTogetherStartedAt: number | null;
   listeningTogetherChangeCount: number;
   listeningTogetherPreviousSong: { id: number; name: string; artists: string } | null;
@@ -355,8 +356,9 @@ interface MusicContextType {
   // 一起听 — 当前哪些 char 和 user 一起听（仅视觉状态，不影响播放）
   // 歌曲切换 / 结束时自动清空
   listeningTogetherWith: string[];
+  listeningTogetherInviterByCharId: Record<string, 'user' | 'character'>;
   listeningTogetherStartedAt: number | null;
-  addListeningPartner: (charId: string) => void;
+  addListeningPartner: (charId: string, inviter?: 'user' | 'character') => void;
   removeListeningPartner: (charId: string) => void;
   clearListeningPartners: () => void;
   /** 最近一次一起听途中换歌的记录（供 prompt 注入"察觉换歌"，不触发主动消息） */
@@ -552,12 +554,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // 一起听 - char 加入后在 miniPlayer / 播放页显示徽标；切歌 / 结束自动清空
   const [listeningTogetherWith, setListeningTogetherWith] = useState<string[]>([]);
+  const [listeningTogetherInviterByCharId, setListeningTogetherInviterByCharId] = useState<Record<string, 'user' | 'character'>>({});
   const [listeningTogetherStartedAt, setListeningTogetherStartedAt] = useState<number | null>(null);
-  const addListeningPartner = useCallback((charId: string) => {
+  const addListeningPartner = useCallback((charId: string, inviter: 'user' | 'character' = 'user') => {
     setListeningTogetherStartedAt(prev => prev ?? Date.now());
     setListeningTogetherWith(prev => prev.includes(charId) ? prev : [...prev, charId]);
+    setListeningTogetherInviterByCharId(prev => prev[charId] === inviter ? prev : { ...prev, [charId]: inviter });
   }, []);
   const removeListeningPartner = useCallback((charId: string) => {
+    setListeningTogetherInviterByCharId(prev => {
+      if (!(charId in prev)) return prev;
+      const next = { ...prev };
+      delete next[charId];
+      return next;
+    });
     setListeningTogetherWith(prev => {
       const wasListening = prev.includes(charId);
       const next = prev.filter(id => id !== charId);
@@ -575,6 +585,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   }, []);
   const clearListeningPartners = useCallback(() => {
+    setListeningTogetherInviterByCharId({});
     setListeningTogetherStartedAt(null);
     setListeningTogetherChangeCount(0);
     setListeningTogetherPreviousSong(null);
@@ -607,6 +618,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           artists: previousSong.artists,
         });
       }
+      setListeningTogetherInviterByCharId({});
       setListeningTogetherWith([]);
     }
     previousSongRef.current = current;
@@ -631,7 +643,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onTime = () => setProgress(a.currentTime);
     const onMeta = () => setDuration(a.duration || 0);
     // 播放出错 → 清掉 playing 状态 + 清掉"一起听"伙伴（防止 UI 卡在残留状态）
-    const onErr = () => { setPlaying(false); setListeningTogetherWith([]); toast('播放失败', 'error'); };
+    const onErr = () => {
+      setPlaying(false);
+      setListeningTogetherInviterByCharId({});
+      setListeningTogetherWith([]);
+      toast('播放失败', 'error');
+    };
     const onEnd = () => { endedHandlerRef.current(); };
 
     a.addEventListener('play', onPlay);
@@ -888,13 +905,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lyric,
       activeLyricIdx,
       listeningTogetherWith,
+      listeningTogetherInviterByCharId,
       listeningTogetherStartedAt,
       listeningTogetherChangeCount,
       listeningTogetherPreviousSong,
       cfg,
       recentTrackChange,
     };
-  }, [current, queue, idx, playing, progress, duration, lyric, activeLyricIdx, listeningTogetherWith, listeningTogetherStartedAt, listeningTogetherChangeCount, listeningTogetherPreviousSong, cfg, recentTrackChange]);
+  }, [current, queue, idx, playing, progress, duration, lyric, activeLyricIdx, listeningTogetherWith, listeningTogetherInviterByCharId, listeningTogetherStartedAt, listeningTogetherChangeCount, listeningTogetherPreviousSong, cfg, recentTrackChange]);
 
   // 把整组 musicHooks 写到模块级 slot — useChatAI 和 instant push activeMsgRuntime 都从这里取.
   // current / addListeningPartner 变化时刷新闭包, 保证读到的是最新 React state.
@@ -923,8 +941,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isListeningTogether: (cid: string) => {
         return listeningTogetherWith.includes(cid);
       },
-      joinListeningTogether: (cid: string) => {
-        addListeningPartner(cid);
+      joinListeningTogether: (cid: string, inviter: 'user' | 'character' = 'user') => {
+        addListeningPartner(cid, inviter);
       },
       leaveListeningTogether: (cid: string) => {
         removeListeningPartner(cid);
@@ -1076,7 +1094,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playSong, togglePlay, nextSong, prevSong, seek,
     playMode, setPlayMode,
     liked, toggleLike,
-    listeningTogetherWith, listeningTogetherStartedAt, addListeningPartner, removeListeningPartner, clearListeningPartners,
+    listeningTogetherWith, listeningTogetherInviterByCharId, listeningTogetherStartedAt, addListeningPartner, removeListeningPartner, clearListeningPartners,
     recentTrackChange,
     toast, setToastHandler,
     localAlbumSongs, addLocalSong, removeLocalSong,

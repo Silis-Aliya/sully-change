@@ -245,7 +245,7 @@ export interface PostProcessMusicHooks {
         fee: number;
     } | null;
     isListeningTogether?: (charId: string) => boolean;
-    joinListeningTogether: (charId: string) => void;
+    joinListeningTogether: (charId: string, inviter?: 'user' | 'character') => void;
     leaveListeningTogether?: (charId: string) => void;
     nextSong?: () => void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
