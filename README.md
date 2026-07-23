@@ -31,6 +31,7 @@ Code 是这支 fork 的重点。
 - 手机端使用远程 bridge 地址，电脑端负责真正执行 CLI。
 - 角色可以在 Code 区一起工作，也可以在说完之后单独 `@Codex` 让 AI 助理接手。
 - 进度卡会记录来源和作者，避免把 Codex 写的总结误认为角色写的，或反过来混淆。
+- 当前提供临时的进度卡作者修正入口，修正结果会进入导入/导出和增量同步；历史数据修完后可移除该入口。
 - 当前 Code 进度索引默认收起，需要时手动展开。
 - Code 长消息支持复制、引用、编辑、删除和多选删除。
 - “正在思考”显示为聊天页一致的三个点输入状态。
@@ -43,8 +44,8 @@ Code 是这支 fork 的重点。
 常用命令：
 
 ```bash
-npm run workbench:bridge
-npm run workbench:bridge:startup
+pnpm workbench:bridge
+pnpm workbench:bridge:startup
 ```
 
 `workbench:bridge:startup` 用于开机自动启动 bridge 的场景。目标体验是：
@@ -69,15 +70,26 @@ npm run workbench:bridge:startup
 
 也就是说：别人可以看见域名，不代表别人应该能打开或调用你的 bridge。
 
+私有远程访问只建议使用绑定自己域名的 Cloudflare named tunnel；本 fork 不再依赖会生成随机公开地址的 Quick Tunnel。
+
 ### 小红书 / XHS
 
 原聊天页已有小红书链接识别和卡片渲染。这支 fork 把相关能力补到 Code / Workbench：
 
 - 在 Code 区发小红书链接，可以解析并渲染卡片。
+- 用户和角色发送的普通聊天小红书分享会先走统一规范化，再在 Code 中按卡片渲染，避免拆成多条字段气泡。
 - 小红书卡片会进入 Code 上下文，Codex/角色能看到标题、正文、作者、noteId、链接和评论摘录。
 - Code 区角色如果输出小红书工具指令，会走 Workbench 专用后处理链，调用配置好的 MCP/Lite/手机通道并把结果插回 Code 对话。
 
 小红书能力依赖你自己的配置，不包含公共账号或公共 cookie。
+
+### 音乐分享与一起听
+
+- 音乐 Now Playing 页可以把当前歌曲分享给角色的普通聊天，角色也能从自己的可分享歌曲中主动发歌。
+- 分享卡片包含歌名、歌手、专辑、封面和播放信息；点击播放只切换自己的播放器，不会自动进入一起听。
+- 角色可以按音乐人格和当下情境把歌曲收藏进 `musicProfile.playlists`，也可以发送可接受或拒绝的一起听邀请。
+- 邀请卡、歌曲卡和退出记录按实际发送者或操作者显示；一起听期间展示双方头像，并阻止双方重复邀请。
+- 角色读取歌曲资料和当前音乐上下文来回应，不读取或上传原始音频，也不会为每条聊天额外调用音乐分析模型。
 
 ### 数据、头像和备份
 
@@ -86,6 +98,9 @@ Sully Plus 仍然是 local-first。
 - 聊天记录、角色、人设、设置和大部分应用数据存在 IndexedDB。
 - 图片和头像尽量走 blob/ref 存储，避免一直塞 base64。
 - 普通角色头像、Code 助理头像、小红书卡片、上传媒体等需要进入导入/导出和增量迁移流程。
+- 角色音乐歌单、聊天音乐事件、`songs`、`vr_music`、生成音频资源、世界书和 Code / Workbench 数据均进入全局备份与 QuickSync 清单。
+- 当前一起听会话属于临时运行状态，不跨刷新或导入恢复；Code 连接的真实项目文件内容不会打包进应用备份。
+- QuickSync 对同一条记录采用后写覆盖，多设备同时修改同一记录时仍有覆盖风险。
 - WebDAV / GitHub 备份应指向你自己的账号和私有空间。
 
 浏览器缓存不是备份。重要数据请定期导出。
@@ -95,25 +110,25 @@ Sully Plus 仍然是 local-first。
 安装依赖：
 
 ```bash
-npm install
+pnpm install
 ```
 
 启动开发服务：
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 构建生产包：
 
 ```bash
-npm run build
+pnpm build
 ```
 
 预览构建结果：
 
 ```bash
-npm run preview
+pnpm preview
 ```
 
 ## 部署 Web App
@@ -123,7 +138,7 @@ npm run preview
 一般流程：
 
 ```bash
-npm run build
+pnpm build
 ```
 
 然后部署 `dist/`。
@@ -136,7 +151,7 @@ npm run build
 
 ## Worker
 
-`npm run build` 会同时构建 worker bundle。
+`pnpm build` 会同时构建 worker bundle。
 
 常见目录：
 
@@ -151,9 +166,9 @@ npm run build
 ## Android / Capacitor
 
 ```bash
-npm run build
-npm run cap:sync
-npm run cap:android
+pnpm build
+pnpm cap:sync
+pnpm cap:android
 ```
 
 然后在 Android Studio 里运行或打包 APK。
@@ -194,7 +209,7 @@ npm run cap:android
 - 跑构建：
 
 ```bash
-npm run build
+pnpm build
 ```
 
 - 手动验证：

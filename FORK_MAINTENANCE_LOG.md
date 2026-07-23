@@ -13,16 +13,69 @@ Important rules:
 - Preserve my custom features first: music together, XHS Lite simple mode, XHS phone channel / Pixel MCP, WebDAV QuickSync, GitHub backup proxy, mobile restore batching, device detection, memory palace vector anomaly tools.
 - When merging upstream, do not overwrite my OSContext / chat prompt / post-processing changes blindly.
 - If editing prompts, show me the full prompt first and wait for confirmation.
-- After changes, run npm run build.
+- After changes, run pnpm build.
 - Keep this file updated with what changed, risk points, and follow-up checks.
 
 Current known baseline:
 - upstream/master merged through 3255ee7.
-- Local merge commit is the current 2026-07-23 upstream refresh merge on codex/merge-upstream-20260721.
-- Last verified build passed after the 2026-07-23 upstream refresh to 3255ee7.
-- This maintenance state is intended for remote `master`; if this note is visible on `master`, the push has happened.
+- A later upstream check found no commits beyond 3255ee7; do not merge unless a new fetch shows a newer upstream tip.
+- Current fork release head is ef24df1 on `codex/merge-upstream-20260721`.
+- Last verified production build passed after the music sharing, together-listening, Code/XHS, backup, and exit-ownership fixes.
+- The feature branch and Vercel production repository `Silis-Aliya/sully-change` `master` were pushed through ef24df1.
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
+
+## 2026-07-24 Music Sharing, Together Listening, Code/XHS, and Backup Audit
+
+### Upstream and Deployment
+
+- Rechecked `upstream/master`; no newer upstream commit was present beyond 3255ee7, so no merge was performed.
+- Continued development on `codex/merge-upstream-20260721`.
+- Pushed the fork to GitHub and updated the Vercel production repository `Silis-Aliya/sully-change` on `master`.
+- Current documented release head: ef24df1 (`show together listening exits on the actor side`).
+
+### Music Sharing
+
+- Added a Share action to music Now Playing. It sends the current track to a selected character's normal chat as the existing `music_card` with share intent.
+- Added character-initiated sharing through `[[MUSIC_SHARE:N]]`, restricted to the supplied shareable-song list.
+- Music cards carry and render title, artist, album, cover, and playable track data. Prompt context expands this metadata instead of exposing only `[音乐分享]`.
+- User-sent and character-sent music cards preserve the actual sender side.
+- Characters can collect shared or currently playing tracks through `MUSIC_ACTION:add`, `add|歌单标题`, or `add_new|新歌单标题|描述`; results persist in `character.musicProfile.playlists`.
+- Characters do not receive or analyse raw audio. They receive current song metadata and available music context; no per-message lyric/comment lookup or extra listening-analysis model call was added.
+
+### Together-Listening Lifecycle
+
+- Added character-created invitations through `[[MUSIC_TOGETHER_REQUEST]]` and reused the established accept/reject invitation UI.
+- Invitation cards are owned by the inviter. Avatar order is inviter first and invitee second, and result copy identifies the participant who actually accepted.
+- The Now Playing together indicator displays both participants and preserves inviter-first ordering.
+- Changing tracks does not silently end an active together-listening session.
+- Active or pending sessions block duplicate invitations from either side, including repeated model directives.
+- User and character exits reuse the established exit-event design while preserving actor ownership: user exits render on the user/right side and character exits on the assistant/left side.
+- The user's Now Playing exit control opens a centered two-option confirmation dialog.
+- Active together-listening session state is transient and is intentionally not restored by import/export or QuickSync.
+
+### Code / Workbench
+
+- Extended Workbench rendering so ordinary-chat Xiaohongshu share payloads and links use the same normalized card path in Code for both user and character messages.
+- Existing already-saved malformed text bubbles are not destructively rewritten; newly parsed or rendered records use the corrected path.
+- Added a temporary progress-card author correction control for historically misattributed records. Corrections propagate to related Workbench summary and chat/code-card records so export and incremental sync retain the selected author.
+- Remove the temporary author selector only after the user confirms all historical progress cards have been corrected.
+
+### Backup, Import/Export, and QuickSync
+
+- Character records include `musicProfile.playlists`, so character music collections are covered by full export/import and character-row QuickSync.
+- Chat messages include music shares, invitations, invitation results, and exit events.
+- Added the `songs` and `vr_music` stores and generated-audio prefixes including `acestep_` and `mmmusic_` to the global backup/sync inventory.
+- Workbench/Code settings, conversations, summaries, tasks, cards, and metadata are included. Real project file bodies outside the app database remain excluded.
+- Worldbook records and mounted worldbook snapshots are included, so edits to world settings are preserved.
+- QuickSync remains whole-record last-write-wins; simultaneous edits to the same row on two devices can overwrite one another.
+- Ephemeral UI/runtime state, including the current together-listening session, is intentionally excluded.
+
+### Verification
+
+- The full-suite baseline passed at 109 files / 1163 tests before the final narrow UI ownership fixes.
+- Focused music-card, prompt-context, together-invitation, duplicate-session, Code/XHS parsing, and backup tests passed after their respective changes.
+- Repeated production builds passed through the documented release head.
 
 ## 2026-07-23 Upstream Refresh to 3255ee7
 
@@ -433,7 +486,7 @@ Failure should be treated as channel/runtime failure first, not necessarily fron
 
 ### Build Passing Is Not Full Regression
 
-`npm run build` confirms TypeScript/build integrity. It does not prove:
+`pnpm build` confirms TypeScript/build integrity. It does not prove:
 
 - WebDAV upload/pull works
 - GitHub backup upload works
@@ -456,13 +509,13 @@ If dirty, understand what changed before editing. Do not reset user changes.
 ### Normal Local Development
 
 ```bash
-npm run build
+pnpm build
 ```
 
 For UI testing:
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ### After Editing
@@ -470,7 +523,7 @@ npm run dev
 1. Run build:
 
 ```bash
-npm run build
+pnpm build
 ```
 
 2. Check status:
@@ -525,7 +578,7 @@ git merge upstream/master
 5. Build:
 
 ```bash
-npm run build
+pnpm build
 ```
 
 6. Push a review branch first:
