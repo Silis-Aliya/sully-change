@@ -8,6 +8,78 @@ export const cleanWorkbenchContent = (content: string) => normalizeWorkbenchLine
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
+export type WorkbenchXhsShareSegment =
+    | { type: 'text'; content: string }
+    | { type: 'xhs_card'; note: Record<string, any> };
+
+const XHS_SHARE_HEADER_RE = /^\[\s*(?:(.+?)\s*)?分享了(?:一篇)?小红书笔记\s*\]$/;
+const XHS_FIELD_RE = /^(标题|作者|赞|点赞|正文|链接|noteId)\s*[：:]\s*(.*)$/i;
+
+export const parseWorkbenchXhsShareSegments = (content: string): WorkbenchXhsShareSegment[] => {
+    const lines = normalizeWorkbenchLineBreaks(content).split('\n');
+    const segments: WorkbenchXhsShareSegment[] = [];
+    let textLines: string[] = [];
+    let pendingNote: Record<string, any> | null = null;
+
+    const flushText = () => {
+        const text = textLines.join('\n').replace(/^\n+|\n+$/g, '');
+        if (text) segments.push({ type: 'text', content: text });
+        textLines = [];
+    };
+    const flushNote = () => {
+        if (pendingNote?.title) segments.push({ type: 'xhs_card', note: pendingNote });
+        else if (pendingNote) {
+            textLines.push(`[${pendingNote.sharedBy ? `${pendingNote.sharedBy}分享了` : '分享了'}小红书笔记]`);
+        }
+        pendingNote = null;
+    };
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        const header = line.match(XHS_SHARE_HEADER_RE);
+        if (header) {
+            flushNote();
+            flushText();
+            pendingNote = {
+                title: '',
+                author: '',
+                likes: 0,
+                desc: '',
+                sharedBy: header[1]?.trim() || '',
+            };
+            continue;
+        }
+
+        if (!pendingNote) {
+            textLines.push(rawLine);
+            continue;
+        }
+
+        const field = line.match(XHS_FIELD_RE);
+        if (field) {
+            const value = field[2].trim();
+            switch (field[1].toLowerCase()) {
+                case '标题': pendingNote.title = value; break;
+                case '作者': pendingNote.author = value; break;
+                case '赞':
+                case '点赞': pendingNote.likes = Number(value.replace(/[^\d]/g, '')) || 0; break;
+                case '正文': pendingNote.desc = value; break;
+                case '链接': pendingNote.sourceUrl = value; break;
+                case 'noteid': pendingNote.noteId = value; break;
+            }
+            continue;
+        }
+
+        if (!line) continue;
+        flushNote();
+        textLines.push(rawLine);
+    }
+
+    flushNote();
+    flushText();
+    return segments;
+};
+
 const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/g;
 const SENTENCE_END_RE = /([。！？!?]+[」』”’"')）\]]*)/g;
 const SOFT_BREAK_RE = /([，、；;：:]+[」』”’"')）\]]*)/g;

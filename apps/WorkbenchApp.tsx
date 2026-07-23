@@ -39,6 +39,7 @@ import {
 import {
     cleanWorkbenchContent,
     normalizeWorkbenchLineBreaks,
+    parseWorkbenchXhsShareSegments,
     splitWorkbenchCharacterTextChunks,
     stripWorkbenchAssistantMention,
 } from '../utils/workbenchText';
@@ -1262,6 +1263,26 @@ const WorkbenchApp: React.FC = () => {
         quoteContext: WorkbenchMessage[] = messages,
     ): Promise<WorkbenchMessage[]> => {
         const saved: WorkbenchMessage[] = [];
+        const xhsShareSegments = parseWorkbenchXhsShareSegments(rawReply);
+        if (xhsShareSegments.some(segment => segment.type === 'xhs_card')) {
+            for (const segment of xhsShareSegments) {
+                if (segment.type === 'text') {
+                    saved.push(...await appendAssistantReply(base, segment.content, split, quoteContext));
+                    continue;
+                }
+                const card: WorkbenchMessage = {
+                    ...base,
+                    id: makeId('wbm'),
+                    type: 'xhs_card',
+                    content: segment.note.title || '小红书笔记',
+                    createdAt: Date.now(),
+                    metadata: { ...(base.metadata || {}), xhsNote: segment.note },
+                };
+                await appendMessage(card);
+                saved.push(card);
+            }
+            return saved;
+        }
         const resolveQuoteTarget = (quotedTextRaw: string): WorkbenchMessage['replyTo'] | undefined => {
             const raw = (quotedTextRaw || '').trim();
             const candidates: string[] = [];
