@@ -967,6 +967,7 @@ const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({
     type: m.type || 'text',
     mode: m.mode,
     content: workbenchContentForContext(m),
+    imageData: m.type === 'image' && /^data:image\//i.test(m.content || '') ? m.content : undefined,
     replyTo: m.replyTo,
     createdAt: m.createdAt,
 });
@@ -1033,8 +1034,8 @@ const workbenchToChatMessages = (
             id: WORKBENCH_SYNTHETIC_ID_BASE - index,
             charId: char.id,
             role,
-            type: 'text',
-            content: contentText,
+            type: m.type === 'image' ? 'image' : 'text',
+            content: m.type === 'image' ? m.content : contentText,
             replyTo: m.replyTo ? {
                 id: WORKBENCH_SYNTHETIC_ID_BASE - 10000 - index,
                 content: m.replyTo.content,
@@ -1118,7 +1119,12 @@ export const consultCharacterFromWorkbench = async (args: {
         ...payload.fullMessages,
         ...workbenchChatMessages.map(message => ({
             role: message.role,
-            content: message.content,
+            content: message.type === 'image' && /^(?:data:image\/|https?:\/\/)/i.test(message.content || '')
+                ? [
+                    { type: 'text', text: '[用户在 Code 对话中发送了一张图片]' },
+                    { type: 'image_url', image_url: { url: message.content } },
+                ]
+                : message.content,
         })),
     ];
     const res = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {

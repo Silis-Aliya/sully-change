@@ -48,7 +48,7 @@ const WORKDIR = resolve(getArg('--cwd', process.env.WORKBENCH_CWD || process.cwd
 const PROJECTS_FILE = resolve(getArg('--projects-file', process.env.WORKBENCH_PROJECTS_FILE || join(homedir(), '.sullyos-workbench-projects.json')));
 const TIMEOUT_MS = Number(getArg('--timeout-ms', process.env.WORKBENCH_TIMEOUT_MS || '120000'));
 const DEBUG = hasArg('--debug') || process.env.WORKBENCH_DEBUG === '1';
-const MAX_BODY_BYTES = Number(process.env.WORKBENCH_MAX_BODY_BYTES || 512 * 1024);
+const MAX_BODY_BYTES = Number(process.env.WORKBENCH_MAX_BODY_BYTES || 4 * 1024 * 1024);
 const MAX_PROMPT_CHARS = Number(process.env.WORKBENCH_MAX_PROMPT_CHARS || 60000);
 const MAX_TASK_INDEX_CHARS = Number(process.env.WORKBENCH_MAX_TASK_INDEX_CHARS || 24000);
 const MAX_CONTENT_CHARS = Number(process.env.WORKBENCH_MAX_CONTENT_CHARS || 12000);
@@ -652,7 +652,22 @@ const killCliProcessTree = child => {
   }, 2000).unref?.();
 };
 
-const runCli = async (command, prompt, project = resolveProject('')) => {
+const decodeImageDataUri = value => {
+  const match = String(value || '').match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\r\n]+)$/i);
+  if (!match) return null;
+  const bytes = Buffer.from(match[2], 'base64');
+  if (!bytes.length || bytes.length > 2 * 1024 * 1024) return null;
+  const extension = match[1].toLowerCase() === 'image/png'
+    ? '.png'
+    : match[1].toLowerCase() === 'image/webp'
+      ? '.webp'
+      : match[1].toLowerCase() === 'image/gif'
+        ? '.gif'
+        : '.jpg';
+  return { bytes, extension };
+};
+
+const runCli = async (command, prompt, project = resolveProject(''), imageData = [], agent = 'custom') => {
   const tmpRoot = await mkdtemp(join(tmpdir(), 'sully-code-'));
   const promptFile = join(tmpRoot, 'prompt.txt');
   await writeFile(promptFile, prompt, 'utf8');
@@ -671,7 +686,20 @@ const runCli = async (command, prompt, project = resolveProject('')) => {
       return part;
     });
 
-    const [bin, ...cliArgs] = parts;
+    const imagePaths = [];
+    if (agent === 'codex') {
+      for (const [index, value] of imageData.slice(-3).entries()) {
+        const decoded = decodeImageDataUri(value);
+        if (!decoded) continue;
+        const imagePath = join(tmpRoot, `image-${index + 1}${decoded.extension}`);
+        await writeFile(imagePath, decoded.bytes);
+        imagePaths.push(imagePath);
+      }
+    }
+    const [bin, ...baseCliArgs] = parts;
+    const cliArgs = agent === 'codex' && imagePaths.length
+      ? [...baseCliArgs.slice(0, -1), ...imagePaths.flatMap(path => ['--image', path]), baseCliArgs.at(-1)]
+      : baseCliArgs;
     if (DEBUG) console.log(`[workbench-bridge] $ ${parts.join(' ')}`);
 
     return await new Promise((resolveRun, rejectRun) => {
@@ -864,7 +892,10 @@ const server = createServer(async (req, res) => {
       };
       let rawReply;
       try {
-        rawReply = await runCli(agentInfo.command, prompt, project);
+        const imageData = Array.isArray(body.recentMessages)
+          ? body.recentMessages.map(message => message?.imageData).filter(Boolean)
+          : [];
+        rawReply = await runCli(agentInfo.command, prompt, project, imageData, agentInfo.agent);
       } finally {
         activeMessageRun = null;
       }

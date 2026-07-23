@@ -129,8 +129,18 @@ const resolveWorkbenchXhsNote = async (
         .trim();
 
     if (!noteId) {
-        addToast(`小红书链接解析失败，Code 会先保留原链接。${shortLinkError ? `（${shortLinkError}）` : ''}`, 'error');
-        return null;
+        addToast(`小红书短链详情暂时无法读取，Code 已保留基础分享卡。${shortLinkError ? `（${shortLinkError}）` : ''}`, 'info');
+        return {
+            noteId: '',
+            title: titleFromText || '小红书笔记',
+            desc: '',
+            author: '',
+            authorId: '',
+            likes: 0,
+            xsecToken,
+            sourceUrl: xhsShortUrl || '',
+            unresolved: true,
+        };
     }
 
     let note: Record<string, any> = {

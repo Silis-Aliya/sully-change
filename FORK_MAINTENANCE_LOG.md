@@ -60,6 +60,10 @@ Current known baseline:
 ### Code / Workbench
 
 - Extended Workbench rendering so ordinary-chat Xiaohongshu share payloads and links use the same normalized card path in Code for both user and character messages.
+- Workbench image messages now remain multimodal for character requests instead of being flattened to `[图片]`.
+- Bridge requests carry recent Code image data; the computer bridge writes up to three images to request-scoped temporary files and passes them to Codex CLI through `--image`, then removes the files.
+- Increased the authenticated bridge request-body default to 4 MB for compressed Code images; each decoded CLI image is capped at 2 MB.
+- Xiaohongshu short links now fall back to a basic visible/readable card when expansion or detail fetching fails, instead of silently remaining an unstructured text link.
 - Existing already-saved malformed text bubbles are not destructively rewritten; newly parsed or rendered records use the corrected path.
 - Added a temporary progress-card author correction control for historically misattributed records. Corrections propagate to related Workbench summary and chat/code-card records so export and incremental sync retain the selected author.
 - Remove the temporary author selector only after the user confirms all historical progress cards have been corrected.
