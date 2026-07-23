@@ -677,13 +677,16 @@ export const ContextBuilder = {
     },
 
     /**
-     * 音乐行动指令（告诉 LLM 怎么输出 music_action 指令）
-     * 这个块**只在 user 正在听歌**的时候注入，避免 char 在没上下文时乱 call。
-     *
-     * 如果 char 已经和 user 处于"一起听"状态，隐藏 join / join_and_add 选项 —
-     * 防止 LLM 重复插"加入"卡片。
+     * 音乐工具分三态：日常只给主动分享；user 本轮发了音乐卡片时再给收藏/邀请；
+     * 已经一起听时切换为播放器工具，避免重复邀请。
      */
-    buildMusicActionGuide: (isListeningTogether?: boolean, char?: CharacterProfile, musicSnapshot?: any, userName?: string): string => {
+    buildMusicActionGuide: (
+        isListeningTogether?: boolean,
+        char?: CharacterProfile,
+        musicSnapshot?: any,
+        userName?: string,
+        hasUserSharedMusicCard?: boolean,
+    ): string => {
         if (isListeningTogether) {
             const pickableSongs = char && musicSnapshot
                 ? buildMusicWakePickableSongs({
@@ -735,6 +738,18 @@ ${pickableBlock}
             : [];
         if (char) rememberMusicWakePickableSongs(char.id, shareableSongs);
         const shareableBlock = formatMusicWakePickableSongs(shareableSongs) || '暂无可分享歌曲';
+        const dailyShareGuide = `### 【日常音乐分享】
+你可以偶尔从【可分享歌曲】主动分享一首歌：
+
+- \`[[MUSIC_SHARE:N]]\` — 选择第 N 首并发送音乐卡片
+- \`[[MUSIC_TOGETHER_REQUEST]]\` — 邀请对方一起听本轮分享的歌，可与分享指令同时使用
+
+【可分享歌曲】
+${shareableBlock}
+
+没有分享歌曲时，不要单独使用一起听邀请。`;
+        if (!hasUserSharedMusicCard) return dailyShareGuide;
+
         return `### 【音乐互动工具】
 如果对方正在听歌或分享了音乐卡片，你可以自由选择自然评价、联想或调侃，也可以不提；不要忽略对方其他更重要的话。
 
@@ -748,12 +763,7 @@ ${pickableBlock}
 
 你想和对方一起听这首歌，可以先询问，或直接使用 \`[[MUSIC_TOGETHER_REQUEST]]\` 发送邀请；对方接受后才会开始一起听。
 
-可分享歌曲：
-${shareableBlock}
-
-如果你想主动分享自己的歌，只能从【可分享歌曲】选择，用 \`[[MUSIC_SHARE:N]]\`。不是每首歌都要分享；只有真的贴合心情、关系或你的音乐人格时才用。
-
-分享歌曲时必须输出 \`[[MUSIC_SHARE:N]]\`。
+${dailyShareGuide}
 `;
     },
 };

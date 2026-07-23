@@ -450,8 +450,23 @@ export const ChatPrompts = {
             );
             if (musicBlock) {
                 volatileState += `\n${musicBlock}\n`;
-                volatileState += `\n${ContextBuilder.buildMusicActionGuide(isListeningTogether, char, musicSnapshot, userProfile.name)}\n`;
             }
+            const lastAssistantIndex = currentMsgs.findLastIndex(message => message.role === 'assistant');
+            const hasUserSharedMusicCard = currentMsgs
+                .slice(lastAssistantIndex + 1)
+                .some(message =>
+                    message.role === 'user'
+                    && message.type === 'music_card'
+                    && message.metadata?.intent === 'share'
+                    && !!message.metadata?.song
+                );
+            volatileState += `\n${ContextBuilder.buildMusicActionGuide(
+                isListeningTogether,
+                char,
+                musicSnapshot,
+                userProfile.name,
+                hasUserSharedMusicCard,
+            )}\n`;
         } catch (e) {
             console.error('Failed to inject music atmosphere:', e);
         }

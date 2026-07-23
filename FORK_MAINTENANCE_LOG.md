@@ -38,7 +38,8 @@ Current known baseline:
 
 - Added a Share action to music Now Playing. It sends the current track to a selected character's normal chat as the existing `music_card` with share intent.
 - Added character-initiated sharing through `[[MUSIC_SHARE:N]]`, restricted to the supplied shareable-song list.
-- The normal-chat music prompt explicitly requires `[[MUSIC_SHARE:N]]` when sharing, preventing the model from merely narrating a fake `[音乐分享]` result as ordinary text.
+- Split normal-chat music tools into three states: a short always-available daily share guide, full collect/react/invite guidance only when the user shared a music card in the current turn, and the existing player controls while already listening together.
+- Daily character sharing uses `[[MUSIC_SHARE:N]]`; `[[MUSIC_TOGETHER_REQUEST]]` may accompany that same-turn share but must not be sent alone without a song.
 - Music cards carry and render title, artist, album, cover, and playable track data. Prompt context expands this metadata instead of exposing only `[音乐分享]`.
 - User-sent and character-sent music cards preserve the actual sender side.
 - Characters can collect shared or currently playing tracks through `MUSIC_ACTION:add`, `add|歌单标题`, or `add_new|新歌单标题|描述`; results persist in `character.musicProfile.playlists`.
