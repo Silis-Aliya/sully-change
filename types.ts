@@ -2220,7 +2220,21 @@ export interface CharacterProfile {
   chatFineTune?: ChatFineTuneOverride;
   chatBackground?: string;
   contextLimit?: number;
+  /**
+   * AI 原文读取范围策略：
+   * - adaptive：全自动记忆接管，最大范围从记忆宫殿水位线之后开始；
+   * - manual：用户拉杆决定最多读取最近 contextLimit 条完整原文。
+   */
+  contextRangeMode?: 'adaptive' | 'manual';
+  /** 上下文范围结构版本；用于把旧版「5000 条 + 自动水位隐藏」一次性迁移到自适应模式。 */
+  contextRangePolicyVersion?: number;
+  /**
+   * 用户额外设置的 AI 原文断点。它只能在拉杆/自适应最大范围内进一步缩小，
+   * 不能突破最大范围向更早读取；一旦被移动中的最大范围越过便自动失效。
+   */
+  contextUserStartMessageId?: number;
   hideSystemLogs?: boolean; 
+  /** 旧版归档内部隐藏线；新版 AI 原文范围不再拿它当用户断点。 */
   hideBeforeMessageId?: number; 
   
   dateBackground?: string;
@@ -3144,7 +3158,7 @@ export interface GameSession {
     lastPlayedAt: number;
 }
 
-export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'music_invite_result' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card' | 'code_card';
+export type MessageType = 'text' | 'image' | 'emoji' | 'voice' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'music_invite_result' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card' | 'code_card';
 
 export interface Message {
     id: number;

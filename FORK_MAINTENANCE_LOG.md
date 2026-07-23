@@ -17,12 +17,56 @@ Important rules:
 - Keep this file updated with what changed, risk points, and follow-up checks.
 
 Current known baseline:
-- upstream/master merged through ece65a3.
-- Local merge commit is 9740321 on codex/merge-upstream-20260721.
-- Last verified build passed after the 2026-07-23 Workbench mobile polish.
+- upstream/master merged through 3255ee7.
+- Local merge commit is the current 2026-07-23 upstream refresh merge on codex/merge-upstream-20260721.
+- Last verified build passed after the 2026-07-23 upstream refresh to 3255ee7.
 - This maintenance state is intended for remote `master`; if this note is visible on `master`, the push has happened.
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
+
+## 2026-07-23 Upstream Refresh to 3255ee7
+
+### Result
+
+- Fetched upstream and found `upstream/master` advanced from `ece65a3` to `3255ee7`.
+- Merged latest upstream into `codex/merge-upstream-20260721`.
+- Resolved conflicts in:
+  - `apps/Chat.tsx`
+  - `apps/MemoryPalaceApp.tsx`
+  - `hooks/useChatAI.ts`
+  - `types.ts`
+- Kept `AGENTS.md` untracked and out of the merge commit.
+
+### Upstream Changes Integrated
+
+- Decoupled chat raw-context range from Memory Palace high-water mark:
+  - adaptive range for auto-memory characters
+  - manual 20-5000 message range
+  - user breakpoint constrained inside the maximum readable range
+- Added safer Xiaohongshu / RedNote link handling:
+  - `rednote.com`
+  - mobile `xhslink.cn`
+  - stricter hostname checks before extracting note IDs
+- Added Memory Palace range-selection search helpers and tests.
+- Included voice transcripts and metadata-backed cards in memory-context relevance.
+- Added psyche card long-press copy behavior and iOS copy fallback refinements.
+
+### Conflict / Risk Notes
+
+- `apps/Chat.tsx`: adopted upstream full-message history for AI raw-range management so UI display filters do not shift prompt boundaries.
+- `hooks/useChatAI.ts`: kept local filtering that prevents `[Code 进度]` system cards from entering emotion evaluation, while adopting upstream `evalChar` freshness fix.
+- `types.ts`: kept local `music_invite_result` / `code_card` message types and added upstream `voice`.
+- `components/chat/MessageItem.tsx`: restored local rule that `music_card` behaves as a module card and does not render the outer message avatar; card-internal listening avatars remain.
+- `utils/chatPrompts.ts`: auto-merged a context-breakpoint code-path update only; no prompt prose was changed by conflict resolution.
+
+### Verification
+
+- `pnpm vitest run utils/chatContextRange.test.ts utils/webpageExtractor.test.ts utils/videoParser.test.ts utils/memoryPalace/rangeSelection.test.ts utils/memoryPalace/querySanitizer.test.ts utils/memoryPalace/bufferCount.test.ts utils/backupRoundtrip.test.ts utils/messageItemModuleLayout.test.ts` passed.
+- `pnpm build` passed.
+
+### Follow-Up Checks
+
+- Manual runtime check recommended for Chat settings' `AI 原文读取范围`, Memory Palace range selection, mobile `xhslink.cn` share cards, RedNote links, psyche long-press copy on iOS, and music-together card layout.
 
 ## 2026-07-23 Workbench Mobile Polish / Upstream Check
 
