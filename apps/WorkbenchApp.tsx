@@ -6,19 +6,25 @@ import { processImage } from '../utils/file';
 import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
 import { XhsMcpClient, normalizeNote } from '../utils/xhsMcpClient';
 import { expandShortUrl } from '../utils/webpageExtractor';
-import type { Emoji, EmojiCategory, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchSession, WorkbenchSummary } from '../types';
+import type { Emoji, EmojiCategory, Message, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchProject, WorkbenchSession, WorkbenchSummary } from '../types';
 import {
     DEFAULT_WORKBENCH_CONFIG,
+    addWorkbenchProject,
     buildWorkbenchCurrentProgressContext,
     buildWorkbenchTaskIndex,
     buildWorkbenchSummaryText,
     consultCharacterFromWorkbench,
     extractWorkbenchCodeMemories,
     downloadWorkbenchArtifact,
+    fetchWorkbenchProjects,
     fetchWorkbenchModels,
     fetchWorkbenchFallbackModels,
+    importWorkbenchProjectsToBridge,
+    loadWorkbenchProjectsSnapshot,
     loadWorkbenchBridgeConfig,
+    saveWorkbenchProjectsSnapshot,
     saveWorkbenchBridgeConfig,
+    selectWorkbenchProject,
     sendWorkbenchBridgeMessage,
     sendWorkbenchFallbackMessage,
     summarizeWorkbenchProgressCardWithBridge,
@@ -26,6 +32,17 @@ import {
     testWorkbenchBridge,
 } from '../utils/workbenchBridge';
 import type { WorkbenchModelOption } from '../utils/workbenchBridge';
+import {
+    createWorkbenchXhsCaches,
+    processWorkbenchXhsDirectives,
+} from '../utils/workbenchXhsPostProcess';
+import {
+    cleanWorkbenchContent,
+    normalizeWorkbenchLineBreaks,
+    splitWorkbenchCharacterTextChunks,
+    stripWorkbenchAssistantMention,
+} from '../utils/workbenchText';
+import type { XhsNote } from '../utils/realtimeContext';
 
 type WorkbenchSpace = 'work' | 'inspiration';
 type WorkbenchConversationItem = WorkbenchSession & { messageCount: number };
@@ -239,15 +256,14 @@ const buildUsageStats = (items: WorkbenchMessage[]) => {
 
 const formatTokens = (value: number) => `${value.toLocaleString('zh-CN')} tokens`;
 
-const cleanWorkbenchContent = (content: string) => content.replace(/\n{3,}/g, '\n\n').trim();
 const ASSISTANT_MENTION_RE = /(^|[\s，。！？、:：])@(AI助理|ai助理|Code|Codex|CLI|代码助理|电脑助理)(?=$|[\s，。！？、:：])/i;
 const hasAssistantMention = (content: string) => ASSISTANT_MENTION_RE.test(content);
-const stripAssistantMention = (content: string) => content.replace(ASSISTANT_MENTION_RE, '$1').replace(/\s{2,}/g, ' ').trim();
+const stripAssistantMention = (content: string) => stripWorkbenchAssistantMention(content, ASSISTANT_MENTION_RE);
 const codeMemoryKey = (content: string) => content
     .toLowerCase()
     .replace(/[\s\p{P}\p{S}]+/gu, '')
     .slice(0, 24);
-const sanitizeWorkbenchReply = (content: string) => ChatParser.sanitize(content, { keepCitations: true })
+const sanitizeWorkbenchReply = (content: string) => ChatParser.sanitize(normalizeWorkbenchLineBreaks(content), { keepCitations: true })
     .replace(/^\s*\[当前\s*Code\s*对话\s*\/[^\]]+\]\s*/i, '')
     .replace(/\[\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}\]\s*/g, '')
     .replace(/(?:^|\n)\s*时间：\s*\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}\s*/g, '\n')
@@ -799,6 +815,10 @@ const WorkbenchApp: React.FC = () => {
     const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
     const [fallbackModelOptions, setFallbackModelOptions] = useState<WorkbenchModelOption[]>([]);
     const [fallbackModelStatus, setFallbackModelStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+    const [workbenchProjects, setWorkbenchProjects] = useState<WorkbenchProject[]>([]);
+    const [projectPathDraft, setProjectPathDraft] = useState('');
+    const [projectNameDraft, setProjectNameDraft] = useState('');
+    const [projectStatus, setProjectStatus] = useState<'idle' | 'loading' | 'error'>('idle');
     const [codeMemories, setCodeMemories] = useState<WorkbenchMemory[]>([]);
     const [codeMemoryDrafts, setCodeMemoryDrafts] = useState<Record<string, string>>({});
     const [codeMemoryOpen, setCodeMemoryOpen] = useState(false);
@@ -806,6 +826,8 @@ const WorkbenchApp: React.FC = () => {
     const codexAvatarInputRef = useRef<HTMLInputElement | null>(null);
     const messagePressTimerRef = useRef<number | null>(null);
     const messagePressMovedRef = useRef(false);
+    const workbenchXhsCachesRef = useRef(createWorkbenchXhsCaches());
+    const workbenchLastXhsNotesRef = useRef<{ current: XhsNote[] }>({ current: [] });
 
     const spaceMeta = WORKBENCH_SPACES[activeSpace];
     const bridgeReady = !!config.bridgeUrl.trim();
@@ -817,6 +839,9 @@ const WorkbenchApp: React.FC = () => {
         ? `本月 ${usageStats.month.toLocaleString('zh-CN')}/${usageLimit.toLocaleString('zh-CN')}`
         : `本月 ${usageStats.month.toLocaleString('zh-CN')} tokens`;
     const participantEnabled = !!config.participantEnabled;
+    const activeWorkbenchProject = workbenchProjects.find(project => project.id === draftConfig.activeWorkbenchProjectId)
+        || workbenchProjects.find(project => project.id === config.activeWorkbenchProjectId)
+        || workbenchProjects[0];
     const draftCodexAvatarUrl = useBlobRefUrl(draftConfig.codexAvatar);
     const avatarRowAlign = 'items-center';
     const avatarSizeClass = osTheme.chatAvatarSize === 'small'
@@ -979,6 +1004,39 @@ const WorkbenchApp: React.FC = () => {
         }
     };
 
+    const refreshWorkbenchProjects = async (sourceConfig: WorkbenchBridgeConfig = draftConfig, notify = false) => {
+        if (!sourceConfig.bridgeUrl.trim()) {
+            setWorkbenchProjects([]);
+            return;
+        }
+        setProjectStatus('loading');
+        try {
+            let result = await fetchWorkbenchProjects(sourceConfig);
+            const snapshot = loadWorkbenchProjectsSnapshot();
+            const existingProjectKeys = new Set(result.projects.flatMap(project => [project.id, project.path]));
+            const missingSnapshotProjects = snapshot?.projects.filter(project => !existingProjectKeys.has(project.id) && !existingProjectKeys.has(project.path)) || [];
+            if (snapshot && missingSnapshotProjects.length) {
+                const restored = await importWorkbenchProjectsToBridge(sourceConfig, snapshot).catch(error => {
+                    if (notify) addToast(error instanceof Error ? error.message : '备份项目权限恢复失败', 'error');
+                    return null;
+                });
+                if (restored) result = restored;
+            }
+            saveWorkbenchProjectsSnapshot(result);
+            setWorkbenchProjects(result.projects);
+            const activeId = sourceConfig.activeWorkbenchProjectId || result.activeProjectId || result.projects[0]?.id || '';
+            if (activeId && activeId !== sourceConfig.activeWorkbenchProjectId) {
+                setDraftConfig(prev => ({ ...prev, activeWorkbenchProjectId: activeId }));
+                setConfig(prev => ({ ...prev, activeWorkbenchProjectId: activeId }));
+                saveWorkbenchBridgeConfig({ ...sourceConfig, activeWorkbenchProjectId: activeId });
+            }
+            setProjectStatus('idle');
+        } catch (error) {
+            setProjectStatus('error');
+            if (notify) addToast(error instanceof Error ? error.message : '项目列表读取失败', 'error');
+        }
+    };
+
     const refresh = async () => {
         const staleErrorIds = (await DB.getRawStoreData('workbench_messages').catch(() => [] as WorkbenchMessage[]))
             .filter((message: WorkbenchMessage) => message.kind === 'error')
@@ -1004,6 +1062,11 @@ const WorkbenchApp: React.FC = () => {
     useEffect(() => {
         if (settingsOpen) void loadCodeMemories();
     }, [settingsOpen]);
+
+    useEffect(() => {
+        if (!settingsOpen || bridgeStatus !== 'online') return;
+        void refreshWorkbenchProjects(config, false);
+    }, [settingsOpen, bridgeStatus, config.bridgeUrl, config.token]);
 
     useEffect(() => {
         let cancelled = false;
@@ -1033,7 +1096,7 @@ const WorkbenchApp: React.FC = () => {
             window.clearTimeout(timer);
             window.clearInterval(interval);
         };
-    }, [config.bridgeUrl, config.token, config.runtimeMode, config.defaultAgent, config.customAgentCommand]);
+    }, [config.bridgeUrl, config.token, config.runtimeMode, config.defaultAgent, config.customAgentCommand, config.activeWorkbenchProjectId]);
 
     useEffect(() => {
         if (!settingsOpen || bridgeStatus !== 'online') {
@@ -1044,7 +1107,7 @@ const WorkbenchApp: React.FC = () => {
             return;
         }
         void refreshModelOptions(config, false);
-    }, [settingsOpen, bridgeStatus, config.bridgeUrl, config.token, config.defaultAgent, config.customAgentCommand]);
+    }, [settingsOpen, bridgeStatus, config.bridgeUrl, config.token, config.defaultAgent, config.customAgentCommand, config.activeWorkbenchProjectId]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -1066,6 +1129,82 @@ const WorkbenchApp: React.FC = () => {
     const appendMessage = async (message: WorkbenchMessage) => {
         await DB.saveWorkbenchMessage(message);
         setMessages(prev => [...prev, message]);
+    };
+
+    const updateProgressCardAuthor = async (card: WorkbenchSummary, authorName: string, sourceCharacterId?: string) => {
+        const nextContent = ensureProgressCardAuthor(card.content, authorName);
+        const nextSummary: WorkbenchSummary = {
+            ...card,
+            content: nextContent,
+            source: 'character',
+            sourceName: authorName,
+            sourceCharacterId,
+        };
+        await DB.saveWorkbenchSummary(nextSummary);
+        setProgressCards(prev => prev.map(item => item.id === card.id ? nextSummary : item));
+
+        const nextMetadata = (metadata?: Record<string, any>) => ({
+            ...(metadata || {}),
+            progressCard: true,
+            workbenchSummaryId: card.id,
+            source: 'character',
+            summarySource: 'character',
+            sourceName: authorName,
+            summarySourceName: authorName,
+            speakerName: authorName,
+            characterId: sourceCharacterId,
+            sourceCharacterId,
+        });
+        const matchesWorkbenchSummary = (message: WorkbenchMessage) => (
+            message.sessionId === card.sessionId
+            && message.metadata?.progressCard
+            && (
+                message.metadata?.workbenchSummaryId === card.id
+                || message.content === card.content
+            )
+        );
+
+        const changedWorkbenchMessages = messages
+            .filter(matchesWorkbenchSummary)
+            .map(message => ({
+                ...message,
+                content: nextContent,
+                metadata: nextMetadata(message.metadata),
+            }));
+        const changedWorkbenchMessageMap = new Map(changedWorkbenchMessages.map(message => [message.id, message]));
+        setMessages(prev => prev.map(message => {
+            const mappedMessage = changedWorkbenchMessageMap.get(message.id);
+            if (mappedMessage) return mappedMessage;
+            if (!matchesWorkbenchSummary(message)) return message;
+            const nextMessage = {
+                ...message,
+                content: nextContent,
+                metadata: nextMetadata(message.metadata),
+            };
+            return nextMessage;
+        }));
+        await Promise.all(changedWorkbenchMessages.map(message => DB.saveWorkbenchMessage(message)));
+
+        if (sourceCharacterId) {
+            const chatMessages = await DB.getRawStoreData('messages').catch(() => [] as Message[]);
+            const matchingChatMessages = chatMessages.filter((message: Message) => (
+                message.charId === sourceCharacterId
+                && message.type === 'code_card'
+                && (
+                    message.metadata?.workbenchSummaryId === card.id
+                    || (
+                        message.metadata?.source === 'workbench_progress'
+                        && message.metadata?.workbenchSessionId === card.sessionId
+                        && message.content === card.content
+                    )
+                )
+            ));
+            for (const message of matchingChatMessages) {
+                await DB.updateMessage(message.id, nextContent);
+                await DB.updateMessageMetadata(message.id, metadata => nextMetadata(metadata));
+            }
+        }
+        addToast(`已把这张进度卡标为 ${authorName} 写`, 'success');
     };
 
     const appendAssistantReply = async (
@@ -1144,7 +1283,10 @@ const WorkbenchApp: React.FC = () => {
             }
             const cleaned = sanitizeWorkbenchReply(part.content);
             if (!cleaned) continue;
-            const chunks = ChatParser.chunkText(cleaned);
+            const baseChunks = ChatParser.chunkText(cleaned);
+            const chunks = base.role === 'character' || base.role === 'sully'
+                ? splitWorkbenchCharacterTextChunks(baseChunks)
+                : baseChunks;
             for (const chunk of chunks) {
                 const quoteMatch = chunk.match(QUOTE_RE_DOUBLE) || chunk.match(QUOTE_RE_SINGLE) || chunk.match(REPLY_RE_CN) || chunk.match(QUOTE_RE_NL);
                 const chunkReplyTarget = quoteMatch ? resolveQuoteTarget(quoteMatch[1]) : undefined;
@@ -1247,6 +1389,56 @@ const WorkbenchApp: React.FC = () => {
             setTestResult(e?.message || '连接失败');
         } finally {
             setTesting(false);
+        }
+    };
+
+    const addProjectFromDraft = async () => {
+        const path = projectPathDraft.trim();
+        if (!path) {
+            addToast('先填写电脑上的项目路径', 'info');
+            return;
+        }
+        setProjectStatus('loading');
+        try {
+            const result = await addWorkbenchProject(draftConfig, {
+                path,
+                name: projectNameDraft.trim() || undefined,
+                permission: 'write',
+            });
+            const activeId = result.activeProjectId || result.projects[0]?.id || '';
+            const next = { ...draftConfig, activeWorkbenchProjectId: activeId };
+            setWorkbenchProjects(result.projects);
+            setDraftConfig(next);
+            setConfig(next);
+            saveWorkbenchBridgeConfig(next);
+            setProjectPathDraft('');
+            setProjectNameDraft('');
+            setProjectStatus('idle');
+            addToast('已允许这个本地项目', 'success');
+            void refreshModelOptions(next, false);
+        } catch (error) {
+            setProjectStatus('error');
+            addToast(error instanceof Error ? error.message : '添加项目失败', 'error');
+        }
+    };
+
+    const selectProject = async (projectId: string) => {
+        if (!projectId) return;
+        setProjectStatus('loading');
+        try {
+            const result = await selectWorkbenchProject(draftConfig, projectId);
+            const activeId = result.activeProjectId || projectId;
+            const next = { ...draftConfig, activeWorkbenchProjectId: activeId };
+            setWorkbenchProjects(result.projects.length ? result.projects : workbenchProjects);
+            setDraftConfig(next);
+            setConfig(next);
+            saveWorkbenchBridgeConfig(next);
+            setProjectStatus('idle');
+            addToast('Code 已切换项目', 'success');
+            void refreshModelOptions(next, false);
+        } catch (error) {
+            setProjectStatus('error');
+            addToast(error instanceof Error ? error.message : '切换项目失败', 'error');
         }
     };
 
@@ -1394,9 +1586,12 @@ const WorkbenchApp: React.FC = () => {
 
     const saveEditedMessage = async () => {
         if (!editTarget) return;
-        await DB.updateWorkbenchMessageContent(editTarget.id, editContent);
+        const content = editTarget.type === 'text' || !editTarget.type
+            ? cleanWorkbenchContent(editContent)
+            : editContent;
+        await DB.updateWorkbenchMessageContent(editTarget.id, content);
         setMessages(prev => prev.map(message => message.id === editTarget.id
-            ? { ...message, content: editContent, metadata: { ...(message.metadata || {}), editedAt: Date.now() } }
+            ? { ...message, content, metadata: { ...(message.metadata || {}), editedAt: Date.now() } }
             : message));
         setEditTarget(null);
         setEditContent('');
@@ -1467,11 +1662,16 @@ const WorkbenchApp: React.FC = () => {
                 });
                 if (extractedMemories.length) {
                     const existing = await DB.getRecentWorkbenchMemories(300).catch(() => []);
-                    const byKey = new Map(existing.map(item => [codeMemoryKey(item.content), item]).filter(([key]) => !!key));
-                    const rows = extractedMemories.map(content => content.trim()).filter(Boolean).map(content => {
+                    const byKey = new Map<string, WorkbenchMemory>(
+                        existing.flatMap(item => {
+                            const key = codeMemoryKey(item.content);
+                            return key ? [[key, item] as const] : [];
+                        })
+                    );
+                    const rows: WorkbenchMemory[] = extractedMemories.map(content => content.trim()).filter(Boolean).map(content => {
                         const key = codeMemoryKey(content);
                         const previous = byKey.get(key);
-                        const row = previous
+                        const row: WorkbenchMemory = previous
                             ? { ...previous, sessionId: session.id, summaryId, content, updatedAt: now }
                             : { id: makeId('wbmem'), sessionId: session.id, summaryId, content, createdAt: now, updatedAt: now };
                         byKey.set(key, row);
@@ -1520,8 +1720,12 @@ const WorkbenchApp: React.FC = () => {
                 status: 'sent',
                 metadata: {
                     progressCard: true,
+                    workbenchSummaryId: summaryId,
                     source,
+                    summarySource: source,
                     sourceName: authorName,
+                    summarySourceName: authorName,
+                    sourceCharacterId: source === 'character' ? selectedParticipant?.id : undefined,
                     characterId: participantEnabled ? selectedParticipant?.id : undefined,
                     speakerName: participantEnabled ? selectedParticipant?.name : undefined,
                 },
@@ -1629,7 +1833,10 @@ const WorkbenchApp: React.FC = () => {
     };
 
     const send = async (overrideText?: string, options?: { type?: WorkbenchMessage['type']; metadata?: Record<string, any> }) => {
-        const text = (overrideText ?? input).trim();
+        const rawText = overrideText ?? input;
+        const text = (options?.type || 'text') === 'text'
+            ? cleanWorkbenchContent(rawText)
+            : rawText.trim();
         if (!text || busy) return;
         const readableText = options?.type === 'emoji'
             ? `[表情: ${options.metadata?.emojiName || '表情包'}]`
@@ -1780,19 +1987,37 @@ const WorkbenchApp: React.FC = () => {
                 capability,
             });
             const requestedCodex = MENTION_CODEX_RE.test(reply);
-            const characterReplies = await appendAssistantReply({
+            const xhsProcessed = await processWorkbenchXhsDirectives({
+                rawReply: reply,
                 sessionId: s.id,
-                role: 'character',
-                kind: 'consult',
-                mode: 'sully',
-                status: 'sent',
-                metadata: {
-                    speakerName: selectedParticipant.name,
-                    speakerAvatar: selectedParticipant.avatar || '',
-                    characterId: selectedParticipant.id,
-                    nudged: true,
-                },
-            }, reply, true, recent);
+                char: selectedParticipant,
+                userProfile,
+                realtimeConfig,
+                xhsCaches: workbenchXhsCachesRef.current,
+                lastXhsNotesRef: workbenchLastXhsNotesRef.current,
+                addToast,
+            });
+            const hasVisibleCharacterReply = ChatParser.hasDisplayContent(sanitizeWorkbenchReply(xhsProcessed.visibleReply));
+            const shouldAppendCharacterReply = hasVisibleCharacterReply
+                || (xhsProcessed.extraMessages.length === 0 && !requestedCodex);
+            const characterReplies = shouldAppendCharacterReply
+                ? await appendAssistantReply({
+                    sessionId: s.id,
+                    role: 'character',
+                    kind: 'consult',
+                    mode: 'sully',
+                    status: 'sent',
+                    metadata: {
+                        speakerName: selectedParticipant.name,
+                        speakerAvatar: selectedParticipant.avatar || '',
+                        characterId: selectedParticipant.id,
+                        nudged: true,
+                    },
+                }, xhsProcessed.visibleReply, true, recent)
+                : [];
+            for (const extraMessage of xhsProcessed.extraMessages) {
+                await appendMessage(extraMessage);
+            }
             const codexMentionMessage: WorkbenchMessage | null = requestedCodex
                 ? {
                     id: makeId('wbm'),
@@ -2057,8 +2282,12 @@ const WorkbenchApp: React.FC = () => {
                                             {thinkingInitial}
                                         </div>
                                     ))}
-                                    <div className="rounded-2xl rounded-bl-sm px-5 py-3 text-[15px] text-slate-500 bg-white border border-black/5 shadow-sm">
-                                        正在思考
+                                    <div className="rounded-2xl rounded-bl-sm bg-white border border-black/5 shadow-sm px-4 py-3">
+                                        <span className="flex items-center gap-1" aria-label="正在输入" role="status">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" />
+                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce delay-75" />
+                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce delay-150" />
+                                        </span>
                                     </div>
                                 </div>
                             )}
@@ -2347,6 +2576,15 @@ const WorkbenchApp: React.FC = () => {
                                                     <span className="text-[10px] font-semibold text-slate-400">#{progressCards.length - index}</span>
                                                     <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusClass}`}>{status}</span>
                                                     <span className="px-2 py-0.5 rounded-full border border-violet-100 bg-violet-50 text-[10px] font-semibold text-violet-700">{author} 写</span>
+                                                    {selectedParticipant && author !== selectedParticipant.name && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void updateProgressCardAuthor(card, selectedParticipant.name, selectedParticipant.id)}
+                                                            className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 active:scale-95"
+                                                        >
+                                                            标为 {selectedParticipant.name}
+                                                        </button>
+                                                    )}
                                                 </div>
                                                 <h3 className="mt-2 text-sm font-semibold text-slate-900 break-words">{fields['任务'] || session?.title || '未命名任务'}</h3>
                                             </div>
@@ -2370,75 +2608,56 @@ const WorkbenchApp: React.FC = () => {
 
             {actionTarget && (
                 <div
-                    className="absolute inset-0 z-40 bg-black/10 flex items-end justify-center px-4 pb-5"
+                    className="absolute inset-0 z-40 bg-slate-950/20 flex items-center justify-center p-4 backdrop-blur-[2px]"
                     onClick={() => setActionTarget(null)}
                 >
                     <div
-                        className="w-full max-w-sm rounded-2xl bg-white shadow-xl border border-slate-100 p-2 space-y-1"
+                        className="w-full max-w-xs rounded-3xl bg-white p-5 shadow-2xl border border-white/80"
                         onClick={e => e.stopPropagation()}
                     >
+                        <h3 className="mb-4 text-center text-sm font-semibold text-slate-900">消息操作</h3>
+                        <div className="space-y-3">
+                            <button
+                                type="button"
+                                onClick={() => startMultiSelect(actionTarget)}
+                                className="w-full py-3 rounded-2xl bg-slate-50 text-sm font-medium text-slate-700 active:bg-slate-100 transition-colors flex items-center justify-center gap-2"
+                            >
+                                多选 / 批量删除
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setQuotedMessage(actionTarget);
+                                    setActionTarget(null);
+                                }}
+                                className="w-full py-3 rounded-2xl bg-slate-50 text-sm font-medium text-slate-700 active:bg-slate-100 transition-colors flex items-center justify-center gap-2"
+                            >
+                                引用 / 回复
+                            </button>
                         {canEditMessage(actionTarget) && (
                             <button
                                 type="button"
                                 onClick={() => startEditingMessage(actionTarget)}
-                                className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.99]"
+                                className="w-full py-3 rounded-2xl bg-slate-50 text-sm font-medium text-slate-700 active:bg-slate-100 transition-colors flex items-center justify-center gap-2"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 20h9" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
-                                </svg>
                                 编辑内容
                             </button>
                         )}
                         <button
                             type="button"
                             onClick={() => void copyMessageText(actionTarget)}
-                            className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.99]"
+                            className="w-full py-3 rounded-2xl bg-slate-50 text-sm font-medium text-slate-700 active:bg-slate-100 transition-colors flex items-center justify-center gap-2"
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 8h10v12H8Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            复制
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setQuotedMessage(actionTarget);
-                                setActionTarget(null);
-                            }}
-                            className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.99]"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 11H5.5A2.5 2.5 0 0 0 3 13.5V18h4.5A2.5 2.5 0 0 0 10 15.5V11Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 11h-4.5A2.5 2.5 0 0 0 14 13.5V18h4.5A2.5 2.5 0 0 0 21 15.5V11Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6V4M14 6V4" />
-                            </svg>
-                            引用
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => startMultiSelect(actionTarget)}
-                            className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.99]"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 11 12 14 22 4" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-                            </svg>
-                            多选
+                            复制文字
                         </button>
                         <button
                             type="button"
                             onClick={() => void deleteSingleMessage(actionTarget)}
-                            className="w-full h-11 rounded-xl px-3 flex items-center gap-3 text-left text-sm font-semibold text-rose-500 hover:bg-rose-50 active:scale-[0.99]"
+                            className="w-full py-3 rounded-2xl bg-red-50 text-sm font-medium text-red-500 active:bg-red-100 transition-colors flex items-center justify-center gap-2"
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 6V4h8v2M19 6l-1 14H6L5 6" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 11v5M14 11v5" />
-                            </svg>
-                            删除
+                            删除消息
                         </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -2533,15 +2752,19 @@ const WorkbenchApp: React.FC = () => {
                                     <li><strong className="text-slate-800">登录 CLI：</strong>先在电脑终端完成 Codex 或 Claude Code 自己的登录。</li>
                                     <li>
                                         <strong className="text-slate-800">进入 SullyOS 项目目录并启动：</strong>
-                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">pnpm workbench:bridge</code>
+                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">npm run workbench:bridge</code>
+                                    </li>
+                                    <li>
+                                        <strong className="text-slate-800">指定默认项目：</strong>如果要让 bridge 默认操作另一个项目，用 <code className="rounded bg-slate-100 px-1 font-mono">--cwd</code> 指向它。
+                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">npm run workbench:bridge -- --cwd D:\YourProject</code>
                                     </li>
                                     <li>
                                         <strong className="text-slate-800">手机访问电脑：</strong>让桥接监听局域网，并设置 Key。
-                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">pnpm workbench:bridge -- --host 0.0.0.0 --port 3001 --token YOUR_KEY</code>
+                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">npm run workbench:bridge -- --host 0.0.0.0 --port 3001 --token YOUR_KEY</code>
                                     </li>
                                     <li>
                                         <strong className="text-slate-800">开电脑自动启动：</strong>在电脑上注册登录自启动任务。
-                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">pnpm workbench:bridge:startup -- -Token YOUR_KEY</code>
+                                        <code className="mt-1.5 block overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[10px] text-slate-100">npm run workbench:bridge:startup -- -Token YOUR_KEY</code>
                                     </li>
                                 </ol>
                                 <div className="mt-3 border-l-2 border-violet-300 pl-3 text-[11px] leading-relaxed text-slate-500">
@@ -2557,6 +2780,7 @@ const WorkbenchApp: React.FC = () => {
                                 <div className="mt-3 divide-y divide-slate-200/70 text-[11px]">
                                     {[
                                         ['地址', '填写电脑 IP、Tailscale 或 Cloudflare 域名等远程 bridge 地址。'],
+                                        ['本地项目权限', 'bridge 端保存允许项目白名单；手机只选择 projectId，不能越过电脑端路径校验。'],
                                         ['CLI 路由', '选择 Codex、Claude Code 或自定义命令；连接后显示的 AI 名称来自实际路由。'],
                                         ['地址与 Key', '手机和电脑都使用同一个远程地址与启动 bridge 时设置的 Key。'],
                                         ['自定义指令', '只提供给 AI 助理，例如“修改 prompt 前先给完整版本确认”。不会改变角色人格。'],
@@ -2708,6 +2932,71 @@ const WorkbenchApp: React.FC = () => {
                                         />
                                     </div>
                                 )}
+                            </section>
+
+                            <section className="space-y-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h3 className="text-xs font-semibold text-slate-500">本地项目权限</h3>
+                                    <button
+                                        type="button"
+                                        onClick={() => void refreshWorkbenchProjects(draftConfig, true)}
+                                        disabled={projectStatus === 'loading' || !draftConfig.bridgeUrl.trim()}
+                                        className="h-7 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-500 disabled:opacity-50"
+                                    >
+                                        {projectStatus === 'loading' ? '读取中' : '刷新'}
+                                    </button>
+                                </div>
+                                <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
+                                    <div className="space-y-2">
+                                        {workbenchProjects.length === 0 ? (
+                                            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-[11px] leading-relaxed text-slate-400">
+                                                连接 bridge 后会读取允许项目。旧 bridge 默认只允许启动目录。
+                                            </div>
+                                        ) : (
+                                            workbenchProjects.map(project => (
+                                                <button
+                                                    key={project.id}
+                                                    type="button"
+                                                    onClick={() => void selectProject(project.id)}
+                                                    className={`w-full rounded-xl border px-3 py-2.5 text-left active:scale-[0.995] ${project.id === activeWorkbenchProject?.id ? 'border-emerald-200 bg-emerald-50/70' : 'border-slate-200 bg-slate-50'}`}
+                                                >
+                                                    <span className="flex items-center justify-between gap-2">
+                                                        <span className="text-xs font-semibold text-slate-800">{project.name}</span>
+                                                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                                                            {project.permission === 'read' ? '只读' : project.permission === 'execute' ? '可执行' : '可修改'}
+                                                        </span>
+                                                    </span>
+                                                    <span className="mt-1 block truncate font-mono text-[10px] text-slate-400">{project.path}</span>
+                                                </button>
+                                            ))
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <input
+                                            value={projectNameDraft}
+                                            onChange={e => setProjectNameDraft(e.target.value)}
+                                            placeholder="项目名，可留空"
+                                            className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:bg-white focus:border-slate-400"
+                                        />
+                                        <input
+                                            value={projectPathDraft}
+                                            onChange={e => setProjectPathDraft(e.target.value)}
+                                            placeholder="电脑上的项目路径，例如 D:\\SullyOS-fork"
+                                            className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-mono outline-none focus:bg-white focus:border-slate-400"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => void addProjectFromDraft()}
+                                            disabled={projectStatus === 'loading' || !draftConfig.bridgeUrl.trim()}
+                                            className="h-9 rounded-xl bg-slate-900 text-xs font-semibold text-white disabled:opacity-50 active:scale-[0.99]"
+                                        >
+                                            允许这个项目
+                                        </button>
+                                    </div>
+                                    <p className="text-[11px] leading-relaxed text-slate-400">
+                                        手机只能选择 bridge 白名单里的项目；真正的路径校验在电脑 bridge 端完成。
+                                    </p>
+                                </div>
                             </section>
 
                             <section className="space-y-3">

@@ -8,6 +8,7 @@ import type {
     WorkbenchBridgeConfig,
     WorkbenchArtifact,
     WorkbenchOfficialUsage,
+    WorkbenchProject,
     WorkbenchMemory,
     WorkbenchMessage,
     WorkbenchMode,
@@ -18,6 +19,14 @@ import { normalizeMessageContent } from './messageFormat';
 
 export const WORKBENCH_CONFIG_KEY = 'workbench_bridge_config_v1';
 export const WORKBENCH_MODE_KEY = 'workbench_mode_v1';
+export const WORKBENCH_PROJECTS_KEY = 'workbench_projects_v1';
+
+export type WorkbenchProjectsSnapshot = {
+    version: 1;
+    activeProjectId: string;
+    projects: WorkbenchProject[];
+    updatedAt: number;
+};
 
 export const DEFAULT_WORKBENCH_CONFIG: WorkbenchBridgeConfig = {
     bridgeUrl: '',
@@ -38,6 +47,7 @@ export const DEFAULT_WORKBENCH_CONFIG: WorkbenchBridgeConfig = {
     fallbackApiKey: '',
     fallbackApiModel: '',
     fallbackApiName: 'AI 助理',
+    activeWorkbenchProjectId: '',
 };
 
 export type WorkbenchCapabilityMode = 'work' | 'inspiration';
@@ -163,6 +173,7 @@ export const saveWorkbenchBridgeConfig = (config: WorkbenchBridgeConfig): void =
         fallbackApiKey: config.fallbackApiKey?.trim() || '',
         fallbackApiModel: config.fallbackApiModel?.trim() || '',
         fallbackApiName: config.fallbackApiName?.trim() || 'AI 助理',
+        activeWorkbenchProjectId: config.activeWorkbenchProjectId || '',
     }));
 };
 
@@ -192,11 +203,151 @@ export const testWorkbenchBridge = async (config: WorkbenchBridgeConfig): Promis
         body: JSON.stringify({
             agent: config.defaultAgent,
             customAgentCommand: config.customAgentCommand || undefined,
+            projectId: config.activeWorkbenchProjectId || undefined,
         }),
     });
     if (!res.ok) throw new Error(`电脑桥接连接失败 (${res.status})`);
     const text = await res.text().catch(() => '');
     return text || '电脑桥接 online';
+};
+
+const normalizeWorkbenchProjectRows = (rows: unknown): WorkbenchProject[] => (
+    Array.isArray(rows) ? rows : []
+).flatMap((row: any) => {
+    const id = String(row?.id || '').trim();
+    const path = String(row?.path || '').trim();
+    if (!id || !path) return [];
+    return [{
+        id,
+        name: String(row?.name || path),
+        path,
+        permission: row?.permission === 'read' ? 'read' : row?.permission === 'execute' ? 'execute' : 'write',
+        isDefault: !!row?.isDefault,
+    }];
+});
+
+export const loadWorkbenchProjectsSnapshot = (): WorkbenchProjectsSnapshot | null => {
+    try {
+        const raw = localStorage.getItem(WORKBENCH_PROJECTS_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<WorkbenchProjectsSnapshot>;
+        const projects = normalizeWorkbenchProjectRows(parsed.projects);
+        if (!projects.length) return null;
+        return {
+            version: 1,
+            activeProjectId: String(parsed.activeProjectId || projects[0]?.id || ''),
+            projects,
+            updatedAt: Number(parsed.updatedAt || Date.now()),
+        };
+    } catch {
+        return null;
+    }
+};
+
+export const saveWorkbenchProjectsSnapshot = (snapshot: { activeProjectId?: string; projects?: WorkbenchProject[] }): void => {
+    try {
+        const projects = normalizeWorkbenchProjectRows(snapshot.projects);
+        if (!projects.length) return;
+        localStorage.setItem(WORKBENCH_PROJECTS_KEY, JSON.stringify({
+            version: 1,
+            activeProjectId: String(snapshot.activeProjectId || projects[0]?.id || ''),
+            projects,
+            updatedAt: Date.now(),
+        } satisfies WorkbenchProjectsSnapshot));
+    } catch {
+        /* localStorage unavailable: project snapshot is best-effort */
+    }
+};
+
+export const fetchWorkbenchProjects = async (config: WorkbenchBridgeConfig): Promise<{ activeProjectId: string; projects: WorkbenchProject[] }> => {
+    if (!config.bridgeUrl.trim()) throw new Error('请先填写电脑桥接地址');
+    const base = config.bridgeUrl.trim().replace(/\/+$/, '');
+    const res = await fetch(`${base}/projects`, { headers: bridgeHeaders(config) });
+    if (!res.ok) throw new Error(`项目列表读取失败 (${res.status})`);
+    const data = await res.json().catch(() => null);
+    const result = {
+        activeProjectId: String(data?.activeProjectId || ''),
+        projects: normalizeWorkbenchProjectRows(data?.projects),
+    };
+    saveWorkbenchProjectsSnapshot(result);
+    return result;
+};
+
+export const addWorkbenchProject = async (
+    config: WorkbenchBridgeConfig,
+    project: { name?: string; path: string; permission?: WorkbenchProject['permission'] },
+): Promise<{ activeProjectId: string; projects: WorkbenchProject[] }> => {
+    if (!config.bridgeUrl.trim()) throw new Error('请先填写电脑桥接地址');
+    const base = config.bridgeUrl.trim().replace(/\/+$/, '');
+    const res = await fetch(`${base}/projects/add`, {
+        method: 'POST',
+        headers: bridgeHeaders(config),
+        body: JSON.stringify(project),
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(String(data?.error || `添加项目失败 (${res.status})`));
+    }
+    const data = await res.json().catch(() => null);
+    const result = {
+        activeProjectId: String(data?.activeProjectId || ''),
+        projects: normalizeWorkbenchProjectRows(data?.projects),
+    };
+    saveWorkbenchProjectsSnapshot(result);
+    return result;
+};
+
+export const selectWorkbenchProject = async (
+    config: WorkbenchBridgeConfig,
+    projectId: string,
+): Promise<{ activeProjectId: string; projects: WorkbenchProject[] }> => {
+    if (!config.bridgeUrl.trim()) throw new Error('请先填写电脑桥接地址');
+    const base = config.bridgeUrl.trim().replace(/\/+$/, '');
+    const res = await fetch(`${base}/projects/select`, {
+        method: 'POST',
+        headers: bridgeHeaders(config),
+        body: JSON.stringify({ projectId }),
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(String(data?.error || `切换项目失败 (${res.status})`));
+    }
+    const data = await res.json().catch(() => null);
+    const result = {
+        activeProjectId: String(data?.activeProjectId || projectId),
+        projects: normalizeWorkbenchProjectRows(data?.projects),
+    };
+    saveWorkbenchProjectsSnapshot(result);
+    return result;
+};
+
+export const importWorkbenchProjectsToBridge = async (
+    config: WorkbenchBridgeConfig,
+    snapshot: WorkbenchProjectsSnapshot,
+): Promise<{ activeProjectId: string; projects: WorkbenchProject[]; imported: number; skipped: number }> => {
+    if (!config.bridgeUrl.trim()) throw new Error('请先填写电脑桥接地址');
+    const base = config.bridgeUrl.trim().replace(/\/+$/, '');
+    const res = await fetch(`${base}/projects/import`, {
+        method: 'POST',
+        headers: bridgeHeaders(config),
+        body: JSON.stringify({
+            activeProjectId: snapshot.activeProjectId,
+            projects: snapshot.projects,
+        }),
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(String(data?.error || `恢复项目权限失败 (${res.status})`));
+    }
+    const data = await res.json().catch(() => null);
+    const result = {
+        activeProjectId: String(data?.activeProjectId || snapshot.activeProjectId || ''),
+        projects: normalizeWorkbenchProjectRows(data?.projects),
+        imported: Number(data?.imported || 0),
+        skipped: Number(data?.skipped || 0),
+    };
+    saveWorkbenchProjectsSnapshot(result);
+    return result;
 };
 
 const asPercent = (value: unknown): number | undefined => {
@@ -239,6 +390,7 @@ export const fetchWorkbenchModels = async (config: WorkbenchBridgeConfig): Promi
         body: JSON.stringify({
             agent: config.defaultAgent,
             customAgentCommand: config.customAgentCommand || undefined,
+            projectId: config.activeWorkbenchProjectId || undefined,
         }),
     });
     if (!res.ok) throw new Error(`模型列表读取失败 (${res.status})`);
@@ -292,6 +444,7 @@ export const sendWorkbenchBridgeMessage = async (
             modelProfile: config.modelProfile || 'balanced',
             customInstructions: config.customInstructions || undefined,
             monthlyUsageLimit: config.monthlyUsageLimit || undefined,
+            projectId: config.activeWorkbenchProjectId || undefined,
             content: args.content,
             recentMessages: args.recentMessages.map(serializeWorkbenchMessage),
             taskIndex: args.taskIndex || undefined,
@@ -363,7 +516,8 @@ export const downloadWorkbenchArtifact = async (
 ): Promise<void> => {
     if (!config.bridgeUrl.trim() || !artifact.relativePath) throw new Error('电脑桥接未连接或文件路径无效');
     const base = config.bridgeUrl.trim().replace(/\/+$/, '');
-    const res = await fetch(`${base}/artifact?path=${encodeURIComponent(artifact.relativePath)}`, {
+    const projectQuery = config.activeWorkbenchProjectId ? `&projectId=${encodeURIComponent(config.activeWorkbenchProjectId)}` : '';
+    const res = await fetch(`${base}/artifact?path=${encodeURIComponent(artifact.relativePath)}${projectQuery}`, {
         headers: config.token ? { Authorization: `Bearer ${config.token}` } : undefined,
     });
     if (!res.ok) throw new Error(`文件下载失败 (${res.status})`);

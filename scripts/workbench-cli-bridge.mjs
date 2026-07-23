@@ -26,9 +26,9 @@ import { createServer } from 'http';
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { createInterface } from 'readline';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { basename, extname, join, relative, resolve, sep } from 'path';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 
 const args = process.argv.slice(2);
@@ -45,6 +45,7 @@ const PORT = Number(getArg('--port', process.env.WORKBENCH_BRIDGE_PORT || '3001'
 const DEFAULT_AGENT = getArg('--agent', process.env.WORKBENCH_AGENT || 'codex').toLowerCase();
 const TOKEN = getArg('--token', process.env.WORKBENCH_BRIDGE_TOKEN || '');
 const WORKDIR = resolve(getArg('--cwd', process.env.WORKBENCH_CWD || process.cwd()));
+const PROJECTS_FILE = resolve(getArg('--projects-file', process.env.WORKBENCH_PROJECTS_FILE || join(homedir(), '.sullyos-workbench-projects.json')));
 const TIMEOUT_MS = Number(getArg('--timeout-ms', process.env.WORKBENCH_TIMEOUT_MS || '300000'));
 const DEBUG = hasArg('--debug') || process.env.WORKBENCH_DEBUG === '1';
 const FILE_MARKER_RE = /^\s*\[\[FILE:\s*(.+?)\s*\]\]\s*$/gmi;
@@ -67,6 +68,7 @@ const WINDOWS_NPM_CODEX_BIN = process.env.APPDATA
   : '';
 const CODEX_BIN = process.env.WORKBENCH_CODEX_BIN
   || (WINDOWS_NPM_CODEX_BIN && existsSync(WINDOWS_NPM_CODEX_BIN) ? WINDOWS_NPM_CODEX_BIN : 'codex');
+const DEFAULT_PROJECT_ID = createHash('sha1').update(WORKDIR).digest('hex').slice(0, 12);
 const quoteCommandPart = value => {
   const normalized = process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
   return /\s/.test(normalized) ? `"${normalized.replaceAll('"', '\\"')}"` : normalized;
@@ -109,10 +111,173 @@ const checkAuth = req => {
   return header === `Bearer ${TOKEN}`;
 };
 
-const resolveProjectFile = rawPath => {
-  const absolute = resolve(WORKDIR, String(rawPath || '').trim());
-  const rel = relative(WORKDIR, absolute);
-  if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || resolve(absolute) === resolve(WORKDIR)) {
+const normalizeProject = project => {
+  const path = resolve(String(project?.path || project?.cwd || '').trim() || WORKDIR);
+  const id = String(project?.id || createHash('sha1').update(path).digest('hex').slice(0, 12)).trim();
+  return {
+    id,
+    name: String(project?.name || basename(path) || '项目').trim(),
+    path,
+    permission: project?.permission === 'read' ? 'read' : project?.permission === 'execute' ? 'execute' : 'write',
+    createdAt: Number(project?.createdAt || Date.now()),
+    updatedAt: Number(project?.updatedAt || Date.now()),
+  };
+};
+
+let projectRegistry = {
+  activeProjectId: DEFAULT_PROJECT_ID,
+  projects: [normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' })],
+};
+
+const normalizeProjectRegistry = raw => {
+  const defaultProject = normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' });
+  const byId = new Map([[defaultProject.id, defaultProject]]);
+  for (const row of Array.isArray(raw?.projects) ? raw.projects : []) {
+    const project = normalizeProject(row);
+    byId.set(project.id, project);
+  }
+  const projects = Array.from(byId.values());
+  const activeProjectId = projects.some(project => project.id === raw?.activeProjectId)
+    ? raw.activeProjectId
+    : defaultProject.id;
+  return { activeProjectId, projects };
+};
+
+const loadProjectRegistry = async () => {
+  try {
+    const raw = JSON.parse(await readFile(PROJECTS_FILE, 'utf8'));
+    projectRegistry = normalizeProjectRegistry(raw);
+  } catch {
+    projectRegistry = normalizeProjectRegistry(projectRegistry);
+  }
+};
+
+const saveProjectRegistry = async () => {
+  await mkdir(resolve(PROJECTS_FILE, '..'), { recursive: true }).catch(() => {});
+  await writeFile(PROJECTS_FILE, JSON.stringify(projectRegistry, null, 2), 'utf8');
+};
+
+const publicProjects = () => projectRegistry.projects.map(project => ({
+  id: project.id,
+  name: project.name,
+  path: project.path,
+  permission: project.permission,
+  isDefault: project.id === DEFAULT_PROJECT_ID,
+}));
+
+const resolveProject = bodyOrProjectId => {
+  const requested = typeof bodyOrProjectId === 'string'
+    ? bodyOrProjectId
+    : String(bodyOrProjectId?.projectId || bodyOrProjectId?.workbenchProjectId || projectRegistry.activeProjectId || DEFAULT_PROJECT_ID);
+  const project = projectRegistry.projects.find(item => item.id === requested)
+    || projectRegistry.projects.find(item => item.id === projectRegistry.activeProjectId)
+    || projectRegistry.projects[0];
+  if (!project) throw new Error('No allowed Workbench project is configured');
+  return project;
+};
+
+const assertProjectDirectory = async path => {
+  const info = await stat(path);
+  if (!info.isDirectory()) throw new Error('Project path must be a directory');
+};
+
+const addAllowedProject = async raw => {
+  const path = resolve(String(raw?.path || '').trim());
+  if (!String(raw?.path || '').trim()) throw new Error('Project path is required');
+  await assertProjectDirectory(path);
+  const now = Date.now();
+  const existing = projectRegistry.projects.find(project => resolve(project.path) === path);
+  if (existing) {
+    existing.name = String(raw?.name || existing.name || basename(path)).trim();
+    existing.permission = raw?.permission === 'read' ? 'read' : raw?.permission === 'execute' ? 'execute' : 'write';
+    existing.updatedAt = now;
+    projectRegistry.activeProjectId = existing.id;
+    await saveProjectRegistry();
+    return existing;
+  }
+  const project = normalizeProject({
+    id: createHash('sha1').update(`${path}:${now}`).digest('hex').slice(0, 12),
+    name: String(raw?.name || basename(path) || '项目').trim(),
+    path,
+    permission: raw?.permission,
+    createdAt: now,
+    updatedAt: now,
+  });
+  projectRegistry.projects.push(project);
+  projectRegistry.activeProjectId = project.id;
+  await saveProjectRegistry();
+  return project;
+};
+
+const setActiveProject = async projectId => {
+  const project = resolveProject(projectId);
+  projectRegistry.activeProjectId = project.id;
+  await saveProjectRegistry();
+  return project;
+};
+
+const importAllowedProjects = async raw => {
+  const incoming = Array.isArray(raw?.projects) ? raw.projects : [];
+  let imported = 0;
+  let skipped = 0;
+  let importedActiveProjectId = '';
+
+  for (const row of incoming) {
+    const rawPath = String(row?.path || '').trim();
+    if (!rawPath) {
+      skipped += 1;
+      continue;
+    }
+    const path = resolve(rawPath);
+    try {
+      await assertProjectDirectory(path);
+    } catch {
+      skipped += 1;
+      continue;
+    }
+
+    const now = Date.now();
+    const existing = projectRegistry.projects.find(project => project.id === row?.id || resolve(project.path) === path);
+    if (existing) {
+      existing.name = String(row?.name || existing.name || basename(path)).trim();
+      existing.permission = row?.permission === 'read' ? 'read' : row?.permission === 'execute' ? 'execute' : 'write';
+      existing.updatedAt = now;
+      imported += 1;
+      if (row?.id === raw?.activeProjectId || path === resolve(String(raw?.activeProjectPath || ''))) {
+        importedActiveProjectId = existing.id;
+      }
+      continue;
+    }
+
+    const project = normalizeProject({
+      id: row?.id,
+      name: row?.name,
+      path,
+      permission: row?.permission,
+      createdAt: row?.createdAt || now,
+      updatedAt: now,
+    });
+    projectRegistry.projects.push(project);
+    imported += 1;
+    if (project.id === raw?.activeProjectId || path === resolve(String(raw?.activeProjectPath || ''))) {
+      importedActiveProjectId = project.id;
+    }
+  }
+
+  if (importedActiveProjectId) {
+    projectRegistry.activeProjectId = importedActiveProjectId;
+  } else if (projectRegistry.projects.some(project => project.id === raw?.activeProjectId)) {
+    projectRegistry.activeProjectId = raw.activeProjectId;
+  }
+  await saveProjectRegistry();
+  return { imported, skipped };
+};
+
+const resolveProjectFile = (rawPath, project = resolveProject('')) => {
+  const projectRoot = resolve(project.path);
+  const absolute = resolve(projectRoot, String(rawPath || '').trim());
+  const rel = relative(projectRoot, absolute);
+  if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || resolve(absolute) === projectRoot) {
     throw new Error('Artifact path must be a file inside the bridge work directory');
   }
   return { absolute, relativePath: rel.split(sep).join('/') };
@@ -125,13 +290,13 @@ const mimeFor = fileName => ({
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.pdf': 'application/pdf',
 })[extname(fileName).toLowerCase()] || 'application/octet-stream';
 
-const collectArtifacts = async reply => {
+const collectArtifacts = async (reply, project) => {
   const paths = [];
   for (const match of String(reply || '').matchAll(FILE_MARKER_RE)) paths.push(match[1]);
   const artifacts = [];
   for (const rawPath of [...new Set(paths)]) {
     try {
-      const resolved = resolveProjectFile(rawPath);
+      const resolved = resolveProjectFile(rawPath, project);
       const info = await stat(resolved.absolute);
       if (!info.isFile()) continue;
       const bytes = await readFile(resolved.absolute);
@@ -236,9 +401,9 @@ const commandFor = body => {
   };
 };
 
-const listCodexModels = () => new Promise((resolveModels, rejectModels) => {
+const listCodexModels = (project = resolveProject('')) => new Promise((resolveModels, rejectModels) => {
   const child = spawn(CODEX_BIN, ['app-server', '--listen', 'stdio://'], {
-    cwd: WORKDIR,
+    cwd: project.path,
     env: process.env,
     windowsHide: true,
     shell: false,
@@ -304,13 +469,15 @@ const listCodexModels = () => new Promise((resolveModels, rejectModels) => {
 
 const listModels = async body => {
   const agent = String(body.agent || DEFAULT_AGENT || 'codex').toLowerCase();
-  if (agent === 'codex') return listCodexModels();
+  const project = resolveProject(body || {});
+  if (agent === 'codex') return listCodexModels(project);
   if (agent === 'claude') return ['default', 'sonnet', 'opus', 'haiku'].map(id => ({ id, label: id }));
   return [];
 };
 
 const buildPrompt = body => {
   const executeMode = body.capabilityMode === 'execute';
+  const project = resolveProject(body || {});
   const clientDevice = body.clientDevice === 'mobile' ? '手机' : '电脑';
   const agentId = String(body.agent || DEFAULT_AGENT || 'codex').toLowerCase();
   const agentName = agentId === 'codex'
@@ -342,6 +509,7 @@ const buildPrompt = body => {
 - 可以参考角色的意见共同工作，但不要代替角色说话，也不要续写角色台词。
 - 每次被触发只输出你自己的一次回复，不要模拟用户或角色继续对话。`,
     `[当前设备]\n当前客户端设备：${clientDevice}\n电脑桥接：已连接\n当前能力：${executeMode ? '电脑执行' : '仅聊天'}`,
+    `[当前项目]\n项目名称：${project.name}\n项目路径：${project.path}\n项目权限：${project.permission}`,
     `[Code 模式]\n当前能力：${executeMode ? '电脑执行' : '仅聊天'}\n\n${executeMode
       ? '电脑执行：\n- 可以根据用户要求读取和修改项目文件、运行命令并验证结果。\n- 只操作当前桥接工作目录内的文件。'
       : '仅聊天：\n- 可以读取项目并进行分析、解释、规划和回复。\n- 不得创建、修改或删除项目文件，不得执行会改变项目、系统或环境状态的命令。\n- 需要生成大文件时，只整理实现方案并提示切换到电脑执行，不在聊天中输出大文件全文。'}`,
@@ -357,6 +525,7 @@ const buildPrompt = body => {
 
 const runProbe = async body => {
   const agentInfo = commandFor(body || {});
+  const project = resolveProject(body || {});
   const rawParts = splitCommand(agentInfo.command);
   if (!rawParts.length) throw new Error('CLI command is empty');
   const [bin] = rawParts;
@@ -366,7 +535,7 @@ const runProbe = async body => {
       ? ['auth', 'status']
       : ['--version'];
   await new Promise((resolveProbe, rejectProbe) => {
-    const child = spawn(bin, probeArgs, { cwd: WORKDIR, env: process.env, windowsHide: true, shell: false });
+    const child = spawn(bin, probeArgs, { cwd: project.path, env: process.env, windowsHide: true, shell: false });
     const stderr = [];
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
@@ -383,9 +552,9 @@ const runProbe = async body => {
   return agentInfo;
 };
 
-const readOfficialUsage = async () => {
+const readOfficialUsage = async (project = resolveProject('')) => {
   const command = process.env.WORKBENCH_USAGE_CMD || `${quoteCommandPart(CODEX_BIN)} usage --json`;
-  const output = await runCli(command, '');
+  const output = await runCli(command, '', project);
   let parsed;
   try { parsed = JSON.parse(output); } catch { throw new Error('Codex usage output is not JSON'); }
   if (!parsed || typeof parsed !== 'object') throw new Error('Codex usage is unavailable');
@@ -407,7 +576,7 @@ const tryParseReply = text => {
   return trimmed;
 };
 
-const runCli = async (command, prompt) => {
+const runCli = async (command, prompt, project = resolveProject('')) => {
   const tmpRoot = await mkdtemp(join(tmpdir(), 'sully-code-'));
   const promptFile = join(tmpRoot, 'prompt.txt');
   await writeFile(promptFile, prompt, 'utf8');
@@ -431,7 +600,7 @@ const runCli = async (command, prompt) => {
 
     return await new Promise((resolveRun, rejectRun) => {
       const child = spawn(bin, cliArgs, {
-        cwd: WORKDIR,
+        cwd: project.path,
         env: process.env,
         windowsHide: true,
         shell: false,
@@ -486,6 +655,7 @@ const server = createServer(async (req, res) => {
   try {
     if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/health') {
       const body = req.method === 'POST' ? await readBody(req) : {};
+      const project = resolveProject(body || {});
       const requestedAgentInfo = commandFor(body || {});
       let agentInfo = requestedAgentInfo;
       let cliStatus = 'unknown';
@@ -505,13 +675,57 @@ const server = createServer(async (req, res) => {
         displayName: agentInfo.displayName,
         cliStatus,
         cliError,
-        cwd: WORKDIR,
+        cwd: project.path,
+        project,
+        activeProjectId: projectRegistry.activeProjectId,
+        projects: publicProjects(),
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/projects') {
+      json(res, 200, {
+        activeProjectId: projectRegistry.activeProjectId,
+        projects: publicProjects(),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/projects/add') {
+      const body = await readBody(req);
+      const project = await addAllowedProject(body);
+      json(res, 200, {
+        project,
+        activeProjectId: projectRegistry.activeProjectId,
+        projects: publicProjects(),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/projects/select') {
+      const body = await readBody(req);
+      const project = await setActiveProject(body.projectId);
+      json(res, 200, {
+        project,
+        activeProjectId: projectRegistry.activeProjectId,
+        projects: publicProjects(),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/projects/import') {
+      const body = await readBody(req);
+      const result = await importAllowedProjects(body);
+      json(res, 200, {
+        ...result,
+        activeProjectId: projectRegistry.activeProjectId,
+        projects: publicProjects(),
       });
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/usage') {
-      const usage = await readOfficialUsage();
+      const usage = await readOfficialUsage(resolveProject(url.searchParams.get('projectId') || ''));
       json(res, 200, usage);
       return;
     }
@@ -523,7 +737,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/artifact') {
-      const target = resolveProjectFile(url.searchParams.get('path') || '');
+      const target = resolveProjectFile(url.searchParams.get('path') || '', resolveProject(url.searchParams.get('projectId') || ''));
       const info = await stat(target.absolute);
       if (!info.isFile()) throw new Error('Artifact is not a file');
       const bytes = await readFile(target.absolute);
@@ -539,15 +753,21 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/message') {
       const body = await readBody(req);
+      const project = resolveProject(body);
+      if (project.permission === 'read' && body.capabilityMode === 'execute') {
+        json(res, 403, { error: '当前项目是只读权限。请先在 Code 设置里切换到可修改项目，或把该项目权限改为可修改。', project });
+        return;
+      }
       const agentInfo = commandFor(body);
       const prompt = buildPrompt(body);
-      const rawReply = await runCli(agentInfo.command, prompt);
-      const { reply, artifacts } = await collectArtifacts(rawReply);
+      const rawReply = await runCli(agentInfo.command, prompt, project);
+      const { reply, artifacts } = await collectArtifacts(rawReply, project);
       json(res, 200, {
         reply,
         artifacts,
         agent: agentInfo.agent,
         displayName: agentInfo.displayName,
+        project,
       });
       return;
     }
@@ -559,12 +779,15 @@ const server = createServer(async (req, res) => {
   }
 });
 
+await loadProjectRegistry();
+
 server.listen(PORT, HOST, () => {
   const agentInfo = commandFor({});
   console.log('SullyOS Code Workbench CLI Bridge started');
   console.log(`  URL:   http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   console.log(`  Agent: ${agentInfo.displayName}`);
   console.log(`  CWD:   ${WORKDIR}`);
+  console.log(`  Projects: ${PROJECTS_FILE}`);
   console.log(TOKEN ? '  Auth:  Bearer token enabled' : '  Auth:  disabled');
   console.log('');
   console.log('Put this in SullyOS Code settings:');

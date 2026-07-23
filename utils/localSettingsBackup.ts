@@ -58,6 +58,7 @@ export const BACKUP_LOCAL_STORAGE_EXACT_KEYS: readonly string[] = [
     'sully_proxy_worker_url_v1',
     'sully_video_parse_key_v1',
     'workbench_bridge_config_v1',
+    'workbench_projects_v1',
     'workbench_mode_v1',
 ] as const;
 

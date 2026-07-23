@@ -141,6 +141,15 @@ export interface WorkbenchBridgeConfig {
   fallbackApiKey?: string;
   fallbackApiModel?: string;
   fallbackApiName?: string;
+  activeWorkbenchProjectId?: string;
+}
+
+export interface WorkbenchProject {
+  id: string;
+  name: string;
+  path: string;
+  permission?: 'read' | 'write' | 'execute';
+  isDefault?: boolean;
 }
 
 export interface WorkbenchOfficialUsage {
