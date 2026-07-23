@@ -330,38 +330,56 @@ const renderProgressCard = (fields: Record<string, string>) => (
 );
 
 const renderWorkbenchXhsNoteCard = (note: Record<string, any>) => (
-    <span className="block overflow-hidden rounded-2xl border border-red-100 bg-white/82 shadow-sm">
-        {note.coverUrl && (
-            <img
-                src={note.coverUrl}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                className="block h-28 w-full object-cover"
-            />
+    <span className="block w-64 overflow-hidden rounded-xl border border-slate-100 bg-white text-left shadow-sm">
+        {note.coverUrl ? (
+            <span className="relative block h-36 w-full overflow-hidden bg-slate-100">
+                <img
+                    src={note.coverUrl}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    className="block h-full w-full object-cover"
+                />
+                {note.type === 'video' && (
+                    <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-black/50 px-1.5 py-0.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3 text-white">
+                            <path d="M6.3 2.841A1.5 1.5 0 0 0 4 4.11v11.78a1.5 1.5 0 0 0 2.3 1.269l9.344-5.89a1.5 1.5 0 0 0 0-2.538L6.3 2.84Z" />
+                        </svg>
+                        <span className="text-[9px] font-medium text-white">视频</span>
+                    </span>
+                )}
+            </span>
+        ) : (
+            <span className="flex h-14 items-center justify-center bg-gradient-to-r from-red-400 to-pink-500">
+                <span className="text-xs font-medium tracking-wide text-white/80">小红书笔记</span>
+            </span>
         )}
         <span className="block p-3">
-            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-red-400">
-                <span>小红书</span>
-                <span className="text-slate-300">·</span>
-                <span className="text-slate-400">分享给 Code</span>
-            </span>
-            <span className="mt-1 block text-sm font-semibold text-slate-900 line-clamp-2">
-                {note.title || '小红书笔记'}
-            </span>
+            <span className="mb-1.5 block text-sm font-bold leading-snug text-slate-800 line-clamp-2">{note.title || '无标题笔记'}</span>
             {note.desc && (
-                <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500 line-clamp-3">
-                    {String(note.desc)}
-                </span>
+                <span className="mb-2 block text-xs leading-relaxed text-slate-500 line-clamp-3">{String(note.desc)}</span>
             )}
-            {(note.author || note.comments?.length) && (
-                <span className="mt-2 block text-[10px] text-slate-400">
-                    {note.author ? `作者：${note.author}` : ''}
-                    {note.author && note.comments?.length ? ' · ' : ''}
-                    {note.comments?.length ? `评论 ${note.comments.length} 条已读` : ''}
+            <span className="flex items-center justify-between border-t border-slate-50 pt-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-red-400 to-pink-400 text-[8px] font-bold text-white">
+                        {(note.author || '?')[0]}
+                    </span>
+                    <span className="max-w-[100px] truncate text-[10px] text-slate-500">{note.author || '小红书用户'}</span>
                 </span>
-            )}
+                <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3 text-red-300">
+                        <path d="m9.653 16.915-.005-.003-.019-.01a20.759 20.759 0 0 1-1.162-.682 22.045 22.045 0 0 1-2.582-1.9C4.045 12.733 2 10.352 2 7.5a4.5 4.5 0 0 1 8-2.828A4.5 4.5 0 0 1 18 7.5c0 2.852-2.044 5.233-3.885 6.82a22.049 22.049 0 0 1-3.744 2.582l-.019.01-.005.003h-.002a.723.723 0 0 1-.692 0l-.003-.002Z" />
+                    </svg>
+                    <span>{note.likes || 0}</span>
+                </span>
+            </span>
+            <span className="mt-2 flex items-center gap-1 pt-1.5 text-[9px] text-slate-300">
+                <span className="font-bold text-red-400">小红书</span>
+                <span>·</span>
+                <span>{note.type === 'video' ? '视频' : '笔记'}分享</span>
+            </span>
         </span>
     </span>
 );
