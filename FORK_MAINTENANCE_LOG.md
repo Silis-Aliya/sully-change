@@ -52,6 +52,7 @@ Current known baseline:
 - The Now Playing together indicator displays both participants and preserves inviter-first ordering.
 - Changing tracks does not silently end an active together-listening session.
 - Active or pending sessions block duplicate invitations from either side, including repeated model directives.
+- Accepting a character-created invitation keeps the user's existing queue, starts with the shared song, and switches the queue to shuffle; later manual mode changes remain authoritative.
 - User and character exits reuse the established exit-event design while preserving actor ownership: user exits render on the user/right side and character exits on the assistant/left side.
 - The user's Now Playing exit control opens a centered two-option confirmation dialog.
 - Active together-listening session state is transient and is intentionally not restored by import/export or QuickSync.
