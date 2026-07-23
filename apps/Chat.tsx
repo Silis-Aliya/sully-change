@@ -1001,9 +1001,12 @@ const Chat: React.FC = () => {
         const msgPayload: any = { charId: char.id, role: 'user', type, content: text, metadata };
         
         if (replyTarget) {
+            const replyContent = replyTarget.type === 'music_card'
+                ? normalizeMessageContent(replyTarget, char.name, userProfile.name)
+                : replyTarget.content;
             msgPayload.replyTo = {
                 id: replyTarget.id,
-                content: replyTarget.content,
+                content: replyContent,
                 name: replyTarget.role === 'user' ? '我' : char.name
             };
             setReplyTarget(null);

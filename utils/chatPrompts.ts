@@ -1190,6 +1190,13 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                         : '';
                     content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}\n简介: ${note.desc || '无'}${commentsLine}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
                 }
+                else if ((m.type as string) === 'music_card') {
+                    content = `${timeStr} ${normalizeMessageContent(
+                        m,
+                        char?.name || '你',
+                        userProfile?.name || '用户',
+                    )}`;
+                }
                 else if ((m.type as string) === 'vr_card') {
                     // vr_card：你自己进入 VR 社交游戏《彼方》时留下的动态。
                     // 启用了彼方的角色已在系统提示里常驻"《彼方》是什么"的设定，这里就不再逐卡重复，
