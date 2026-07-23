@@ -530,9 +530,20 @@ const WorkbenchAvatarImage: React.FC<{
     alt?: string;
     className: string;
     style?: React.CSSProperties;
-}> = ({ src, alt = 'avatar', className, style }) => {
+    fallbackLabel?: string;
+    fallbackClassName?: string;
+}> = ({ src, alt = 'avatar', className, style, fallbackLabel = 'C', fallbackClassName = 'bg-slate-900 text-white' }) => {
     const resolvedSrc = useBlobRefUrl(src);
-    if (!resolvedSrc) return null;
+    if (!resolvedSrc) {
+        return (
+            <div
+                style={style}
+                className={`${className} ${fallbackClassName} flex items-center justify-center text-[11px] font-semibold`}
+            >
+                {fallbackLabel}
+            </div>
+        );
+    }
     return (
         <img
             src={resolvedSrc}
@@ -585,6 +596,8 @@ const WorkbenchMessageRow: React.FC<{
                 <WorkbenchAvatarImage
                     src={avatar}
                     alt="avatar"
+                    fallbackLabel={(message.role === 'sully' || message.role === 'character') ? String(message.metadata?.speakerName || '角色').slice(0, 1) : message.kind === 'error' ? '!' : 'C'}
+                    fallbackClassName={(message.role === 'sully' || message.role === 'character') ? 'bg-violet-100 text-violet-700' : message.kind === 'error' ? 'bg-rose-100 text-rose-700' : 'bg-slate-900 text-white'}
                     className="mt-5 h-8 w-8 rounded-full object-cover shadow-sm ring-1 ring-black/5 shrink-0"
                 />
             ) : (
@@ -2208,6 +2221,8 @@ const WorkbenchApp: React.FC = () => {
                                             src={avatar}
                                             alt="avatar"
                                             style={{ transform: `translateY(${avatarOffsetY}px)` }}
+                                            fallbackLabel={(m.role === 'sully' || m.role === 'character') ? String(m.metadata?.speakerName || '角').slice(0, 1) : m.kind === 'error' ? '!' : 'C'}
+                                            fallbackClassName={(m.role === 'sully' || m.role === 'character') ? 'bg-violet-100 text-violet-700' : m.kind === 'error' ? 'bg-rose-100 text-rose-700' : 'bg-slate-900 text-white'}
                                             className={`${avatarSizeClass} ${avatarRadiusClass} object-cover shadow-sm ring-1 ring-black/5 shrink-0`}
                                         />
                                     ) : (
@@ -2272,6 +2287,8 @@ const WorkbenchApp: React.FC = () => {
                                             src={thinkingAvatar}
                                             alt="avatar"
                                             style={{ transform: `translateY(${avatarOffsetY}px)` }}
+                                            fallbackLabel={thinkingInitial}
+                                            fallbackClassName={thinkingSpeaker === 'character' ? 'bg-violet-100 text-violet-700' : 'bg-slate-900 text-white'}
                                             className={`${avatarSizeClass} ${avatarRadiusClass} object-cover shadow-sm ring-1 ring-black/5 shrink-0`}
                                         />
                                     ) : (
