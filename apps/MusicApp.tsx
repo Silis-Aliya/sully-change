@@ -317,7 +317,7 @@ const MusicApp: React.FC = () => {
     try {
       await Promise.all(partners.map((charId, index) => DB.saveMessage({
         charId,
-        role: 'assistant',
+        role: 'user',
         type: 'text',
         content: `${actorName} 退出了一起听`,
         timestamp: now + index,
