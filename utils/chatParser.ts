@@ -214,24 +214,34 @@ export const ChatParser = {
         // MUSIC_TOGETHER_REQUEST — char 向 user 发起一起听邀请，user 点接受后才加入。
         const MUSIC_TOGETHER_REQUEST_RE = /\[\[MUSIC_TOGETHER_REQUEST\]\]/g;
         if (MUSIC_TOGETHER_REQUEST_RE.test(content)) {
-            const sharedSnap =
-                await getCurrentTurnSharedMusicSnapshot(charId, 'assistant')
-                || await getCurrentTurnSharedMusicSnapshot(charId, 'user');
-            const snap = sharedSnap || musicHooks?.getListeningSnapshot() || null;
-            if (snap) {
-                await DB.saveMessage({
-                    charId,
-                    role: 'assistant',
-                    type: 'music_card',
-                    content: '[一起听邀请]',
-                    metadata: {
-                        intent: 'join',
-                        togetherRequestFromCharacter: true,
-                        inviteStatus: 'pending',
-                        song: snap,
-                    },
-                });
-                addToast(`${charName} 邀请你一起听`, 'info');
+            const alreadyListeningTogether = !!musicHooks?.isListeningTogether?.(charId);
+            const recent = await DB.getRecentMessagesByCharId(charId, 24, true).catch(() => []);
+            const hasPendingTogetherRequest = recent.some(message =>
+                message.role === 'assistant'
+                && message.type === 'music_card'
+                && message.metadata?.togetherRequestFromCharacter
+                && (message.metadata?.inviteStatus || message.metadata?.status || 'pending') === 'pending'
+            );
+            if (!alreadyListeningTogether && !hasPendingTogetherRequest) {
+                const sharedSnap =
+                    await getCurrentTurnSharedMusicSnapshot(charId, 'assistant')
+                    || await getCurrentTurnSharedMusicSnapshot(charId, 'user');
+                const snap = sharedSnap || musicHooks?.getListeningSnapshot() || null;
+                if (snap) {
+                    await DB.saveMessage({
+                        charId,
+                        role: 'assistant',
+                        type: 'music_card',
+                        content: '[一起听邀请]',
+                        metadata: {
+                            intent: 'join',
+                            togetherRequestFromCharacter: true,
+                            inviteStatus: 'pending',
+                            song: snap,
+                        },
+                    });
+                    addToast(`${charName} 邀请你一起听`, 'info');
+                }
             }
             content = content.replace(MUSIC_TOGETHER_REQUEST_RE, '').trim();
         }

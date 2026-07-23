@@ -592,9 +592,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setListeningTogetherWith(prev => prev.length ? [] : prev);
   }, []);
 
-  // 切歌后清空上一首的"一起听"。只结束状态，不触发主动消息 ——
-  // 换歌信息记进 recentTrackChange，char 下一轮正常回复时经 prompt 注入察觉，
-  // 自行决定是否重新加入。
+  // 一起听是跨歌曲持续的会话，切歌只记录变化供角色理解，不结束会话。
+  // 只有任一方明确退出或播放器发生错误时才清空参与者。
   const previousSongRef = useRef<Song | null>(null);
   const [listeningTogetherChangeCount, setListeningTogetherChangeCount] = useState(0);
   const [listeningTogetherPreviousSong, setListeningTogetherPreviousSong] = useState<{ id: number; name: string; artists: string } | null>(null);
@@ -618,8 +617,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           artists: previousSong.artists,
         });
       }
-      setListeningTogetherInviterByCharId({});
-      setListeningTogetherWith([]);
     }
     previousSongRef.current = current;
   }, [current]);
