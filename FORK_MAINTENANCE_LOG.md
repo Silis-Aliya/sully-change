@@ -19,10 +19,43 @@ Important rules:
 Current known baseline:
 - upstream/master merged through ece65a3.
 - Local merge commit is 9740321 on codex/merge-upstream-20260721.
-- Last verified build passed after the 2026-07-22 upstream refresh.
+- Last verified build passed after the 2026-07-23 Workbench mobile polish.
 - This maintenance state is intended for remote `master`; if this note is visible on `master`, the push has happened.
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
+
+## 2026-07-23 Workbench Mobile Polish / Upstream Check
+
+### Result
+
+- Checked `upstream/master`; no new upstream commits were available, so no merge commit was needed.
+- Added normal-chat-style image sending to Code/Workbench:
+  - input bar now has an image button
+  - selected screenshots/images are compressed with the same mobile chat settings
+  - image messages render as image bubbles
+  - quote/copy/context fall back to `[图片]` instead of leaking base64
+  - fallback chat API can send Workbench images as OpenAI-compatible `image_url` parts when the model supports vision
+- Fixed Code assistant avatar rendering:
+  - avatar upload now immediately saves into active Workbench config, not only the settings draft
+  - old Codex messages prefer the current Code avatar over stale per-message `speakerAvatar`
+  - unresolved blobref avatars still show the side avatar fallback instead of disappearing
+- Fixed iOS horizontal wobble in the Code transcript:
+  - message scroll area now locks horizontal overscroll
+  - message bubbles and file cards use `min-width: 0` / bounded widths
+  - file preview code stays inside the card instead of stretching the whole page
+- Kept `AGENTS.md` untracked and out of the push.
+
+### Verification
+
+- `git fetch upstream` completed successfully.
+- `git log --oneline HEAD..upstream/master` returned no commits.
+- `npm run build` passed after the local Workbench changes.
+
+### Risk Notes
+
+- Computer CLI bridge is still a text-stdin route; uploaded images are represented as `[图片]` there. Full visual understanding currently requires the fallback chat API path with a vision-capable model.
+- Image messages are stored in `workbench_messages`, so full backup and QuickSync include them as normal Workbench message data; large screenshot volume can increase backup size.
+- The iOS wobble fix intentionally hides page-level horizontal overflow. If a future card needs horizontal inspection, it must scroll inside its own card, not the whole transcript.
 
 ## 2026-07-22 Code Bridge Startup / Mobile Remote Fix
 

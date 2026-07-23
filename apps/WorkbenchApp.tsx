@@ -422,6 +422,17 @@ const renderWorkbenchMessageContent = (
     if (message.metadata?.xhsNote) {
         return renderWorkbenchXhsNoteCard(message.metadata.xhsNote);
     }
+    if (message.type === 'image') {
+        return message.content ? (
+            <img
+                src={message.content}
+                alt="图片"
+                loading="lazy"
+                decoding="async"
+                className="max-w-[220px] max-h-[320px] rounded-xl object-contain"
+            />
+        ) : <span className="italic opacity-60">[图片已丢失]</span>;
+    }
     if (message.type === 'emoji') {
         const name = message.metadata?.emojiName || '表情';
         return (
@@ -438,8 +449,8 @@ const renderWorkbenchMessageContent = (
     if (message.type === 'file' && message.metadata?.artifact) {
         const artifact = message.metadata.artifact as WorkbenchArtifact;
         return (
-            <span className="block min-w-[220px] max-w-full">
-                <span className="flex items-center gap-3">
+            <span className="block w-full min-w-0 max-w-full overflow-hidden">
+                <span className="flex min-w-0 max-w-full items-center gap-3">
                     <span className="h-10 w-10 shrink-0 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
@@ -463,7 +474,7 @@ const renderWorkbenchMessageContent = (
                         </svg>
                     </span>
                 </span>
-                {artifact.preview && <code className="mt-3 block max-h-28 overflow-hidden whitespace-pre-wrap break-all rounded-lg bg-slate-50 p-2 text-[11px] text-slate-600">{artifact.preview.slice(0, 1200)}</code>}
+                {artifact.preview && <code className="mt-3 block max-h-28 max-w-full overflow-x-auto overflow-y-hidden whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 text-[11px] text-slate-600 workbench-index-scroll">{artifact.preview.slice(0, 1200)}</code>}
             </span>
         );
     }
@@ -471,7 +482,9 @@ const renderWorkbenchMessageContent = (
 };
 
 const workbenchMessageText = (message: WorkbenchMessage) => (
-    message.type === 'emoji'
+    message.type === 'image'
+        ? '[图片]'
+        : message.type === 'emoji'
         ? `[表情: ${message.metadata?.emojiName || '表情包'}]`
         : message.content
 );
@@ -617,7 +630,7 @@ const WorkbenchMessageRow: React.FC<{
                     </svg>
                 </button>
             )}
-            <div className={`max-w-[72%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+            <div className={`sully-workbench-message ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
                 <div className={`text-[11px] mb-1 ${isUser ? 'text-slate-400 pr-1' : 'text-slate-500'}`}>
                     {roleLabel(message)} · {new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
                 </div>
@@ -642,7 +655,7 @@ const WorkbenchMessageRow: React.FC<{
                         e.preventDefault();
                         onLongPress(message);
                     }}
-                    className={`text-left text-[15px] leading-relaxed whitespace-pre-wrap break-all transition-transform active:scale-[0.98] ${
+                    className={`sully-workbench-bubble text-left text-[15px] leading-relaxed whitespace-pre-wrap break-words transition-transform active:scale-[0.98] ${
                         isEmojiOnly
                             ? '!bg-transparent !p-0 !shadow-none !border-0 !rounded-none'
                             : isUser
@@ -837,6 +850,7 @@ const WorkbenchApp: React.FC = () => {
     const [codeMemoryOpen, setCodeMemoryOpen] = useState(false);
     const bottomRef = useRef<HTMLDivElement | null>(null);
     const codexAvatarInputRef = useRef<HTMLInputElement | null>(null);
+    const imageInputRef = useRef<HTMLInputElement | null>(null);
     const messagePressTimerRef = useRef<number | null>(null);
     const messagePressMovedRef = useRef(false);
     const workbenchXhsCachesRef = useRef(createWorkbenchXhsCaches());
@@ -877,7 +891,7 @@ const WorkbenchApp: React.FC = () => {
     ), [activeCharacterId, characters, config.participantCharacterId]);
     const getMessageAvatar = (message: WorkbenchMessage) => {
         if (message.role === 'codex') {
-            return message.metadata?.speakerAvatar || config.codexAvatar || '';
+            return config.codexAvatar || message.metadata?.speakerAvatar || '';
         }
         if (message.role !== 'character' && message.role !== 'sully') return '';
         const characterId = message.metadata?.characterId;
@@ -1462,6 +1476,10 @@ const WorkbenchApp: React.FC = () => {
             if (dataUrl) {
                 const stored = dataUrl.startsWith('data:') ? await migrateDataUrlToRef(dataUrl) : dataUrl;
                 setDraftConfig(prev => ({ ...prev, codexAvatar: stored }));
+                const nextConfig = { ...config, codexAvatar: stored };
+                saveWorkbenchBridgeConfig(nextConfig);
+                setConfig(loadWorkbenchBridgeConfig());
+                addToast('Code 头像已更新', 'success');
             }
         } catch (error) {
             addToast(error instanceof Error ? error.message : '头像读取失败', 'error');
@@ -1582,6 +1600,7 @@ const WorkbenchApp: React.FC = () => {
 
     const canEditMessage = (message: WorkbenchMessage) => (
         message.type !== 'emoji'
+        && message.type !== 'image'
         && message.type !== 'file'
         && message.type !== 'xhs_card'
         && message.kind !== 'summary'
@@ -2081,6 +2100,25 @@ const WorkbenchApp: React.FC = () => {
         void send(emoji.url, { type: 'emoji', metadata: { emojiName: emoji.name } });
     };
 
+    const sendImage = async (file?: File | null) => {
+        if (!file) return;
+        try {
+            const base64 = await processImage(file, { maxWidth: 600, quality: 0.6, forceJpeg: true });
+            setEmojiPanelOpen(false);
+            await send(base64, {
+                type: 'image',
+                metadata: {
+                    fileName: file.name,
+                    mimeType: 'image/jpeg',
+                },
+            });
+        } catch (error: any) {
+            addToast(error?.message || '图片处理失败', 'error');
+        } finally {
+            if (imageInputRef.current) imageInputRef.current.value = '';
+        }
+    };
+
     const deleteConversation = async (sessionId: string) => {
         const target = conversations.find(item => item.id === sessionId);
         if (!target) return;
@@ -2104,7 +2142,7 @@ const WorkbenchApp: React.FC = () => {
                     'linear-gradient(135deg, #fbf5ed 0%, #f7f0ef 30%, #f4f1fb 68%, #edf5ff 100%)',
             }}
         >
-            <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}body.ios-keyboard-open .sully-workbench-inputbar{padding-bottom:0!important;}`}</style>
+            <style>{`.workbench-index-scroll{scrollbar-width:none;-ms-overflow-style:none;}.workbench-index-scroll::-webkit-scrollbar{display:none;}.sully-workbench-scroll{overflow-x:hidden;overscroll-behavior-x:none;}.sully-workbench-message{min-width:0;max-width:min(72%,calc(100vw - 88px));}.sully-workbench-bubble{min-width:0;max-width:100%;overflow:hidden;}body.ios-keyboard-open .sully-workbench-inputbar{padding-bottom:0!important;}`}</style>
             <div
                 className="shrink-0 border-b border-white/70 bg-white/36 backdrop-blur-2xl"
                 style={{ paddingTop: 'var(--safe-top)' }}
@@ -2173,9 +2211,9 @@ const WorkbenchApp: React.FC = () => {
             </div>
 
             <div className="relative min-h-0 flex-1 flex overflow-hidden">
-                <div className="min-w-0 flex-1 flex flex-col bg-white">
-                    <div className="flex-1 overflow-y-auto bg-white workbench-index-scroll">
-                        <div className="min-h-full px-4 py-5 space-y-5">
+                <div className="min-w-0 flex-1 flex flex-col bg-white overflow-hidden">
+                    <div className="flex-1 overflow-y-auto bg-white workbench-index-scroll sully-workbench-scroll">
+                        <div className="min-h-full min-w-0 max-w-full overflow-hidden px-4 py-5 space-y-5">
                             {messages.length === 0 && (
                                 <div className="h-full min-h-[360px] flex items-center justify-center">
                                     <div className="w-full max-w-[310px] text-center">
@@ -2233,7 +2271,7 @@ const WorkbenchApp: React.FC = () => {
                                             {(m.role === 'sully' || m.role === 'character') ? String(m.metadata?.speakerName || '角').slice(0, 1) : m.kind === 'error' ? '!' : 'C'}
                                         </div>
                                     ))}
-                                    <div className={`max-w-[72%] ${m.role === 'user' ? 'items-end' : 'items-start'} flex flex-col`}>
+                                    <div className={`sully-workbench-message ${m.role === 'user' ? 'items-end' : 'items-start'} flex flex-col`}>
                                         <div className={`text-[11px] mb-1 ${m.role === 'user' ? 'text-slate-400 pr-1' : 'text-slate-500'}`}>
                                             {roleLabel(m)} · {new Date(m.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
                                         </div>
@@ -2255,7 +2293,7 @@ const WorkbenchApp: React.FC = () => {
                                             onPointerCancel={clearMessagePressTimer}
                                             onPointerLeave={clearMessagePressTimer}
                                             onContextMenu={e => { e.preventDefault(); setActionTarget(m); }}
-                                            className={`text-left text-[15px] leading-relaxed whitespace-pre-wrap break-all transition-transform active:scale-[0.98] ${
+                                            className={`sully-workbench-bubble text-left text-[15px] leading-relaxed whitespace-pre-wrap break-words transition-transform active:scale-[0.98] ${
                                             isEmojiOnly
                                                 ? '!bg-transparent !p-0 !shadow-none !border-0 !rounded-none'
                                                 : m.role === 'user'
@@ -2461,6 +2499,27 @@ const WorkbenchApp: React.FC = () => {
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M8 9h.01M16 9h.01M8.5 14.5c1.8 1.7 5.2 1.7 7 0" />
                                     </svg>
                                 </button>
+                                <button
+                                    type="button"
+                                    onClick={() => imageInputRef.current?.click()}
+                                    disabled={busy}
+                                    className="h-8 w-8 rounded-lg flex items-center justify-center active:scale-95 disabled:opacity-35 bg-white/70 text-slate-500 border border-slate-200"
+                                    aria-label="发送图片"
+                                    title="发送图片"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="m7 15 3-3 2 2 3-4 2 5" />
+                                        <circle cx="8" cy="9" r="1" />
+                                    </svg>
+                                </button>
+                                <input
+                                    ref={imageInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={event => void sendImage(event.target.files?.[0])}
+                                />
                                 <button
                                     onClick={() => void send()}
                                     disabled={!input.trim() || busy}

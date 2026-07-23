@@ -476,9 +476,24 @@ export const sendWorkbenchFallbackMessage = async (
     const model = String(config.fallbackApiModel || '').trim();
     if (!base || !model) throw new Error('请先配置备用聊天 API 和模型');
 
+    const fallbackContentForMessage = (message: WorkbenchMessage): any => {
+        const speaker = message.role === 'user'
+            ? '用户'
+            : message.role === 'character' || message.role === 'sully'
+                ? `角色 ${message.metadata?.speakerName || ''}`.trim()
+                : `AI 助手 ${message.metadata?.speakerName || ''}`.trim();
+        const text = `[${speaker}]\n${workbenchContentForContext(message)}`;
+        if (message.type === 'image' && /^data:image\//i.test(message.content || '')) {
+            return [
+                { type: 'text', text },
+                { type: 'image_url', image_url: { url: message.content } },
+            ];
+        }
+        return text;
+    };
     const history = args.recentMessages.map(message => ({
         role: message.role === 'user' ? 'user' : 'assistant',
-        content: `[${message.role === 'user' ? '用户' : message.role === 'character' || message.role === 'sully' ? `角色 ${message.metadata?.speakerName || ''}`.trim() : `AI 助手 ${message.metadata?.speakerName || ''}`.trim()}]\n${workbenchContentForContext(message)}`,
+        content: fallbackContentForMessage(message),
     }));
     const systemParts = [
         config.customInstructions?.trim(),
@@ -916,6 +931,8 @@ const workbenchContentForContext = (m: WorkbenchMessage): string => {
     }
     const content = m.type === 'emoji'
         ? `[表情: ${m.metadata?.emojiName || '表情包'}]`
+        : m.type === 'image'
+            ? '[图片]'
         : m.content;
     const xhsNote = formatWorkbenchXhsNoteForContext(m.metadata?.xhsNote);
     return `${content}${xhsNote ? `\n\n${xhsNote}` : ''}`;
