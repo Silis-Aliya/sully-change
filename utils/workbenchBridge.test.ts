@@ -14,7 +14,7 @@ describe('workbench bridge config resolution', () => {
         expect(resolved.bridgeUrl).toBe('http://pc.local:3001');
     });
 
-    it('uses the local CLI URL on desktop while preserving the remote URL for phones', () => {
+    it('uses the configured private-domain bridge on desktop too', () => {
         const resolved = resolveWorkbenchBridgeConfigForClient({
             ...DEFAULT_WORKBENCH_CONFIG,
             bridgeUrl: 'http://pc.local:3001',
@@ -23,7 +23,7 @@ describe('workbench bridge config resolution', () => {
             runtimeMode: 'computer',
         }, 'desktop');
 
-        expect(resolved.bridgeUrl).toBe('http://localhost:3001');
+        expect(resolved.bridgeUrl).toBe('http://pc.local:3001');
         expect(resolved.remoteBridgeUrl).toBe('http://pc.local:3001');
     });
 });

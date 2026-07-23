@@ -250,6 +250,7 @@ export interface PostProcessMusicHooks {
     nextSong?: () => void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
     pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
+    playSharedSong?: (song: any) => Promise<void>;
     addSongToCharPlaylist: (
         charId: string,
         song: any,

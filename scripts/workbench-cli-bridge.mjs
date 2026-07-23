@@ -46,8 +46,14 @@ const DEFAULT_AGENT = getArg('--agent', process.env.WORKBENCH_AGENT || 'codex').
 const TOKEN = getArg('--token', process.env.WORKBENCH_BRIDGE_TOKEN || '');
 const WORKDIR = resolve(getArg('--cwd', process.env.WORKBENCH_CWD || process.cwd()));
 const PROJECTS_FILE = resolve(getArg('--projects-file', process.env.WORKBENCH_PROJECTS_FILE || join(homedir(), '.sullyos-workbench-projects.json')));
-const TIMEOUT_MS = Number(getArg('--timeout-ms', process.env.WORKBENCH_TIMEOUT_MS || '300000'));
+const TIMEOUT_MS = Number(getArg('--timeout-ms', process.env.WORKBENCH_TIMEOUT_MS || '120000'));
 const DEBUG = hasArg('--debug') || process.env.WORKBENCH_DEBUG === '1';
+const MAX_BODY_BYTES = Number(process.env.WORKBENCH_MAX_BODY_BYTES || 512 * 1024);
+const MAX_PROMPT_CHARS = Number(process.env.WORKBENCH_MAX_PROMPT_CHARS || 60000);
+const MAX_TASK_INDEX_CHARS = Number(process.env.WORKBENCH_MAX_TASK_INDEX_CHARS || 24000);
+const MAX_CONTENT_CHARS = Number(process.env.WORKBENCH_MAX_CONTENT_CHARS || 12000);
+const MAX_RECENT_MESSAGES = Number(process.env.WORKBENCH_MAX_RECENT_MESSAGES || 16);
+const MAX_RECENT_MESSAGE_CHARS = Number(process.env.WORKBENCH_MAX_RECENT_MESSAGE_CHARS || 2500);
 const FILE_MARKER_RE = /^\s*\[\[FILE:\s*(.+?)\s*\]\]\s*$/gmi;
 const PREVIEW_MAX_BYTES = 32 * 1024;
 const WINDOWS_NPM_CODEX_BIN = process.env.APPDATA
@@ -92,8 +98,30 @@ const json = (res, status, data) => {
 
 const readBody = req => new Promise((resolveBody, rejectBody) => {
   const chunks = [];
-  req.on('data', chunk => chunks.push(chunk));
+  let total = 0;
+  let settled = false;
+  let tooLarge = false;
+  const fail = error => {
+    if (settled) return;
+    settled = true;
+    rejectBody(error);
+  };
+  req.on('data', chunk => {
+    if (tooLarge) return;
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      const error = new Error(`Request body too large (${total} bytes)`);
+      error.statusCode = 413;
+      tooLarge = true;
+      chunks.length = 0;
+      fail(error);
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on('end', () => {
+    if (settled) return;
+    settled = true;
     const raw = Buffer.concat(chunks).toString('utf8');
     if (!raw.trim()) return resolveBody({});
     try {
@@ -102,7 +130,7 @@ const readBody = req => new Promise((resolveBody, rejectBody) => {
       rejectBody(new Error(`Invalid JSON body: ${error.message}`));
     }
   });
-  req.on('error', rejectBody);
+  req.on('error', fail);
 });
 
 const checkAuth = req => {
@@ -128,6 +156,7 @@ let projectRegistry = {
   activeProjectId: DEFAULT_PROJECT_ID,
   projects: [normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' })],
 };
+let activeMessageRun = null;
 
 const normalizeProjectRegistry = raw => {
   const defaultProject = normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' });
@@ -475,6 +504,20 @@ const listModels = async body => {
   return [];
 };
 
+const clampText = (value, maxChars, label) => {
+  const text = String(value || '');
+  if (text.length <= maxChars) return text;
+  return `[${label} truncated: kept last ${maxChars} chars]\n${text.slice(-maxChars)}`;
+};
+
+const clampPrompt = prompt => {
+  if (prompt.length <= MAX_PROMPT_CHARS) return prompt;
+  const marker = `\n\n[Prompt truncated: kept instructions and latest request within ${MAX_PROMPT_CHARS} chars]\n\n`;
+  const headChars = Math.max(8000, Math.floor(MAX_PROMPT_CHARS * 0.35));
+  const tailChars = Math.max(8000, MAX_PROMPT_CHARS - headChars - marker.length);
+  return `${prompt.slice(0, headChars)}${marker}${prompt.slice(-tailChars)}`;
+};
+
 const buildPrompt = body => {
   const executeMode = body.capabilityMode === 'execute';
   const project = resolveProject(body || {});
@@ -485,8 +528,11 @@ const buildPrompt = body => {
     : agentId === 'claude'
       ? 'Claude Code'
       : '自定义 CLI';
-  const recent = Array.isArray(body.recentMessages)
-    ? body.recentMessages.map(m => {
+  const recentMessages = Array.isArray(body.recentMessages)
+    ? body.recentMessages.slice(-MAX_RECENT_MESSAGES)
+    : [];
+  const recent = recentMessages.length
+    ? recentMessages.map(m => {
         const role = m.role === 'user'
           ? '用户'
           : m.role === 'character' || m.role === 'sully'
@@ -494,9 +540,12 @@ const buildPrompt = body => {
             : m.role === 'codex'
               ? `AI 助手 ${m.speakerName || 'Code'}`
               : `系统 ${m.speakerName || ''}`.trim();
-        return `${role}: ${m.content || ''}`;
+        return `${role}: ${clampText(m.content, MAX_RECENT_MESSAGE_CHARS, 'message')}`;
       }).join('\n')
     : '';
+  const taskIndex = clampText(body.taskIndex, MAX_TASK_INDEX_CHARS, 'Code context');
+  const userContent = clampText(body.content, MAX_CONTENT_CHARS, 'user request');
+  body = { ...body, taskIndex, content: userContent };
   const parts = [
     `[AI 助手身份]
 你是 Code 区中的 AI 助手「${agentName}」。
@@ -520,7 +569,7 @@ const buildPrompt = body => {
     recent ? `[最近 Code 消息]\n${recent}` : '',
     `[用户请求]\n${body.content || ''}`,
   ];
-  return parts.filter(Boolean).join('\n\n');
+  return clampPrompt(parts.filter(Boolean).join('\n\n'));
 };
 
 const runProbe = async body => {
@@ -576,6 +625,33 @@ const tryParseReply = text => {
   return trimmed;
 };
 
+const killCliProcessTree = child => {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      windowsHide: true,
+      shell: false,
+      stdio: 'ignore',
+    });
+    killer.on('error', () => {});
+    return;
+  }
+
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    return;
+  }
+
+  setTimeout(() => {
+    try {
+      if (!child.killed) child.kill('SIGKILL');
+    } catch {
+      // The process may have already exited.
+    }
+  }, 2000).unref?.();
+};
+
 const runCli = async (command, prompt, project = resolveProject('')) => {
   const tmpRoot = await mkdtemp(join(tmpdir(), 'sully-code-'));
   const promptFile = join(tmpRoot, 'prompt.txt');
@@ -607,27 +683,38 @@ const runCli = async (command, prompt, project = resolveProject('')) => {
       });
       const stdout = [];
       const stderr = [];
+      let settled = false;
+      const settleReject = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        rejectRun(error);
+      };
+      const settleResolve = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveRun(value);
+      };
       const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        rejectRun(new Error(`CLI timed out after ${TIMEOUT_MS}ms`));
+        killCliProcessTree(child);
+        settleReject(new Error(`CLI timed out after ${TIMEOUT_MS}ms`));
       }, TIMEOUT_MS);
 
       child.stdout.on('data', chunk => stdout.push(chunk));
       child.stderr.on('data', chunk => stderr.push(chunk));
       child.on('error', error => {
-        clearTimeout(timer);
-        rejectRun(error);
+        settleReject(error);
       });
       child.on('close', code => {
-        clearTimeout(timer);
         const out = Buffer.concat(stdout).toString('utf8');
         const err = Buffer.concat(stderr).toString('utf8');
         if (DEBUG && err.trim()) console.warn(`[workbench-bridge] stderr:\n${err}`);
         if (code !== 0) {
-          rejectRun(new Error(err.trim() || `CLI exited with code ${code}`));
+          settleReject(new Error(err.trim() || `CLI exited with code ${code}`));
           return;
         }
-        resolveRun(tryParseReply(out));
+        settleResolve(tryParseReply(out));
       });
 
       if (stdinPrompt) child.stdin.write(stdinPrompt);
@@ -754,13 +841,33 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/message') {
       const body = await readBody(req);
       const project = resolveProject(body);
+      if (activeMessageRun) {
+        json(res, 409, {
+          error: 'Code 正在处理上一条请求，请等它完成后再发送。',
+          busy: true,
+          activeSince: activeMessageRun.startedAt,
+          capabilityMode: activeMessageRun.capabilityMode,
+          projectId: activeMessageRun.projectId,
+        });
+        return;
+      }
       if (project.permission === 'read' && body.capabilityMode === 'execute') {
         json(res, 403, { error: '当前项目是只读权限。请先在 Code 设置里切换到可修改项目，或把该项目权限改为可修改。', project });
         return;
       }
       const agentInfo = commandFor(body);
       const prompt = buildPrompt(body);
-      const rawReply = await runCli(agentInfo.command, prompt, project);
+      activeMessageRun = {
+        startedAt: Date.now(),
+        capabilityMode: body.capabilityMode === 'execute' ? 'execute' : 'chat',
+        projectId: project.id,
+      };
+      let rawReply;
+      try {
+        rawReply = await runCli(agentInfo.command, prompt, project);
+      } finally {
+        activeMessageRun = null;
+      }
       const { reply, artifacts } = await collectArtifacts(rawReply, project);
       json(res, 200, {
         reply,
@@ -775,7 +882,7 @@ const server = createServer(async (req, res) => {
     json(res, 404, { error: 'Not found' });
   } catch (error) {
     console.error(`[workbench-bridge] ${error.stack || error.message}`);
-    json(res, 500, { error: error.message || 'Bridge error' });
+    json(res, error.statusCode || 500, { error: error.message || 'Bridge error' });
   }
 });
 

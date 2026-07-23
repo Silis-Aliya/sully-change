@@ -20,6 +20,7 @@ import { normalizeMessageContent } from './messageFormat';
 export const WORKBENCH_CONFIG_KEY = 'workbench_bridge_config_v1';
 export const WORKBENCH_MODE_KEY = 'workbench_mode_v1';
 export const WORKBENCH_PROJECTS_KEY = 'workbench_projects_v1';
+const WORKBENCH_BRIDGE_MESSAGE_TIMEOUT_MS = 135_000;
 
 export type WorkbenchProjectsSnapshot = {
     version: 1;
@@ -429,28 +430,49 @@ export const sendWorkbenchBridgeMessage = async (
         return { reply: '电脑桥接还没有配置。请点 Code 右上角设置，选择远程或 CLI，并填写地址。' };
     }
     const base = config.bridgeUrl.trim().replace(/\/+$/, '');
-    const res = await fetch(`${base}/message`, {
-        method: 'POST',
-        headers: bridgeHeaders(config),
-        body: JSON.stringify({
-            sessionId: args.sessionId,
-            mode: args.mode,
-            capabilityMode: args.capabilityMode || 'chat',
-            clientDevice: detectWorkbenchClientDevice(),
-            runtimeMode: config.runtimeMode || 'computer',
-            agent: config.defaultAgent,
-            customAgentCommand: config.customAgentCommand || undefined,
-            selectedModel: config.selectedModel || undefined,
-            modelProfile: config.modelProfile || 'balanced',
-            customInstructions: config.customInstructions || undefined,
-            monthlyUsageLimit: config.monthlyUsageLimit || undefined,
-            projectId: config.activeWorkbenchProjectId || undefined,
-            content: args.content,
-            recentMessages: args.recentMessages.map(serializeWorkbenchMessage),
-            taskIndex: args.taskIndex || undefined,
-        }),
-    });
-    if (!res.ok) throw new Error(`电脑桥接请求失败 (${res.status})`);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), WORKBENCH_BRIDGE_MESSAGE_TIMEOUT_MS);
+    let res: Response;
+    try {
+        res = await fetch(`${base}/message`, {
+            method: 'POST',
+            headers: bridgeHeaders(config),
+            signal: controller.signal,
+            body: JSON.stringify({
+                sessionId: args.sessionId,
+                mode: args.mode,
+                capabilityMode: args.capabilityMode || 'chat',
+                clientDevice: detectWorkbenchClientDevice(),
+                runtimeMode: config.runtimeMode || 'computer',
+                agent: config.defaultAgent,
+                customAgentCommand: config.customAgentCommand || undefined,
+                selectedModel: config.selectedModel || undefined,
+                modelProfile: config.modelProfile || 'balanced',
+                customInstructions: config.customInstructions || undefined,
+                monthlyUsageLimit: config.monthlyUsageLimit || undefined,
+                projectId: config.activeWorkbenchProjectId || undefined,
+                content: args.content,
+                recentMessages: args.recentMessages.map(serializeWorkbenchMessage),
+                taskIndex: args.taskIndex || undefined,
+            }),
+        });
+    } catch (error: any) {
+        if (error?.name === 'AbortError') {
+            throw new Error('电脑端 Code 响应超时，手机已停止等待。电脑端会自动结束这次卡住的 Codex，请稍后重试或缩短这次请求。');
+        }
+        throw error;
+    } finally {
+        window.clearTimeout(timeout);
+    }
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        const message = errorData && typeof errorData === 'object'
+            ? String((errorData as Record<string, unknown>).error || '')
+            : '';
+        if (res.status === 409) throw new Error(message || 'Code 正在处理上一条请求，请等它完成后再发送。');
+        if (res.status === 413) throw new Error(message || '这次 Code 上下文太大，已拒绝发送。请缩短消息或减少上下文后重试。');
+        throw new Error(message || `电脑桥接请求失败 (${res.status})`);
+    }
     const data = await res.json().catch(() => null);
     if (data && typeof data === 'object') {
         const record = data as Record<string, any>;

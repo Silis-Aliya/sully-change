@@ -24,6 +24,7 @@ describe('quickSync settings coverage', () => {
         expect(QUICK_SYNC_STORES).toContain('courses');
         expect(QUICK_SYNC_STORES).toContain('games');
         expect(QUICK_SYNC_STORES).toContain('novels');
+        expect(QUICK_SYNC_STORES).toContain('songs');
         expect(QUICK_SYNC_STORES).toContain('bank_transactions');
         expect(QUICK_SYNC_STORES).toContain('bank_data');
         expect(QUICK_SYNC_STORES).toContain('xhs_activities');
@@ -41,6 +42,7 @@ describe('quickSync settings coverage', () => {
         expect(QUICK_SYNC_STORES).toContain('workbench_memories');
         expect(QUICK_SYNC_STORES).toContain('workbench_artifacts');
         expect(QUICK_SYNC_STORES).toContain('memory_vectors');
+        expect(QUICK_SYNC_STORES).toContain('vr_music');
     });
 
     it('syncs customization assets but skips runtime cache assets', () => {
@@ -49,6 +51,8 @@ describe('quickSync settings coverage', () => {
         expect(shouldIncludeQuickSyncRow('assets', { id: 'wallpaper', data: 'linear-gradient(red, blue)' })).toBe(true);
         expect(shouldIncludeQuickSyncRow('assets', { id: 'chrome_css_presets', data: [] })).toBe(true);
         expect(shouldIncludeQuickSyncRow('assets', { id: 'bank_custom_furniture_assets_v1', data: '[]' })).toBe(true);
+        expect(shouldIncludeQuickSyncRow('assets', { id: 'acestep_song_123', data: { blob: new Blob() } })).toBe(true);
+        expect(shouldIncludeQuickSyncRow('assets', { id: 'mmmusic_song_123', data: { blob: new Blob() } })).toBe(true);
         expect(shouldIncludeQuickSyncRow('assets', { id: 'voice_123', data: { blob: new Blob() } })).toBe(false);
         expect(shouldIncludeQuickSyncRow('assets', { id: 'minimax_music_cache_123', data: { blob: new Blob() } })).toBe(false);
     });

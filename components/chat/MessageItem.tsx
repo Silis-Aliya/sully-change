@@ -11,6 +11,8 @@ import McdCard from './McdCard';
 import HtmlCard from './HtmlCard';
 import LuckinCard from './LuckinCard';
 import LuckinCheckoutCard from './LuckinCheckoutCard';
+import { loadMusicHooks } from '../../context/MusicContext';
+import { DB } from '../../utils/db';
 
 // 思考链卡片支持的 12 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
 export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
@@ -47,6 +49,9 @@ const SERIF = '"Noto Serif SC", "Source Han Serif SC", "Songti SC", "STKaiti", "
 const SANS = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif';
 const MONO = '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, "Courier New", monospace';
 const PIXEL = '"Zpix", "Fusion Pixel 12px", "DotGothic16", "Silver", "Courier New", monospace';
+
+const normalizeMusicInviteStatus = (status: unknown): 'accepted' | 'rejected' | undefined =>
+    status === 'accepted' || status === 'rejected' ? status : undefined;
 
 const parseCodeProgressCard = (content: string): { title: string; fields: Record<string, string> } | null => {
     const header = content.match(/\[Code 进度(?:-[^\]]+)?\]/)?.[0];
@@ -1492,6 +1497,13 @@ const MessageItem = React.memo(({
     const [replyOffset, setReplyOffset] = useState(0);
     const [isReplyGestureActive, setIsReplyGestureActive] = useState(false);
     const [isReplyReady, setIsReplyReady] = useState(false);
+    const [musicRequestStatus, setMusicRequestStatus] = useState<'accepted' | 'rejected' | undefined>(() =>
+        normalizeMusicInviteStatus(m.metadata?.inviteStatus || m.metadata?.status)
+    );
+
+    useEffect(() => {
+        setMusicRequestStatus(normalizeMusicInviteStatus(m.metadata?.inviteStatus || m.metadata?.status));
+    }, [m.id, m.metadata?.inviteStatus, m.metadata?.status]);
 
     const clearLongPressTimer = () => {
         if (!longPressTimer.current) return;
@@ -2146,16 +2158,91 @@ const MessageItem = React.memo(({
 
     // --- Music Card Rendering (一起听 / 加入歌单) ---
     if (m.type === 'music_card' && m.metadata?.song) {
-        const song = m.metadata.song as { songId?: number; id?: number; name: string; artists: string; albumPic: string };
-        const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add';
+        const song = m.metadata.song as { songId?: number; id?: number; name: string; artists: string; album?: string; albumPic: string; duration?: number; fee?: number };
+        const intent = (m.metadata.intent || 'join') as 'share' | 'join' | 'add' | 'join_and_add';
         const isInviteFromUser = !!m.metadata.inviteFromUser;
         const isInviteResult = !!m.metadata.inviteResult;
-        const inviteStatus = (m.metadata.inviteStatus || m.metadata.status) as 'accepted' | 'rejected' | undefined;
+        const isTogetherRequestFromCharacter = !!m.metadata.togetherRequestFromCharacter;
+        const inviteStatus = musicRequestStatus || normalizeMusicInviteStatus(m.metadata.inviteStatus || m.metadata.status);
         const inviteAccepted = inviteStatus === 'accepted';
-        const isTogether = !isInviteFromUser && !isInviteResult && (intent === 'join' || intent === 'join_and_add');
+        const isPendingTogetherRequest = isTogetherRequestFromCharacter && !inviteStatus;
+        const isTogether = !isInviteFromUser && !isInviteResult && !isTogetherRequestFromCharacter && (intent === 'join' || intent === 'join_and_add');
         const addedTo = m.metadata.addedToPlaylistTitle as string | undefined;
 
         // 头像渲染：有图用图，无图显姓名首字
+        const playSharedSong = async (event: React.MouseEvent) => {
+            event.stopPropagation();
+            const hooks = loadMusicHooks();
+            if (!hooks?.playSharedSong) return;
+            await hooks.playSharedSong(song as any);
+        };
+
+        const resolveTogetherRequest = async (event: React.MouseEvent, status: 'accepted' | 'rejected') => {
+            event.stopPropagation();
+            if (!isTogetherRequestFromCharacter || inviteStatus) return;
+            setMusicRequestStatus(status);
+            try {
+                await DB.updateMessageMetadata(m.id, (prev) => ({
+                    ...(prev || {}),
+                    inviteStatus: status,
+                    status,
+                    resolvedAt: Date.now(),
+                }));
+            } catch { /* UI state already updated; persistence failure is non-fatal here. */ }
+            if (status === 'accepted') {
+                const hooks = loadMusicHooks();
+                await hooks?.playSharedSong?.(song as any);
+                hooks?.joinListeningTogether?.(m.charId);
+            }
+        };
+
+        if (intent === 'share') {
+            return commonLayout(
+                <div
+                    className="relative w-[min(340px,72vw)] h-[104px] overflow-hidden rounded-[22px] shadow-sm border border-white/45 active:scale-[0.99] transition-transform"
+                    style={{ background: 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)' }}
+                >
+                    {song.albumPic ? (
+                        <img src={song.albumPic} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover" loading="lazy" referrerPolicy="no-referrer" />
+                    ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-3xl text-white/70">♪</div>
+                    )}
+                    <div
+                        aria-hidden
+                        className="absolute inset-0"
+                        style={{
+                            background: `linear-gradient(90deg, rgba(24,18,31,0.72) 0%, rgba(64,45,66,0.34) 48%, rgba(18,14,24,0.76) 100%),
+                                         radial-gradient(circle at 84% 20%, rgba(255,192,215,0.24), transparent 35%)`,
+                        }}
+                    />
+                    <div className="absolute right-3 top-2.5 rounded-full border border-white/25 bg-white/20 px-2.5 py-1 text-[10px] font-semibold text-white/90 backdrop-blur-md">
+                        音乐分享
+                    </div>
+                    <div className="relative z-10 flex h-full items-center gap-3.5 px-4">
+                        <button
+                            type="button"
+                            onClick={playSharedSong}
+                            className="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-full border border-white/40 bg-white/25 text-white shadow-[0_8px_18px_rgba(0,0,0,0.18)] backdrop-blur-md active:scale-95"
+                            title="播放这首歌"
+                        >
+                            <svg viewBox="0 0 24 24" className="ml-0.5 h-6 w-6 fill-current">
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
+                        </button>
+                        <div className="min-w-0 flex-1 pt-0.5">
+                            <div className="truncate text-[18px] font-extrabold leading-tight text-white drop-shadow">
+                                {song.name || '未命名'}
+                            </div>
+                            <div className="mt-1 truncate text-[12px] text-white/80">
+                                {[song.artists, song.album].filter(Boolean).join(' · ') || '未知歌手'}
+                            </div>
+                        </div>
+                        <div className="self-end pb-5 text-[13px] font-black tracking-[3px] text-white/55">••••</div>
+                    </div>
+                </div>
+            );
+        }
+
         const renderAvatar = (src: string | undefined, name: string, ring: string) => (
             <div
                 className="relative shrink-0 rounded-full overflow-hidden"
@@ -2195,7 +2282,7 @@ const MessageItem = React.memo(({
                 }}>
 
                 {/* 一起听 / 邀请 · 居中双头像头图 */}
-                {(isTogether || isInviteFromUser || isInviteResult) && (
+                {(isTogether || isInviteFromUser || isInviteResult || isTogetherRequestFromCharacter) && (
                     <div className="relative px-3 pt-3 pb-2 overflow-hidden">
                         {/* 粉紫光晕背景 */}
                         <div aria-hidden className="pointer-events-none absolute inset-0 opacity-70"
@@ -2217,7 +2304,13 @@ const MessageItem = React.memo(({
                         {/* 标签 */}
                         <div className="relative mt-1.5 text-center text-[9px] tracking-[0.3em] uppercase font-semibold"
                             style={{ color: '#9c6fc2', opacity: 0.8 }}>
-                            {isInviteResult ? (inviteAccepted ? 'Invitation Accepted' : 'Invitation Declined') : isInviteFromUser ? 'Invitation Sent' : 'Listening Together'}
+                            {isInviteResult || (isTogetherRequestFromCharacter && inviteStatus)
+                                ? (inviteAccepted ? 'Invitation Accepted' : 'Invitation Declined')
+                                : isInviteFromUser
+                                ? 'Invitation Sent'
+                                : isTogetherRequestFromCharacter
+                                ? 'Together Request'
+                                : 'Listening Together'}
                         </div>
                         <div className="relative mt-0.5 text-center text-[11px]"
                             style={{ color: '#5a49a8', fontFamily: `'Noto Serif','Georgia',serif` }}>
@@ -2266,7 +2359,7 @@ const MessageItem = React.memo(({
                     {!isTogether && !isInviteResult && (
                         <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-full backdrop-blur-sm text-[9px] font-medium"
                             style={{ background: 'rgba(255,255,255,0.85)', color: '#5a49a8' }}>
-                            {isInviteFromUser ? '等待回应' : '📌 收入歌单'}
+                            {isInviteFromUser || isPendingTogetherRequest ? '等待回应' : '📌 收入歌单'}
                         </div>
                     )}
                 </div>
@@ -2294,7 +2387,7 @@ const MessageItem = React.memo(({
                         <span>·</span>
                         <span>{isInviteFromUser ? '邀请' : isUser ? '分享' : '互动'}</span>
                     </div>
-                    {isInviteResult && (
+                    {(isInviteResult || (isTogetherRequestFromCharacter && inviteStatus)) && (
                         <div className="mt-2">
                             <div
                                 className="rounded-xl py-2 text-center text-[11px] font-semibold"
@@ -2308,6 +2401,39 @@ const MessageItem = React.memo(({
                                 }}
                             >
                                 {charName}{inviteAccepted ? ' 接受了邀请' : ' 拒绝了邀请'}
+                            </div>
+                        </div>
+                    )}
+                    {isPendingTogetherRequest && (
+                        <div className="mt-2">
+                            <div className="mb-1 text-center text-[9px]" style={{ color: '#9b8abb' }}>
+                                TA 想和你一起听这首
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={(event) => resolveTogetherRequest(event, 'accepted')}
+                                    className="rounded-xl py-1.5 text-center text-[10px] font-semibold active:scale-[0.98]"
+                                    style={{
+                                        color: '#fff',
+                                        background: 'linear-gradient(135deg, #8f84bd 0%, #c3b2ff 100%)',
+                                        boxShadow: '0 2px 10px rgba(143,132,189,0.2)',
+                                    }}
+                                >
+                                    接受
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={(event) => resolveTogetherRequest(event, 'rejected')}
+                                    className="rounded-xl py-1.5 text-center text-[10px] font-semibold active:scale-[0.98]"
+                                    style={{
+                                        color: '#7c6e9d',
+                                        background: 'rgba(255,255,255,0.56)',
+                                        border: '1px solid rgba(195,178,255,0.45)',
+                                    }}
+                                >
+                                    拒绝
+                                </button>
                             </div>
                         </div>
                     )}

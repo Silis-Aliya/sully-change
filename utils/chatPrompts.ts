@@ -450,9 +450,7 @@ export const ChatPrompts = {
             );
             if (musicBlock) {
                 volatileState += `\n${musicBlock}\n`;
-                if (userListeningContext) {
-                    volatileState += `\n${ContextBuilder.buildMusicActionGuide(isListeningTogether, char, musicSnapshot, userProfile.name)}\n`;
-                }
+                volatileState += `\n${ContextBuilder.buildMusicActionGuide(isListeningTogether, char, musicSnapshot, userProfile.name)}\n`;
             }
         } catch (e) {
             console.error('Failed to inject music atmosphere:', e);

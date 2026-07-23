@@ -46,6 +46,7 @@ export const QUICK_SYNC_STORES = [
     'games',
     'worldbooks',
     'novels',
+    'songs',
     'bank_transactions',
     'bank_data',
     'xhs_activities',
@@ -73,6 +74,7 @@ export const QUICK_SYNC_STORES = [
     'vr_novels',
     'vr_annotations',
     'cc_custom_parts',
+    'vr_music',
     'vr_guestbook',
     'vr_letters',
     'vr_settings',
@@ -111,6 +113,8 @@ const QUICK_SYNC_ASSET_PREFIXES = [
     'deco_',
     'pixel_char_',
     'pixel_home_theme_',
+    'acestep_',
+    'mmmusic_',
 ] as const;
 
 const escapeRegExp = (value: string): string =>

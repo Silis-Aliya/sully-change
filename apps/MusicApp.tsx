@@ -102,6 +102,7 @@ const MusicApp: React.FC = () => {
     const onTogetherLeft = (event: Event) => {
       const charId = (event as CustomEvent<{ charId?: string }>).detail?.charId;
       if (!charId) return;
+      if (userExitTogetherIdsRef.current.delete(charId)) return;
       const char = characters.find(c => c.id === charId);
       addToast(`${char?.name || 'TA'}退出了一起听`, 'info');
     };
@@ -155,11 +156,15 @@ const MusicApp: React.FC = () => {
   const [results, setResults] = useState<Song[]>([]);
   const [searching, setSearching] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showExitTogetherModal, setShowExitTogetherModal] = useState(false);
   const [inviteSelectedIds, setInviteSelectedIds] = useState<Set<string>>(new Set());
+  const [shareSelectedIds, setShareSelectedIds] = useState<Set<string>>(new Set());
   const [togetherNow, setTogetherNow] = useState(Date.now());
   const lyricBoxRef = useRef<HTMLDivElement | null>(null);
   const floatingReturnAppRef = useRef<AppID | null>(null);
   const floatingPlayerEntryRef = useRef(false);
+  const userExitTogetherIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!listeningTogetherStartedAt) return;
@@ -186,6 +191,75 @@ const MusicApp: React.FC = () => {
     setShowInviteModal(true);
   }, [current, listeningTogetherWith, addToast]);
 
+  const openShareModal = useCallback(() => {
+    if (!current) {
+      addToast('先播放一首歌，再分享给 TA', 'info');
+      return;
+    }
+    setShareSelectedIds(new Set());
+    setShowShareModal(true);
+  }, [current, addToast]);
+
+  const toggleShareTarget = useCallback((charId: string) => {
+    setShareSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(charId)) next.delete(charId);
+      else next.add(charId);
+      return next;
+    });
+  }, []);
+
+  const currentSongCardPayload = useCallback(() => {
+    if (!current) return null;
+    return {
+      songId: current.id,
+      id: current.id,
+      name: current.name,
+      artists: current.artists,
+      album: current.album,
+      albumPic: current.albumPic,
+      duration: current.duration,
+      fee: current.fee,
+      local: current.local,
+      localAssetKey: current.localAssetKey,
+      localMimeType: current.localMimeType,
+      localCoverStyle: current.localCoverStyle,
+      customAuthorCharIds: current.customAuthorCharIds,
+      localLyrics: current.localLyrics,
+      lyricLineTimings: current.lyricLineTimings,
+    };
+  }, [current]);
+
+  const confirmShareSong = useCallback(async () => {
+    const song = currentSongCardPayload();
+    if (!song) {
+      addToast('当前没有正在播放的歌', 'error');
+      return;
+    }
+    const targets = characters.filter(c => shareSelectedIds.has(c.id));
+    if (targets.length === 0) {
+      addToast('请选择至少一个联系人', 'info');
+      return;
+    }
+    try {
+      await Promise.all(targets.map(target => DB.saveMessage({
+        charId: target.id,
+        role: 'user',
+        type: 'music_card',
+        content: '[音乐分享]',
+        metadata: {
+          intent: 'share',
+          sharedFromMusicApp: true,
+          song,
+        },
+      } as any)));
+      addToast(`已分享给 ${targets.length} 个联系人`, 'success');
+      setShowShareModal(false);
+    } catch (e: any) {
+      addToast(`分享失败：${e?.message || '未知错误'}`, 'error');
+    }
+  }, [characters, shareSelectedIds, currentSongCardPayload, addToast]);
+
   const confirmInviteTogether = useCallback(async () => {
     if (!current) {
       addToast('当前没有正在播放的歌', 'error');
@@ -198,16 +272,8 @@ const MusicApp: React.FC = () => {
       return;
     }
 
-    const song = {
-      songId: current.id,
-      id: current.id,
-      name: current.name,
-      artists: current.artists,
-      album: current.album,
-      albumPic: current.albumPic,
-      duration: current.duration,
-      fee: current.fee,
-    };
+    const song = currentSongCardPayload();
+    if (!song) return;
     const inviteSong = { id: current.id, name: current.name, artists: current.artists };
 
     try {
@@ -235,7 +301,38 @@ const MusicApp: React.FC = () => {
     } catch (e: any) {
       addToast(`邀请失败：${e?.message || '未知错误'}`, 'error');
     }
-  }, [current, characters, inviteSelectedIds, listeningTogetherWith, addToast]);
+  }, [current, characters, inviteSelectedIds, listeningTogetherWith, currentSongCardPayload, addToast]);
+
+  const confirmExitTogether = useCallback(async () => {
+    const partners = listeningTogetherWith.slice();
+    if (partners.length === 0) {
+      setShowExitTogetherModal(false);
+      return;
+    }
+    const actorName = userProfile?.name || '你';
+    const now = Date.now();
+    let exitLogSaved = true;
+    try {
+      await Promise.all(partners.map((charId, index) => DB.saveMessage({
+        charId,
+        role: 'assistant',
+        type: 'text',
+        content: `${actorName} 退出了一起听`,
+        timestamp: now + index,
+        metadata: {
+          musicTogetherStatus: 'left',
+          hiddenSystemStyle: true,
+          charName: actorName,
+        },
+      } as any)));
+    } catch {
+      exitLogSaved = false;
+    }
+    userExitTogetherIdsRef.current = new Set(partners);
+    partners.forEach(removeListeningPartner);
+    setShowExitTogetherModal(false);
+    addToast(exitLogSaved ? '已退出一起听' : '已退出，但聊天提示保存失败', exitLogSaved ? 'info' : 'error');
+  }, [listeningTogetherWith, removeListeningPartner, userProfile?.name, addToast]);
 
   useEffect(() => {
     const openPlayer = () => {
@@ -501,7 +598,7 @@ const MusicApp: React.FC = () => {
           {primaryCompanion && (
             <button
               type="button"
-              onClick={openInviteModal}
+              onClick={() => setShowExitTogetherModal(true)}
               className="mt-4 shrink-0 min-w-[218px] px-5 py-3 rounded-full flex flex-col items-center justify-center gap-2 transition-transform active:scale-95"
               style={{
                 background: `linear-gradient(135deg, ${C.sakura}1f, ${C.lavender}28)`,
@@ -673,11 +770,146 @@ const MusicApp: React.FC = () => {
               onCyclePlayMode={cyclePlayMode}
               onInvite={openInviteModal}
               inviteActive={listeningTogetherWith.length > 0}
+              onShare={openShareModal}
             />
           </div>
+          {showShareModal && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 px-5 backdrop-blur-sm">
+              <div className="w-full max-w-[340px] max-h-[76%] rounded-[28px] overflow-hidden shizuku-glass-strong" style={{ boxShadow: `0 18px 50px ${C.glow}35` }}>
+                <div className="px-4 pt-4 pb-3 border-b" style={{ borderColor: `${C.faint}30` }}>
+                  <div className="flex items-center justify-between">
+                    <button onClick={() => setShowShareModal(false)} className="text-[11px]" style={{ color: C.muted }}>取消</button>
+                    <div className="flex items-center gap-1.5">
+                      <PlayIcon size={14} weight="duotone" color={C.primary} />
+                      <span className="text-[12px] tracking-[0.22em]" style={{ color: C.primary, fontFamily: 'Georgia, serif' }}>分享这首歌</span>
+                    </div>
+                    <button onClick={confirmShareSong} className="text-[11px] font-semibold" style={{ color: C.accent }}>发送</button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 rounded-2xl p-2 shizuku-glass">
+                    {current.albumPic ? (
+                      <img src={current.albumPic} alt="" className="w-10 h-10 rounded-xl object-cover" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: 'white' }}>♪</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] truncate" style={{ color: C.text }}>{current.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>{current.artists}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="overflow-y-auto px-3 py-3 shizuku-scrollbar" style={{ maxHeight: 'min(320px, calc(76vh - 124px))' }}>
+                  {characters.length === 0 ? (
+                    <div className="text-center text-[11px] py-8" style={{ color: C.faint }}>神经链接里还没有联系人</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {characters.map(ch => {
+                        const selected = shareSelectedIds.has(ch.id);
+                        return (
+                          <button
+                            key={ch.id}
+                            onClick={() => toggleShareTarget(ch.id)}
+                            className="w-full flex items-center gap-3 rounded-2xl p-2.5 text-left transition-all"
+                            style={{
+                              background: selected ? `linear-gradient(135deg, ${C.sakura}22, ${C.lavender}20)` : 'rgba(255,255,255,0.32)',
+                              border: `1px solid ${selected ? C.sakura + '66' : C.faint + '28'}`,
+                            }}
+                          >
+                            {avatarIsImage(ch.avatar) ? (
+                              <img src={ch.avatar} alt="" className="w-11 h-11 rounded-full object-cover shrink-0" />
+                            ) : (
+                              <div className="w-11 h-11 rounded-full flex items-center justify-center text-white text-sm font-semibold shrink-0" style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.lavender})` }}>
+                                {ch.avatar || ch.name.slice(0, 1)}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm truncate" style={{ color: C.text }}>{ch.name}</div>
+                              <div className="text-[10px] truncate" style={{ color: C.muted }}>发送音乐分享卡片</div>
+                            </div>
+                            <div
+                              className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+                              style={{
+                                background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(255,255,255,0.4)',
+                                color: selected ? 'white' : C.faint,
+                                border: `1px solid ${selected ? 'transparent' : C.faint + '40'}`,
+                              }}
+                            >
+                              {selected && <Check size={13} weight="bold" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {showExitTogetherModal && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 px-5 backdrop-blur-sm">
+              <div className="w-full max-w-[320px] rounded-[28px] overflow-hidden shizuku-glass-strong p-4" style={{ boxShadow: `0 18px 50px ${C.glow}35` }}>
+                <div className="flex flex-col items-center text-center">
+                  <div className="flex items-center justify-center gap-2.5">
+                    {renderTogetherAvatar(userProfile?.avatar, userProfile?.name || '你', C.glow)}
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center"
+                      style={{
+                        color: C.sakura,
+                        background: 'rgba(255,255,255,0.62)',
+                        border: `1px solid ${C.glow}55`,
+                        boxShadow: `0 0 18px ${C.sakura}33`,
+                      }}
+                    >
+                      ♥
+                    </div>
+                    {renderTogetherAvatar(primaryCompanion?.avatar, primaryCompanion?.name, C.sakura)}
+                    {extraCompanionCount > 0 && (
+                      <div
+                        className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 bg-white/80"
+                        style={{ color: C.primary, borderColor: C.lavender, boxShadow: `0 0 18px ${C.lavender}44` }}
+                      >
+                        +{extraCompanionCount}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-3 text-[12px] tracking-[0.18em]" style={{ color: C.primary, fontFamily: 'Georgia, serif' }}>
+                    是否退出一起听？
+                  </div>
+                  <div className="mt-1 text-[11px] leading-relaxed" style={{ color: C.muted }}>
+                    退出后会结束当前一起听，并在聊天里留下退出提示
+                  </div>
+                  <div className="mt-4 grid w-full grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowExitTogetherModal(false)}
+                      className="rounded-2xl py-2 text-[11px] font-semibold active:scale-[0.98]"
+                      style={{
+                        color: C.muted,
+                        background: 'rgba(255,255,255,0.48)',
+                        border: `1px solid ${C.faint}35`,
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmExitTogether}
+                      className="rounded-2xl py-2 text-[11px] font-semibold active:scale-[0.98]"
+                      style={{
+                        color: '#fff',
+                        background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+                        boxShadow: `0 8px 20px ${C.glow}28`,
+                      }}
+                    >
+                      退出
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {showInviteModal && (
-            <div className="absolute inset-0 z-50 flex items-end justify-center bg-black/20 backdrop-blur-sm">
-              <div className="w-full max-h-[78%] rounded-t-[28px] overflow-hidden shizuku-glass-strong" style={{ boxShadow: `0 -10px 40px ${C.glow}35` }}>
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 px-5 backdrop-blur-sm">
+              <div className="w-full max-w-[340px] max-h-[76%] rounded-[28px] overflow-hidden shizuku-glass-strong" style={{ boxShadow: `0 18px 50px ${C.glow}35` }}>
                 <div className="px-4 pt-4 pb-3 border-b" style={{ borderColor: `${C.faint}30` }}>
                   <div className="flex items-center justify-between">
                     <button onClick={() => setShowInviteModal(false)} className="text-[11px]" style={{ color: C.muted }}>取消</button>
@@ -699,7 +931,7 @@ const MusicApp: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <div className="overflow-y-auto px-3 py-3 shizuku-scrollbar" style={{ maxHeight: 'calc(78vh - 124px)' }}>
+                <div className="overflow-y-auto px-3 py-3 shizuku-scrollbar" style={{ maxHeight: 'min(320px, calc(76vh - 124px))' }}>
                   {characters.length === 0 ? (
                     <div className="text-center text-[11px] py-8" style={{ color: C.faint }}>神经链接里还没有联系人</div>
                   ) : (

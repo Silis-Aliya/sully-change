@@ -2117,6 +2117,13 @@ export interface CharPlaylistSong {
     albumPic: string;
     duration: number;
     fee: number;
+    local?: boolean;
+    localAssetKey?: string;
+    localMimeType?: string;
+    localCoverStyle?: string;
+    customAuthorCharIds?: string[];
+    localLyrics?: string;
+    lyricLineTimings?: number[];
     /**
      * 'user' = 这首是从 user 那里"抄"过来的（user 在听 → char 加进自己歌单）。
      * 'discovered' = char 自己探索 / 初始化时找到的。

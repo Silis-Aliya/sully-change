@@ -485,8 +485,9 @@ export const SubActions: React.FC<{
   onCyclePlayMode?: () => void;    // 循环模式切换
   onInvite?: () => void;
   inviteActive?: boolean;
+  onShare?: () => void;
   onAdd?: () => void;
-}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onInvite, inviteActive, onAdd }) => {
+}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onInvite, inviteActive, onShare, onAdd }) => {
   const Item = ({ icon, label, onClick, active }: { icon: React.ReactNode; label: string; onClick?: () => void; active?: boolean }) => (
     <button onClick={onClick}
       className="flex flex-col items-center gap-1 transition-opacity active:scale-95"
@@ -545,6 +546,13 @@ export const SubActions: React.FC<{
       <path d="M8.5 19.5c2.2 1.2 4.8 1.2 7 0" />
     </svg>
   );
+  const shareSvg = (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+      <path d="M12 15V4" />
+      <path d="M8 8l4-4 4 4" />
+    </svg>
+  );
   const downloadSvg = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 4v12" />
@@ -562,6 +570,7 @@ export const SubActions: React.FC<{
       {showDownload && onDownload && <Item onClick={onDownload} active label="Save" icon={downloadSvg} />}
       {onCyclePlayMode && <Item onClick={onCyclePlayMode} active={playMode !== 'loop'} label={playModeLabel[playMode]} icon={loopSvg} />}
       {onInvite && <Item onClick={onInvite} active={inviteActive} label="Together" icon={inviteSvg} />}
+      {onShare && <Item onClick={onShare} active label="Share" icon={shareSvg} />}
       {onAdd && <Item onClick={onAdd} label="Add" icon={addSvg} />}
     </div>
   );

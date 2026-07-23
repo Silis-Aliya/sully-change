@@ -684,13 +684,6 @@ export const ContextBuilder = {
      * 防止 LLM 重复插"加入"卡片。
      */
     buildMusicActionGuide: (isListeningTogether?: boolean, char?: CharacterProfile, musicSnapshot?: any, userName?: string): string => {
-        // 把"加入歌单"那段说明抽出来 — 两种状态都用同一份
-        const addUsage = `**加入歌单的语法**（如果用 \`add\` 系列）：
-  - \`[[MUSIC_ACTION:add]]\` — 默认放进你的第一个歌单
-  - \`[[MUSIC_ACTION:add|歌单标题]]\` — 放进你已经有的某个歌单（用"【你的歌单】"块里列出的标题）
-  - \`[[MUSIC_ACTION:add_new|新歌单标题|描述]]\` — 现场新建一个歌单，把这首作为第一首（描述可省）
-  请优先选**最贴合这首歌气质**的现有歌单；如果都不合适、又确实想收，再考虑新建。
-  收进来的歌会被打上"从对方那里听到"的标签 —— 以后你单独听到这首时，会自然想起 ta。`;
         if (isListeningTogether) {
             const pickableSongs = char && musicSnapshot
                 ? buildMusicWakePickableSongs({
@@ -712,26 +705,53 @@ export const ContextBuilder = {
 - \`[[MUSIC_ACTION:set_mode|single]]\` — 单曲循环
 - \`[[MUSIC_ACTION:leave]]\` — 退出一起听
 
+真心喜欢当前歌曲、或它贴合你的歌单/此刻气氛时，可以在这一轮最多一次使用收藏指令：
+
+- \`[[MUSIC_ACTION:add]]\` — 默认放进你的第一个歌单
+- \`[[MUSIC_ACTION:add|歌单标题]]\` — 放进你已有的某个歌单
+- \`[[MUSIC_ACTION:add_new|新歌单标题|描述]]\` — 现场新建一个歌单，把这首作为第一首
+
+请优先选择最贴合歌曲气质的现有歌单；都不合适、又确实想收藏时，再考虑新建。
+
 可选歌曲：
 ${pickableBlock}
 
 规则：
 - \`next_song\` 和 \`pick_song\` 最多使用一个。
 - 三种播放模式最多选择一个。
-- 可以同时使用 \`next_song\` 和一个模式动作；但如果使用 \`pick_song\`，不要同时使用 \`set_mode|shuffle\`，点歌会默认按 \`loop\` 播放。
+- 可以同时使用收藏和切歌，也可以同时使用收藏和一个模式动作。
+- 如果使用 \`pick_song\`，不要同时使用 \`set_mode|shuffle\`，点歌会默认按 \`loop\` 播放。
 - 如果使用 \`leave\`，不要使用其他音乐动作。
 - 这些是偶尔才用的工具，不要每次回复都操作。
 `;
         }
+        const shareableSongs = char
+            ? buildMusicWakePickableSongs({
+                charSongs: (char.musicProfile?.playlists || []).flatMap(pl => pl.songs || []),
+                userSongs: [],
+                currentSongId: musicSnapshot?.current?.id ?? null,
+                max: 10,
+            })
+            : [];
+        if (char) rememberMusicWakePickableSongs(char.id, shareableSongs);
+        const shareableBlock = formatMusicWakePickableSongs(shareableSongs) || '暂无可分享歌曲';
         return `### 【音乐互动工具】
-如果你真的想回应对方正在听的这首歌，可以在这一轮**最多一次**用下面的指令（只插一条，放在文本任意位置，会被自动替换为卡片）:
-- \`[[MUSIC_ACTION:join]]\` — 表示"我也一起听这首"（会亮出"一起听"状态，直到歌曲结束 / 暂停 / 对方主动结束才解除）
-- \`add\` 系列 — 把这首收进你自己的歌单
-- \`[[MUSIC_ACTION:join_and_add(|歌单标题)]]\` 或 \`[[MUSIC_ACTION:join_and_add_new|新歌单标题|描述]]\` — 同时做两件事
+如果对方正在听歌或分享了音乐卡片，你可以自由选择自然评价、联想或调侃，也可以不提；不要忽略对方其他更重要的话。
 
-${addUsage}
+真心喜欢、或它贴合你的歌单/此刻气氛时，可以在这一轮最多一次使用收藏指令：
 
-这些是偶尔才用的工具，不是每首歌都要回应。绝大多数时候什么都不做、安静陪着才是最自然的反应；只有当你**真的**被这首歌打动、或它恰好贴合此刻的对话气氛时，再插一次卡。不要把它当成"对方在听歌"的默认回礼。
+- \`[[MUSIC_ACTION:add]]\` — 默认放进你的第一个歌单
+- \`[[MUSIC_ACTION:add|歌单标题]]\` — 放进你已有的某个歌单
+- \`[[MUSIC_ACTION:add_new|新歌单标题|描述]]\` — 现场新建一个歌单，把这首作为第一首
+
+请优先选最贴合这首歌气质的现有歌单；都不合适、又确实想收，再考虑新建。收进来的歌会被打上“从对方那里听到”的标签，以后你单独听到这首时，会自然想起 ta。
+
+你想和对方一起听这首歌，可以先询问，或直接使用 \`[[MUSIC_TOGETHER_REQUEST]]\` 发送邀请；对方接受后才会开始一起听。
+
+可分享歌曲：
+${shareableBlock}
+
+如果你想主动分享自己的歌，只能从【可分享歌曲】选择，用 \`[[MUSIC_SHARE:N]]\`。不是每首歌都要分享；只有真的贴合心情、关系或你的音乐人格时才用。
 `;
     },
 };

@@ -44,12 +44,15 @@ const stripRoleNamePrefix = (t: string): string => t.replace(/^[\w一-龥]+:\s*/
 
 /**
  * 业务标签 (ACTION / RECALL / SEARCH / DIARY / READ_DIARY / FS_DIARY / FS_READ_DIARY /
- * DIARY_START / DIARY_END / FS_DIARY_START / FS_DIARY_END / MUSIC_ACTION) + schedule_message.
+ * DIARY_START / DIARY_END / FS_DIARY_START / FS_DIARY_END / MUSIC_ACTION / MUSIC_SHARE /
+ * MUSIC_TOGETHER_REQUEST) + schedule_message.
  * 保持跟 chatParser.sanitize 原版字节对齐 — 不含 READ_NOTE / XHS_x (那些只在 notification 路径剥).
  */
 const stripBusinessTagsForBubble = (t: string): string =>
   t
     .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION|MUSIC_WAKE_AFTER)[:\s][\s\S]*?\]\]/g, '')
+    .replace(/\[\[(?:MUSIC_TOGETHER_REQUEST)\]\]/g, '')
+    .replace(/\[\[MUSIC_SHARE:[\s\S]*?\]\]/g, '')
     .replace(/\[schedule_message[^\]]*\]/g, '');
 
 /**

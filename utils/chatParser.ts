@@ -4,15 +4,24 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { CharacterProfile, CharPlaylistSong } from '../types';
 import { sanitizeForBubble } from './sanitize';
 import { executeLifeDirectives } from './lifeRecords';
+import { buildMusicWakePickableSongs, getRememberedMusicWakePickableSongs, type MusicWakePickableSong } from './musicTrackChange';
 
 export interface MusicActionSnapshot {
     songId: number;
+    id?: number;
     name: string;
     artists: string;
     album: string;
     albumPic: string;
     duration: number;
     fee: number;
+    local?: boolean;
+    localAssetKey?: string;
+    localMimeType?: string;
+    localCoverStyle?: string;
+    customAuthorCharIds?: string[];
+    localLyrics?: string;
+    lyricLineTimings?: number[];
 }
 
 /**
@@ -38,6 +47,7 @@ export interface MusicActionHooks {
     nextSong?: () => void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
     pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
+    playSharedSong?: (song: MusicActionSnapshot) => Promise<void>;
     /**
      * 把 song 加到 char 的歌单。
      * 返回 { playlistTitle, created } —— created=true 表示这次是新建了歌单。
@@ -48,6 +58,78 @@ export interface MusicActionHooks {
         target?: AddSongTarget,
     ) => Promise<{ playlistTitle: string; created: boolean } | null>;
 }
+
+const musicSnapshotFromSong = (song: any): MusicActionSnapshot | null => {
+    if (!song?.name) return null;
+    return {
+        songId: Number(song.songId || song.id || 0),
+        id: Number(song.id || song.songId || 0),
+        name: String(song.name || ''),
+        artists: String(song.artists || ''),
+        album: String(song.album || ''),
+        albumPic: String(song.albumPic || ''),
+        duration: Number(song.duration || 0),
+        fee: Number(song.fee || 0),
+        local: song.local,
+        localAssetKey: song.localAssetKey,
+        localMimeType: song.localMimeType,
+        localCoverStyle: song.localCoverStyle,
+        customAuthorCharIds: song.customAuthorCharIds,
+        localLyrics: song.localLyrics,
+        lyricLineTimings: song.lyricLineTimings,
+    };
+};
+
+const musicSnapshotFromPickableSong = (song: MusicWakePickableSong): MusicActionSnapshot => ({
+    songId: song.id,
+    id: song.id,
+    name: song.name,
+    artists: song.artists,
+    album: song.album || '',
+    albumPic: song.albumPic || '',
+    duration: song.duration || 0,
+    fee: song.fee || 0,
+    local: song.local,
+    localAssetKey: song.localAssetKey,
+    localMimeType: song.localMimeType,
+    localCoverStyle: song.localCoverStyle,
+    customAuthorCharIds: song.customAuthorCharIds,
+    localLyrics: song.localLyrics,
+    lyricLineTimings: song.lyricLineTimings,
+});
+
+const getCurrentTurnSharedMusicSnapshot = async (
+    charId: string,
+    role?: 'user' | 'assistant',
+): Promise<MusicActionSnapshot | null> => {
+    const recent = await DB.getRecentMessagesByCharId(charId, 24, true).catch(() => []);
+    for (const message of recent.slice().reverse()) {
+        // The previous assistant text marks the start of an older turn. Music actions
+        // must not silently bind to an unrelated share card from earlier conversation.
+        if (message.role === 'assistant' && message.type !== 'music_card') break;
+        if (message.type !== 'music_card' || message.metadata?.intent !== 'share') continue;
+        if (role && message.role !== role) continue;
+        const snap = musicSnapshotFromSong(message.metadata?.song);
+        if (snap) return snap;
+    }
+    return null;
+};
+
+const getShareableMusicSnapshot = async (charId: string, index: number): Promise<MusicActionSnapshot | null> => {
+    let candidates = getRememberedMusicWakePickableSongs(charId);
+    if (!candidates.length) {
+        const chars = await DB.getAllCharacters().catch(() => []);
+        const targetChar = chars.find(c => c.id === charId);
+        candidates = buildMusicWakePickableSongs({
+            charSongs: (targetChar?.musicProfile?.playlists || []).flatMap(pl => pl.songs || []),
+            userSongs: [],
+            currentSongId: null,
+            max: 10,
+        });
+    }
+    const picked = candidates[index] || (index > 0 ? candidates[index - 1] : undefined);
+    return picked ? musicSnapshotFromPickableSong(picked) : null;
+};
 
 export const ChatParser = {
     // Return cleaned content and perform side effects
@@ -103,6 +185,55 @@ export const ChatParser = {
         if (content.includes('[[ACTION:TRANSFER_RETURN]]')) {
             await resolveUserTransfer('returned');
             content = content.replace(/\[\[ACTION:TRANSFER_RETURN\]\]/g, '').trim();
+        }
+
+        // MUSIC_SHARE — char 主动从自己的可分享歌曲列表里发一张音乐分享卡。
+        //   [[MUSIC_SHARE:N]]
+        const MUSIC_SHARE_RE = /\[\[MUSIC_SHARE:\s*(\d+)\s*\]\]/g;
+        const shareMatches = [...content.matchAll(MUSIC_SHARE_RE)];
+        if (shareMatches.length) {
+            const rawIndex = Number.parseInt(shareMatches[0][1], 10);
+            const snap = Number.isInteger(rawIndex) ? await getShareableMusicSnapshot(charId, rawIndex) : null;
+            if (snap) {
+                await DB.saveMessage({
+                    charId,
+                    role: 'assistant',
+                    type: 'music_card',
+                    content: '[音乐分享]',
+                    metadata: {
+                        intent: 'share',
+                        sharedByCharacter: true,
+                        song: snap,
+                    },
+                });
+                addToast(`${charName} 分享了一首歌`, 'info');
+            }
+            content = content.replace(MUSIC_SHARE_RE, '').trim();
+        }
+
+        // MUSIC_TOGETHER_REQUEST — char 向 user 发起一起听邀请，user 点接受后才加入。
+        const MUSIC_TOGETHER_REQUEST_RE = /\[\[MUSIC_TOGETHER_REQUEST\]\]/g;
+        if (MUSIC_TOGETHER_REQUEST_RE.test(content)) {
+            const sharedSnap =
+                await getCurrentTurnSharedMusicSnapshot(charId, 'assistant')
+                || await getCurrentTurnSharedMusicSnapshot(charId, 'user');
+            const snap = sharedSnap || musicHooks?.getListeningSnapshot() || null;
+            if (snap) {
+                await DB.saveMessage({
+                    charId,
+                    role: 'assistant',
+                    type: 'music_card',
+                    content: '[一起听邀请]',
+                    metadata: {
+                        intent: 'join',
+                        togetherRequestFromCharacter: true,
+                        inviteStatus: 'pending',
+                        song: snap,
+                    },
+                });
+                addToast(`${charName} 邀请你一起听`, 'info');
+            }
+            content = content.replace(MUSIC_TOGETHER_REQUEST_RE, '').trim();
         }
 
         // MUSIC_ACTION — char 对 user 正在听的歌表态 / 一起听播放器操作
@@ -187,7 +318,8 @@ export const ChatParser = {
                 }
             }
 
-            const snap = musicHooks.getListeningSnapshot();
+            const sharedSnap = await getCurrentTurnSharedMusicSnapshot(charId, 'user');
+            const snap = sharedSnap || musicHooks.getListeningSnapshot();
             if (snap) {
                 let addedToPlaylistTitle: string | undefined;
                 let playlistCreated = false;
@@ -204,6 +336,13 @@ export const ChatParser = {
                             albumPic: snap.albumPic,
                             duration: snap.duration,
                             fee: snap.fee,
+                            local: snap.local,
+                            localAssetKey: snap.localAssetKey,
+                            localMimeType: snap.localMimeType,
+                            localCoverStyle: snap.localCoverStyle,
+                            customAuthorCharIds: snap.customAuthorCharIds,
+                            localLyrics: snap.localLyrics,
+                            lyricLineTimings: snap.lyricLineTimings,
                             source: 'user',
                             addedAt: Date.now(),
                         };

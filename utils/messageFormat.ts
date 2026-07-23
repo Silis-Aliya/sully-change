@@ -181,11 +181,16 @@ export function normalizeMessageContent(
     // "[音乐卡片]" 这种没信息量的占位，丢掉"谁因为什么歌做了什么"的语义
     if (type === 'music_card') {
         const song = msg.metadata?.song as { name?: string; artists?: string } | undefined;
-        const intent = msg.metadata?.intent as 'join' | 'add' | 'join_and_add' | undefined;
+        const intent = msg.metadata?.intent as 'share' | 'join' | 'add' | 'join_and_add' | undefined;
         const addedTo = msg.metadata?.addedToPlaylistTitle as string | undefined;
         const inviteFromUser = !!msg.metadata?.inviteFromUser;
         if (song?.name) {
             const songDesc = song.artists ? `《${song.name}》— ${song.artists}` : `《${song.name}》`;
+            if (intent === 'share') {
+                const sender = msg.role === 'user' ? userName : charName;
+                const recipient = msg.role === 'user' ? charName : userName;
+                return `[音乐分享] ${sender}分享了一首歌给${recipient}：${songDesc}`;
+            }
             if (inviteFromUser || msg.role === 'user') {
                 return `[音乐卡片] ${userName}邀请${charName}一起听：${songDesc}`;
             }

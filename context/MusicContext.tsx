@@ -911,6 +911,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           albumPic: current.albumPic,
           duration: current.duration,
           fee: current.fee,
+          local: current.local,
+          localAssetKey: current.localAssetKey,
+          localMimeType: current.localMimeType,
+          localCoverStyle: current.localCoverStyle,
+          customAuthorCharIds: current.customAuthorCharIds,
+          localLyrics: current.localLyrics,
+          lyricLineTimings: current.lyricLineTimings,
         };
       },
       isListeningTogether: (cid: string) => {
@@ -967,6 +974,25 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } catch {
           return null;
         }
+      },
+      playSharedSong: async (sharedSong) => {
+        const song: Song = {
+          id: sharedSong.songId || sharedSong.id,
+          name: sharedSong.name,
+          artists: sharedSong.artists,
+          album: sharedSong.album || '',
+          albumPic: sharedSong.albumPic || '',
+          duration: sharedSong.duration || 0,
+          fee: sharedSong.fee || 0,
+          local: sharedSong.local,
+          localAssetKey: sharedSong.localAssetKey,
+          localMimeType: sharedSong.localMimeType,
+          localCoverStyle: sharedSong.localCoverStyle,
+          customAuthorCharIds: sharedSong.customAuthorCharIds,
+          localLyrics: sharedSong.localLyrics,
+          lyricLineTimings: sharedSong.lyricLineTimings,
+        };
+        await playSong(song, { alsoSetQueue: true });
       },
       addSongToCharPlaylist: async (cid, song, target) => {
         try {

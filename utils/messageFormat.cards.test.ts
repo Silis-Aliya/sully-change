@@ -74,3 +74,29 @@ describe('normalizeMessageContent · webpage_card', () => {
     expect(out).not.toContain('网页正文');
   });
 });
+
+describe('normalizeMessageContent · music share', () => {
+  it('describes a user share with the user as sender', () => {
+    const out = normalizeMessageContent(
+      mk('music_card', '[音乐分享]', {
+        intent: 'share',
+        song: { name: 'Stay with Me', artists: 'Miki Matsubara' },
+      }),
+      'Sully', '我',
+    );
+    expect(out).toContain('我分享了一首歌给Sully');
+  });
+
+  it('describes a character share with the character as sender', () => {
+    const message = {
+      ...mk('music_card', '[音乐分享]', {
+        intent: 'share',
+        sharedByCharacter: true,
+        song: { name: 'Stay with Me', artists: 'Miki Matsubara' },
+      }),
+      role: 'assistant',
+    } as Message;
+    const out = normalizeMessageContent(message, 'Sully', '我');
+    expect(out).toContain('Sully分享了一首歌给我');
+  });
+});

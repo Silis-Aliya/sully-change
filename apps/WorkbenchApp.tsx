@@ -5,7 +5,7 @@ import { ChatParser } from '../utils/chatParser';
 import { processImage } from '../utils/file';
 import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
 import { XhsMcpClient, normalizeNote } from '../utils/xhsMcpClient';
-import { expandShortUrl } from '../utils/webpageExtractor';
+import { detectXhsShortUrl, expandShortUrl, extractXhsNoteId } from '../utils/webpageExtractor';
 import type { Emoji, EmojiCategory, Message, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchProject, WorkbenchSession, WorkbenchSummary } from '../types';
 import {
     DEFAULT_WORKBENCH_CONFIG,
@@ -105,19 +105,18 @@ const resolveWorkbenchXhsNote = async (
     realtimeConfig: any,
     addToast: (message: string, type?: 'success' | 'error' | 'info') => void,
 ): Promise<Record<string, any> | null> => {
-    const xhsFullMatch = text.match(/xiaohongshu\.com\/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/i);
-    const xhsShortMatch = text.match(/(?:https?:\/\/)?(?:www\.)?xhslink\.(?:com|cn)\/[A-Za-z0-9/_-]+/i);
-    if (!xhsFullMatch && !xhsShortMatch) return null;
+    const xhsFullNoteId = extractXhsNoteId(text);
+    const xhsShortUrl = detectXhsShortUrl(text);
+    if (!xhsFullNoteId && !xhsShortUrl) return null;
 
-    let noteId = xhsFullMatch?.[1] || '';
+    let noteId = xhsFullNoteId || '';
     let xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
     let shortLinkError = '';
 
-    if (!noteId && xhsShortMatch) {
+    if (!noteId && xhsShortUrl) {
         try {
-            const shortUrl = /^https?:\/\//i.test(xhsShortMatch[0]) ? xhsShortMatch[0] : `https://${xhsShortMatch[0]}`;
-            const finalUrl = await expandShortUrl(shortUrl);
-            noteId = finalUrl.match(/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/)?.[1] || '';
+            const finalUrl = await expandShortUrl(xhsShortUrl);
+            noteId = extractXhsNoteId(finalUrl) || '';
             xsecToken = xsecToken || finalUrl.match(/xsec_token=([^&\s]+)/)?.[1];
         } catch (e: any) {
             shortLinkError = e?.message || '短链展开失败';
@@ -820,6 +819,7 @@ const WorkbenchApp: React.FC = () => {
     const [progressCards, setProgressCards] = useState<WorkbenchSummary[]>([]);
     const [progressSummaryMode, setProgressSummaryMode] = useState<'codex' | 'character'>('codex');
     const [progressModeMenuOpen, setProgressModeMenuOpen] = useState(false);
+    const [progressAuthorMenuCardId, setProgressAuthorMenuCardId] = useState<string | null>(null);
     const [indexOpen, setIndexOpen] = useState(false);
     const [activeSpace, setActiveSpace] = useState<WorkbenchSpace>('work');
     const [instructionsOpen, setInstructionsOpen] = useState(false);
@@ -1158,14 +1158,38 @@ const WorkbenchApp: React.FC = () => {
         setMessages(prev => [...prev, message]);
     };
 
-    const updateProgressCardAuthor = async (card: WorkbenchSummary, authorName: string, sourceCharacterId?: string) => {
+    const appendXhsCardForText = async (
+        base: Omit<WorkbenchMessage, 'id' | 'content' | 'createdAt' | 'type'>,
+        text: string,
+        createdAt = Date.now(),
+    ): Promise<WorkbenchMessage | null> => {
+        const note = await resolveWorkbenchXhsNote(text, realtimeConfig, addToast);
+        if (!note) return null;
+        const message: WorkbenchMessage = {
+            ...base,
+            id: makeId('wbm'),
+            type: 'xhs_card',
+            content: note.title || '小红书笔记',
+            createdAt,
+            metadata: { ...(base.metadata || {}), xhsNote: note },
+        };
+        await appendMessage(message);
+        return message;
+    };
+
+    const updateProgressCardAuthor = async (
+        card: WorkbenchSummary,
+        source: 'codex' | 'character',
+        authorName: string,
+        sourceCharacterId?: string,
+    ) => {
         const nextContent = ensureProgressCardAuthor(card.content, authorName);
         const nextSummary: WorkbenchSummary = {
             ...card,
             content: nextContent,
-            source: 'character',
+            source,
             sourceName: authorName,
-            sourceCharacterId,
+            sourceCharacterId: source === 'character' ? sourceCharacterId : undefined,
         };
         await DB.saveWorkbenchSummary(nextSummary);
         setProgressCards(prev => prev.map(item => item.id === card.id ? nextSummary : item));
@@ -1174,13 +1198,13 @@ const WorkbenchApp: React.FC = () => {
             ...(metadata || {}),
             progressCard: true,
             workbenchSummaryId: card.id,
-            source: 'character',
-            summarySource: 'character',
+            source,
+            summarySource: source,
             sourceName: authorName,
             summarySourceName: authorName,
-            speakerName: authorName,
-            characterId: sourceCharacterId,
-            sourceCharacterId,
+            speakerName: source === 'character' ? authorName : undefined,
+            characterId: source === 'character' ? sourceCharacterId : undefined,
+            sourceCharacterId: source === 'character' ? sourceCharacterId : undefined,
         });
         const matchesWorkbenchSummary = (message: WorkbenchMessage) => (
             message.sessionId === card.sessionId
@@ -1212,11 +1236,9 @@ const WorkbenchApp: React.FC = () => {
         }));
         await Promise.all(changedWorkbenchMessages.map(message => DB.saveWorkbenchMessage(message)));
 
-        if (sourceCharacterId) {
-            const chatMessages = await DB.getRawStoreData('messages').catch(() => [] as Message[]);
-            const matchingChatMessages = chatMessages.filter((message: Message) => (
-                message.charId === sourceCharacterId
-                && message.type === 'code_card'
+        const chatMessages = await DB.getRawStoreData('messages').catch(() => [] as Message[]);
+        const matchingChatMessages = chatMessages.filter((message: Message) => (
+                message.type === 'code_card'
                 && (
                     message.metadata?.workbenchSummaryId === card.id
                     || (
@@ -1225,11 +1247,10 @@ const WorkbenchApp: React.FC = () => {
                         && message.content === card.content
                     )
                 )
-            ));
-            for (const message of matchingChatMessages) {
-                await DB.updateMessage(message.id, nextContent);
-                await DB.updateMessageMetadata(message.id, metadata => nextMetadata(metadata));
-            }
+        ));
+        for (const message of matchingChatMessages) {
+            await DB.updateMessage(message.id, nextContent);
+            await DB.updateMessageMetadata(message.id, metadata => nextMetadata(metadata));
         }
         addToast(`已把这张进度卡标为 ${authorName} 写`, 'success');
     };
@@ -1288,7 +1309,8 @@ const WorkbenchApp: React.FC = () => {
                 createdAt: Date.now(),
             };
             await appendMessage(message);
-            return [message];
+            const xhsCard = await appendXhsCardForText(base, content, Date.now() + 1);
+            return xhsCard ? [message, xhsCard] : [message];
         }
         const parts = ChatParser.splitResponse(rawReply || '收到，但这轮没有返回正文。');
         let pendingReplyTarget: WorkbenchMessage['replyTo'] | undefined;
@@ -1332,6 +1354,8 @@ const WorkbenchApp: React.FC = () => {
                 };
                 await appendMessage(message);
                 saved.push(message);
+                const xhsCard = await appendXhsCardForText(base, cleanChunk, Date.now() + 1);
+                if (xhsCard) saved.push(xhsCard);
                 pendingReplyTarget = undefined;
             }
         }
@@ -2652,15 +2676,42 @@ const WorkbenchApp: React.FC = () => {
                                                     <span className="text-[10px] font-semibold text-slate-400">#{progressCards.length - index}</span>
                                                     <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusClass}`}>{status}</span>
                                                     <span className="px-2 py-0.5 rounded-full border border-violet-100 bg-violet-50 text-[10px] font-semibold text-violet-700">{author} 写</span>
-                                                    {selectedParticipant && author !== selectedParticipant.name && (
+                                                    <div className="relative">
                                                         <button
                                                             type="button"
-                                                            onClick={() => void updateProgressCardAuthor(card, selectedParticipant.name, selectedParticipant.id)}
+                                                            onClick={() => setProgressAuthorMenuCardId(prev => prev === card.id ? null : card.id)}
                                                             className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500 active:scale-95"
                                                         >
-                                                            标为 {selectedParticipant.name}
+                                                            修改作者
                                                         </button>
-                                                    )}
+                                                        {progressAuthorMenuCardId === card.id && (
+                                                            <div className="absolute left-0 top-7 z-20 w-44 max-h-52 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl workbench-index-scroll">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setProgressAuthorMenuCardId(null);
+                                                                        void updateProgressCardAuthor(card, 'codex', 'Code');
+                                                                    }}
+                                                                    className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.98]"
+                                                                >
+                                                                    Code
+                                                                </button>
+                                                                {characters.map(character => (
+                                                                    <button
+                                                                        key={character.id}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setProgressAuthorMenuCardId(null);
+                                                                            void updateProgressCardAuthor(card, 'character', character.name, character.id);
+                                                                        }}
+                                                                        className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 active:scale-[0.98]"
+                                                                    >
+                                                                        {character.name}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <h3 className="mt-2 text-sm font-semibold text-slate-900 break-words">{fields['任务'] || session?.title || '未命名任务'}</h3>
                                             </div>
