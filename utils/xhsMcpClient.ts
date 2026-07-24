@@ -75,6 +75,12 @@ const bridgePost = async (
         if (data.error) {
             return { success: false, error: data.error };
         }
+        if (data.success === false) {
+            const upstream = data.raw_error || data;
+            const message = upstream?.msg || upstream?.message || upstream?.error
+                || data.msg || `小红书 Lite ${endpoint} 请求失败`;
+            return { success: false, error: String(message), data };
+        }
         return { success: true, data };
     } catch (e: any) {
         return { success: false, error: e.message };
