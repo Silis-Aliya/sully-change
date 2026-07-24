@@ -1,5 +1,5 @@
 import type { RealtimeConfig } from '../types';
-import { XhsMcpClient, normalizeNote } from './xhsMcpClient';
+import { XhsMcpClient, normalizeXhsLiteDetail } from './xhsMcpClient';
 import { detectXhsShortUrl, expandShortUrl, extractXhsNoteId } from './webpageExtractor';
 
 export interface ResolvedXhsShareLink {
@@ -76,9 +76,7 @@ export const resolveXhsShareLink = async (
                 error: result.error || '小红书详情接口没有返回笔记数据',
             };
         }
-        const dataRoot = (result.data as any)?.data || result.data;
-        const noteObj = dataRoot?.note || (result.data as any)?.note || result.data;
-        const fetched = normalizeNote(noteObj);
+        const fetched = normalizeXhsLiteDetail(result.data);
         note = {
             ...note,
             ...fetched,
@@ -87,17 +85,6 @@ export const resolveXhsShareLink = async (
             xsecToken: fetched.xsecToken || xsecToken,
             sourceUrl,
         };
-        const rawComments = dataRoot?.comments?.list || dataRoot?.comments
-            || (noteObj as any)?.comments?.list || (noteObj as any)?.comments || [];
-        const comments = (Array.isArray(rawComments) ? rawComments : [])
-            .map((comment: any) => ({
-                author: comment.userInfo?.nickname || comment.nickname || comment.userName || comment.author || '匿名',
-                content: comment.content || '',
-                likes: comment.likeCount || comment.like_count || comment.likes || 0,
-            }))
-            .filter((comment: any) => comment.content)
-            .slice(0, 15);
-        if (comments.length) note.comments = comments;
         return { detected: true, note, detailLoaded: true };
     } catch (error: any) {
         return {

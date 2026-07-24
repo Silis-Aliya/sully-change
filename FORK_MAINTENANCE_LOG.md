@@ -18,11 +18,11 @@ Important rules:
 - Keep this file updated with what changed, risk points, and follow-up checks.
 
 Current known baseline:
-- upstream/master merged through 3255ee7.
-- A later upstream check found no commits beyond 3255ee7; do not merge unless a new fetch shows a newer upstream tip.
-- Current fork release head is d5bb100 on `codex/merge-upstream-20260721`.
-- Last verified production build passed after the music sharing, together-listening, Code/XHS, backup, and exit-ownership fixes.
-- The feature branch and Vercel production repository `Silis-Aliya/sully-change` `master` were pushed through d5bb100.
+- upstream/master merged through a5e8230.
+- Current fork release branch is `codex/merge-upstream-20260721`.
+- Last verified full suite passed at 127 files / 1212 tests after the action-receipt, portable-sync, XHS Lite, and upstream compatibility fixes.
+- Last verified production build passed after the music sharing, together-listening, Code/XHS, backup, and upstream merge fixes.
+- The feature branch and Vercel production repository `Silis-Aliya/sully-change` `master` must point to the same verified release commit.
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
 
@@ -56,6 +56,18 @@ Current known baseline:
 - `scripts/autostart-workbench-bridge.cmd` now loads the same token sources and fails fast instead of waiting for manual input at login.
 - `scripts/install-workbench-bridge-startup.ps1` now rejects non-local scheduled-task installs without `-Token`.
 - Cloudflare named tunnel remains the intended remote path; random temporary public tunnel access should not be used for Code bridge exposure.
+
+## 2026-07-24 Portable Data Audit And Upstream Refresh
+
+- Audited persisted user/character records, character groups, action receipts, options, chat/Code cards, and referenced images against full export/import and QuickSync.
+- Character action receipts are ordinary persisted `messages`; hiding system logs changes rendering only and does not remove them from history, character context, backup, or incremental sync.
+- QuickSync already propagated row and local-setting additions, edits, and deletions. It now also writes and applies explicit `blob_assets` deletion lists, so replacing or removing the last synced image reference does not leave the receiving device with an orphaned avatar, wallpaper, or card image.
+- Fixed QuickSync metadata serialization order so local-setting changes are included in the delta's published counts and progress total.
+- Added persistent Post Office identity/base URL, Signal authorship/reuse records, and mobile-game skin settings to incremental settings coverage. Post Office admin credentials and one-turn Signal whispers remain intentionally device-local.
+- Merged `upstream/master` through a5e8230. Kept the fork's shared Chat/Code XHS resolver, card placement rules, music-session context, and Code surface behavior while adopting upstream OpenRouter heartbeat parsing, Gemini MCP tool compatibility, character-scoped emoji filtering, Memory Palace fixes, and normalized XHS Lite comments/interactions.
+- Updated the shared XHS resolver to use upstream's safe nested comment normalizer instead of maintaining a second raw-comment parser.
+- Hardened `safeResponseJson` for Response-compatible proxy/test objects that omit `headers`; normal browser responses remain unchanged.
+- Verification: 127 test files / 1212 tests passed; production build passed.
 
 ## 2026-07-24 Music Sharing, Together Listening, Code/XHS, and Backup Audit
 

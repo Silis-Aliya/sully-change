@@ -35,6 +35,7 @@ import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { evaluateEmotionBackground } from '../hooks/useChatAI';
 import { CHAT_GEN_EVENTS, setChatViewSnapshot } from '../utils/chatGenEvents';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
+import { ChatPrompts } from '../utils/chatPrompts';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
 import { loadMusicHooks, loadMusicPlaybackSnapshot, MUSIC_TOGETHER_LEFT_EVENT } from './MusicContext';
 import { buildMusicInviteHint, buildMusicWakeHint, buildMusicWakePickableSongs, formatMusicWakePickableSongs, rememberMusicWakePickableSongs, type MusicTrackChangeDetail, type MusicTrackInfo } from '../utils/musicTrackChange';
@@ -2092,8 +2093,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   updateCharacter(charId, { contextUserStartMessageId: undefined });
               }
               const allMsgs = proactiveRange.messages;
-              const emojis = await DB.getEmojis();
-              const categories = await DB.getEmojiCategories();
+              // 1.0 本地主动消息不会经过 Chat.tsx 的 aiVisibleEmojis。
+              // 这里既要过滤提示词，也要过滤下方 [[SEND_EMOJI]] 的按名反查：
+              // 只修提示词仍挡不住模型复述旧上下文里的表情名；只修落库则模型仍会看到越权表情。
+              // 2.0 推送路径已在 activeMsgClient / activeMsgRuntime 做同样的双层收口。
+              const { emojis, categories } = ChatPrompts.filterVisibleEmojis(
+                  await DB.getEmojis(),
+                  await DB.getEmojiCategories(),
+                  charId,
+              );
 
               // 上一轮缓存的意识流独白 —— 主路径用 React state，主动消息这里用 ref Map
               const cachedInnerState = proactiveInnerStateRef.current.get(charId) || undefined;

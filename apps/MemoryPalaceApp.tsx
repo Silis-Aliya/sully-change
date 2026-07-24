@@ -455,6 +455,11 @@ export default function MemoryPalaceApp() {
     const [boxCount, setBoxCount] = useState(0);
     const [anticipations, setAnticipations] = useState<Anticipation[]>([]);
     const [pinnedNodes, setPinnedNodes] = useState<MemoryNode[]>([]);
+    const [editingAnticipation, setEditingAnticipation] = useState<Anticipation | null>(null);
+    const [anticipationDraft, setAnticipationDraft] = useState('');
+    const [savingAnticipation, setSavingAnticipation] = useState(false);
+    const anticipationPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const anticipationPressStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
     // 事件盒视图
     const [allBoxes, setAllBoxes] = useState<EventBox[]>([]);
@@ -789,6 +794,81 @@ export default function MemoryPalaceApp() {
     }, [char]);
 
     useEffect(() => { loadStats(); }, [loadStats]);
+
+    const cancelAnticipationLongPress = useCallback(() => {
+        if (anticipationPressTimerRef.current) {
+            clearTimeout(anticipationPressTimerRef.current);
+            anticipationPressTimerRef.current = null;
+        }
+        anticipationPressStartRef.current = null;
+    }, []);
+
+    const openAnticipationEditor = useCallback((ant: Anticipation) => {
+        cancelAnticipationLongPress();
+        setEditingAnticipation(ant);
+        setAnticipationDraft(ant.content);
+    }, [cancelAnticipationLongPress]);
+
+    const startAnticipationLongPress = useCallback((e: React.PointerEvent<HTMLDivElement>, ant: Anticipation) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        cancelAnticipationLongPress();
+        anticipationPressStartRef.current = { x: e.clientX, y: e.clientY };
+        anticipationPressTimerRef.current = setTimeout(() => {
+            anticipationPressTimerRef.current = null;
+            anticipationPressStartRef.current = null;
+            setEditingAnticipation(ant);
+            setAnticipationDraft(ant.content);
+        }, 550);
+    }, [cancelAnticipationLongPress]);
+
+    const moveAnticipationLongPress = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const start = anticipationPressStartRef.current;
+        if (!start) return;
+        if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) {
+            cancelAnticipationLongPress();
+        }
+    }, [cancelAnticipationLongPress]);
+
+    useEffect(() => () => cancelAnticipationLongPress(), [cancelAnticipationLongPress]);
+    useEffect(() => {
+        setEditingAnticipation(null);
+        setAnticipationDraft('');
+    }, [char?.id]);
+
+    const handleSaveAnticipation = async () => {
+        if (!editingAnticipation) return;
+        const content = anticipationDraft.trim();
+        if (!content) {
+            addToast('期盼内容不能为空', 'error');
+            return;
+        }
+        setSavingAnticipation(true);
+        try {
+            const updated = { ...editingAnticipation, content };
+            await AnticipationDB.save(updated);
+            setAnticipations(prev => prev.map(ant => ant.id === updated.id ? updated : ant));
+            setEditingAnticipation(null);
+            setAnticipationDraft('');
+            addToast('窗台期盼已修改', 'success');
+        } finally {
+            setSavingAnticipation(false);
+        }
+    };
+
+    const handleDeleteAnticipation = async () => {
+        if (!editingAnticipation) return;
+        if (!window.confirm('确定删除这条窗台期盼吗？删除后不会自动恢复。')) return;
+        setSavingAnticipation(true);
+        try {
+            await AnticipationDB.delete(editingAnticipation.id);
+            setAnticipations(prev => prev.filter(ant => ant.id !== editingAnticipation.id));
+            setEditingAnticipation(null);
+            setAnticipationDraft('');
+            addToast('窗台期盼已删除', 'success');
+        } finally {
+            setSavingAnticipation(false);
+        }
+    };
 
     // 加载可用月份和分块（旧记忆迁移用）
     useEffect(() => {
@@ -2926,8 +3006,6 @@ export default function MemoryPalaceApp() {
                                 {[
                                     { model: 'BAAI/bge-m3', dim: 1024, tag: '推荐', desc: '多语言顶级模型，免费', color: '#7c3aed' },
                                     { model: 'Pro/BAAI/bge-m3', dim: 1024, tag: '最强', desc: '加速推理版，¥0.7/百万token', color: '#f59e0b' },
-                                    { model: 'BAAI/bge-large-zh-v1.5', dim: 1024, tag: '免费', desc: '中文专精，轻量快速', color: '#10b981' },
-                                    { model: 'netease-youdao/bce-embedding-base_v1', dim: 768, tag: '免费', desc: '网易有道，768维', color: '#10b981' },
                                 ].map(opt => {
                                     const isActive = embModel === opt.model && embDimensions === opt.dim;
                                     return (
@@ -4595,13 +4673,26 @@ create table if not exists memory_vectors (
                         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                             <Icon name="sunrise" size={14} />
                             <span>窗台期盼</span>
+                            <span style={{ marginLeft: 'auto', fontSize: 10, color: '#9ca3af', fontWeight: 400 }}>长按可修改或删除</span>
                         </div>
                         {anticipations.map((ant: Anticipation) => (
-                            <div key={ant.id} style={{
+                            <div
+                                key={ant.id}
+                                onPointerDown={(e) => startAnticipationLongPress(e, ant)}
+                                onPointerMove={moveAnticipationLongPress}
+                                onPointerUp={cancelAnticipationLongPress}
+                                onPointerCancel={cancelAnticipationLongPress}
+                                onPointerLeave={cancelAnticipationLongPress}
+                                onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    openAnticipationEditor(ant);
+                                }}
+                                style={{
                                 padding: 10, borderRadius: 8, marginBottom: 6,
                                 backgroundColor: ant.status === 'fulfilled' ? '#ecfdf5' :
                                     ant.status === 'disappointed' ? '#fef2f2' : '#fefce8',
-                                fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
+                                fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 6,
+                                cursor: 'pointer', userSelect: 'none', touchAction: 'pan-y',
                             }}>
                                 <span style={{ display: 'inline-flex', color:
                                     ant.status === 'active' ? '#7c3aed' :
@@ -4615,12 +4706,97 @@ create table if not exists memory_vectors (
                                         size={14}
                                     />
                                 </span>
-                                {ant.content}
-                                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                                    {new Date(ant.createdAt).toLocaleDateString('zh-CN')} · {ant.status}
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ lineHeight: 1.5, color: '#1f2937', whiteSpace: 'pre-wrap' }}>{ant.content}</div>
+                                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                                        {new Date(ant.createdAt).toLocaleDateString('zh-CN')} · {ant.status}
+                                    </div>
                                 </div>
                             </div>
                         ))}
+                    </div>
+                )}
+
+                {editingAnticipation && (
+                    <div
+                        onClick={() => {
+                            if (!savingAnticipation) {
+                                setEditingAnticipation(null);
+                                setAnticipationDraft('');
+                            }
+                        }}
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 120,
+                            background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(4px)',
+                            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+                            padding: 16,
+                        }}
+                    >
+                        <div
+                            onClick={e => e.stopPropagation()}
+                            style={{
+                                width: '100%', maxWidth: 520, padding: 18,
+                                borderRadius: 22, background: 'white',
+                                boxShadow: '0 18px 50px rgba(15,23,42,0.22)',
+                            }}
+                        >
+                            <div style={{ fontSize: 16, fontWeight: 700, color: '#1f2937' }}>修改窗台期盼</div>
+                            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3, marginBottom: 12 }}>
+                                只修改便利贴正文；状态与创建时间保持不变
+                            </div>
+                            <textarea
+                                autoFocus
+                                value={anticipationDraft}
+                                onChange={e => setAnticipationDraft(e.target.value)}
+                                rows={5}
+                                maxLength={2000}
+                                style={{
+                                    width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                                    border: '1px solid #e5e7eb', borderRadius: 14,
+                                    background: '#fffbeb', color: '#1f2937',
+                                    fontSize: 14, lineHeight: 1.6, padding: 12, outline: 'none',
+                                }}
+                            />
+                            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                                <button
+                                    onClick={handleDeleteAnticipation}
+                                    disabled={savingAnticipation}
+                                    style={{
+                                        padding: '10px 14px', borderRadius: 12,
+                                        border: '1px solid #fecaca', background: '#fef2f2',
+                                        color: '#dc2626', fontWeight: 700, cursor: 'pointer',
+                                    }}
+                                >
+                                    删除
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setEditingAnticipation(null);
+                                        setAnticipationDraft('');
+                                    }}
+                                    disabled={savingAnticipation}
+                                    style={{
+                                        marginLeft: 'auto', padding: '10px 16px', borderRadius: 12,
+                                        border: '1px solid #e5e7eb', background: 'white',
+                                        color: '#6b7280', fontWeight: 600, cursor: 'pointer',
+                                    }}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    onClick={handleSaveAnticipation}
+                                    disabled={savingAnticipation || !anticipationDraft.trim()}
+                                    style={{
+                                        padding: '10px 18px', borderRadius: 12,
+                                        border: 'none', background: '#7c3aed',
+                                        color: 'white', fontWeight: 700, cursor: 'pointer',
+                                        opacity: savingAnticipation || !anticipationDraft.trim() ? 0.5 : 1,
+                                    }}
+                                >
+                                    {savingAnticipation ? '保存中…' : '保存'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>

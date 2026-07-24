@@ -25,6 +25,7 @@ import { LUCKIN_PROPOSE_TOOL, autoFixProposalCodesByName as autoFixLuckinProposa
 import { callLuckinTool } from '../utils/luckinMcpClient';
 import { callMcpTool, getMcpUseNativeTools } from '../utils/mcpClient';
 import { buildMcpOpenAITools, buildMcpRejectedToolsFallbackBody, buildMcpTextFallbackBody, extractTextFakedMcpCalls, formatMcpToolResult, sanitizeMcpLeadInText, shouldRetryMcpWithoutTools, stripTextFakedMcpCalls, type FakedMcpCall } from '../utils/mcpToolBridge';
+import { buildToolResultMessage, normalizeToolCallsForCompat } from '../utils/toolCallCompat';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import {
     isInstantConfigReady,
@@ -1363,7 +1364,10 @@ export const useChatAI = ({
                 let loopMessages = [...fullMessages];
                 const loc = luckinChatRef?.current;
                 for (let it = 0; it < MAX_LOOPS; it++) {
-                    const toolCalls = data.choices?.[0]?.message?.tool_calls;
+                    const toolCalls = normalizeToolCallsForCompat(
+                        data.choices?.[0]?.message?.tool_calls,
+                        `private_${it}`,
+                    );
                     if (!toolCalls || !toolCalls.length) break;
                     if (mcpToolResolve && toolCalls.some((tc: any) => mcpToolResolve?.has(tc.function?.name || ''))) {
                         await persistMcpLeadIn(data.choices?.[0]?.message?.content || '');
@@ -1393,12 +1397,12 @@ export const useChatAI = ({
                             const mcpMsg = mcpResult.success
                                 ? `工具 ${fname} 成功。结果: ${formatMcpToolResult(mcpResult.data)}`
                                 : `工具 ${fname} 失败: ${mcpResult.error}`;
-                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: mcpMsg } as any);
+                            loopMessages.push(buildToolResultMessage(tc, mcpMsg) as any);
                             continue;
                         }
                         // 只开了 MCP 没开瑞幸时, 幻觉出的未知工具名直接回错误让模型自我纠正
                         if (!payload.flags.luckinChatActive) {
-                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: `未知工具 ${fname}, 只能使用系统提供的工具。` } as any);
+                            loopMessages.push(buildToolResultMessage(tc, `未知工具 ${fname}, 只能使用系统提供的工具。`) as any);
                             continue;
                         }
                         // 经纬度兜底: 角色漏传就用激活时抓到的定位补上
@@ -1408,11 +1412,10 @@ export const useChatAI = ({
                         }
                         // 拦截 createOrder: 不真下单, 引导走结账卡
                         if (/create[-_]?order/i.test(fname)) {
-                            loopMessages.push({
-                                role: 'tool',
-                                tool_call_id: tc.id,
-                                content: '下单与支付由用户在结账卡上完成, 你不要调 createOrder。若还没出结账卡, 请先调 previewOrder 把订单算价展示出来, 然后用角色语气让用户去卡片上确认支付。',
-                            } as any);
+                            loopMessages.push(buildToolResultMessage(
+                                tc,
+                                '下单与支付由用户在结账卡上完成, 你不要调 createOrder。若还没出结账卡, 请先调 previewOrder 把订单算价展示出来, 然后用角色语气让用户去卡片上确认支付。',
+                            ) as any);
                             continue;
                         }
                         let result: any;
@@ -1442,7 +1445,7 @@ export const useChatAI = ({
                         const toolMsg = result.success
                             ? `工具 ${fname} 成功。结果(截断): ${(() => { try { return JSON.stringify(result.data).slice(0, 1500); } catch { return String(result.data).slice(0, 800); } })()}`
                             : `工具 ${fname} 失败: ${result.error}`;
-                        loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolMsg } as any);
+                        loopMessages.push(buildToolResultMessage(tc, toolMsg) as any);
                     }
                     // 继续让角色多步推进 (保留 tools, 允许 query→search→preview 连续走)
                     if (mcpToolResolve) setSearchStatus('正在整理 MCP 工具结果...');
