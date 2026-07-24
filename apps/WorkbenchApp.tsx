@@ -79,7 +79,7 @@ const SILENT_BRIDGE_OFFLINE = 'silent_workbench_bridge_offline';
 
 const isWorkbenchBridgeConnectionError = (error: unknown): boolean => {
     const message = String((error as any)?.message || error || '');
-    return /Failed to fetch|NetworkError|Load failed|ECONNREFUSED|ERR_CONNECTION|电脑桥接(?:连接|请求)失败|电脑桥接未连接|请先填写电脑桥接地址|连接已断开|连接失败/i.test(message);
+    return /Failed to fetch|NetworkError|Load failed|ECONNREFUSED|ERR_CONNECTION|Unauthorized|\b40[13]\b|电脑桥接(?:连接|请求)失败|电脑桥接未连接|请先填写电脑桥接地址|连接已断开|连接失败/i.test(message);
 };
 
 const makeSilentBridgeOfflineError = () => Object.assign(
@@ -892,7 +892,8 @@ const WorkbenchApp: React.FC = () => {
         : 'C';
     const currentMode: WorkbenchMode = participantEnabled ? 'sully' : 'codex';
     const workExecutable = bridgeStatus === 'online';
-    const assistantAvailable = workExecutable || fallbackReady;
+    const bridgeConfigured = !!config.bridgeUrl.trim();
+    const assistantAvailable = bridgeConfigured || fallbackReady;
 
     useEffect(() => {
         setActiveSpace(workExecutable ? 'work' : 'inspiration');
@@ -1115,36 +1116,6 @@ const WorkbenchApp: React.FC = () => {
         if (!settingsOpen || bridgeStatus !== 'online') return;
         void refreshWorkbenchProjects(config, false);
     }, [settingsOpen, bridgeStatus, config.bridgeUrl, config.token]);
-
-    useEffect(() => {
-        let cancelled = false;
-        if (!config.bridgeUrl.trim()) {
-            setBridgeStatus('idle');
-            setTestResult('');
-            return;
-        }
-        setBridgeStatus(previous => previous === 'online' ? 'online' : 'checking');
-        const check = () => {
-            void testWorkbenchBridge(config)
-                .then(() => {
-                    if (cancelled) return;
-                    setBridgeStatus('online');
-                    setTestResult('连接成功');
-                })
-                .catch(() => {
-                    if (cancelled) return;
-                    setBridgeStatus('offline');
-                    setTestResult('连接已断开');
-                });
-        };
-        const timer = window.setTimeout(check, 250);
-        const interval = window.setInterval(check, 10_000);
-        return () => {
-            cancelled = true;
-            window.clearTimeout(timer);
-            window.clearInterval(interval);
-        };
-    }, [config.bridgeUrl, config.token, config.runtimeMode, config.defaultAgent, config.customAgentCommand, config.activeWorkbenchProjectId]);
 
     useEffect(() => {
         if (!settingsOpen || bridgeStatus !== 'online') {
@@ -1446,7 +1417,7 @@ const WorkbenchApp: React.FC = () => {
         const stored = loadWorkbenchBridgeConfig();
         setConfig(stored);
         setDraftConfig(stored);
-        setBridgeStatus('checking');
+        setBridgeStatus('offline');
         setTestResult('已保存');
         addToast('Code 设置已保存', 'success');
     };
@@ -1874,8 +1845,23 @@ const WorkbenchApp: React.FC = () => {
             taskIndex,
         ].filter(Boolean).join('\n\n');
         let bridgeReply;
-        let replySource: 'bridge' | 'fallback-api' = workExecutable ? 'bridge' : 'fallback-api';
-        if (workExecutable) {
+        let bridgeUsable = workExecutable;
+        if (!bridgeUsable && bridgeConfigured) {
+            try {
+                await testWorkbenchBridge(config);
+                bridgeUsable = true;
+                setBridgeStatus('online');
+                setTestResult('连接成功');
+                setActiveSpace('work');
+            } catch {
+                setBridgeStatus('offline');
+                setTestResult('电脑未连接');
+                setActiveSpace('inspiration');
+                if (!fallbackReady) throw makeSilentBridgeOfflineError();
+            }
+        }
+        let replySource: 'bridge' | 'fallback-api' = bridgeUsable ? 'bridge' : 'fallback-api';
+        if (bridgeUsable) {
             try {
                 bridgeReply = await sendWorkbenchBridgeMessage(config, {
                     sessionId: s.id,

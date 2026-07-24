@@ -56,6 +56,9 @@ Current known baseline:
 - `scripts/autostart-workbench-bridge.cmd` now loads the same token sources and fails fast instead of waiting for manual input at login.
 - `scripts/install-workbench-bridge-startup.ps1` now rejects non-local scheduled-task installs without `-Token`.
 - Cloudflare named tunnel remains the intended remote path; random temporary public tunnel access should not be used for Code bridge exposure.
+- Code no longer probes the Cloudflare `/health` route on mount or every 10 seconds. Connection checks happen only through the explicit test command or lazily before a real AI-assistant request.
+- A lazy check failure, including `401`, `403`, or `Unauthorized`, only changes the capability label to `电脑未连接`, switches to Inspiration when needed, and silently uses the fallback API when configured. It must not create a `SYSTEM ERROR` message or repeated error toast.
+- A successful lazy check marks the computer connected and continues the requested assistant turn. A later real bridge disconnect returns to the same silent offline path.
 
 ## 2026-07-24 Portable Data Audit And Upstream Refresh
 
