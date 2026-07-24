@@ -15,7 +15,7 @@ import { generateSlotTheater } from '../utils/theaterGenerator';
 import TheaterPlayer from '../components/schedule/TheaterPlayer';
 import { formatMessageWithTime, normalizeMessageContent } from '../utils/messageFormat';
 import { getRoomLabel } from '../utils/memoryPalace/types';
-import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
+import { XhsMcpClient, extractNotesFromMcpData, normalizeXhsLiteDetail } from '../utils/xhsMcpClient';
 import { extractWebpageContent, detectFirstUrl, detectXhsShortUrl, extractXhsShareTitle, isXhsUrl, extractXhsNoteId, expandShortUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
 import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
@@ -1063,22 +1063,9 @@ const Chat: React.FC = () => {
                             const result = await XhsMcpClient.getNoteDetail(mcpUrl, noteUrl, xsecToken, { loadAllComments: true });
                             if (isDevDebugAvailable()) console.log('[卡片调试] 小红书抓取 result =', result);
                             if (result.success && result.data) {
-                                // bridge(Lite) 返回 { data: { note, comments } }；MCP 可能直接是 note —— 逐层解包。
-                                const dataRoot = (result.data as any)?.data || result.data;
-                                const noteObj = dataRoot?.note || (result.data as any)?.note || result.data;
-                                const fetched = normalizeNote(noteObj);
+                                const fetched = normalizeXhsLiteDetail(result.data);
                                 // 抓到的字段补全基础卡；id/标题/token 保底，标题优先文案标题（更完整可读）。
                                 note = { ...note, ...fetched, noteId: fetched.noteId || note.noteId, title: titleFromText || fetched.title || note.title, xsecToken: fetched.xsecToken || xsecToken };
-                                // normalizeNote 只保留笔记基础字段会丢掉评论 —— 单独解包评论挂回卡片，
-                                // 让角色读 context 时也能看到评论区（与 char 浏览/分享笔记对齐）。
-                                const rawComments = dataRoot?.comments?.list || dataRoot?.comments
-                                    || (noteObj as any)?.comments?.list || (noteObj as any)?.comments || [];
-                                const comments = (Array.isArray(rawComments) ? rawComments : []).map((c: any) => ({
-                                    author: c.userInfo?.nickname || c.nickname || c.userName || c.author || '匿名',
-                                    content: c.content || '',
-                                    likes: c.likeCount || c.like_count || c.likes || 0,
-                                })).filter((c: any) => c.content).slice(0, 15);
-                                if (comments.length) note.comments = comments;
                             } else if (!result.success) {
                                 // 基础卡仍然可以发送，只提示详情读取失败，避免误以为整次分享失败。
                                 addToast(`小红书正文读取失败，已发送基础卡片。请尝试开启/关闭科学上网、切换 Wi‑Fi/流量，或检查 Lite 配置。${result.error ? `（${result.error}）` : ''}`, 'info');
