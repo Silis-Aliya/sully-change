@@ -157,6 +157,8 @@ let projectRegistry = {
   projects: [normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' })],
 };
 let activeMessageRun = null;
+const messageJobs = new Map();
+const messageJobsByClientTaskId = new Map();
 
 const normalizeProjectRegistry = raw => {
   const defaultProject = normalizeProject({ id: DEFAULT_PROJECT_ID, name: basename(WORKDIR) || '默认项目', path: WORKDIR, permission: 'write' });
@@ -753,6 +755,51 @@ const runCli = async (command, prompt, project = resolveProject(''), imageData =
   }
 };
 
+const executeMessage = async body => {
+  const project = resolveProject(body);
+  if (activeMessageRun) {
+    const error = new Error('Code 正在处理上一条请求，请等它完成后再发送。');
+    error.statusCode = 409;
+    error.details = {
+      busy: true,
+      activeSince: activeMessageRun.startedAt,
+      capabilityMode: activeMessageRun.capabilityMode,
+      projectId: activeMessageRun.projectId,
+    };
+    throw error;
+  }
+  if (project.permission === 'read' && body.capabilityMode === 'execute') {
+    const error = new Error('当前项目是只读权限。请先在 Code 设置里切换到可修改项目，或把该项目权限改为可修改。');
+    error.statusCode = 403;
+    error.details = { project };
+    throw error;
+  }
+  const agentInfo = commandFor(body);
+  const prompt = buildPrompt(body);
+  activeMessageRun = {
+    startedAt: Date.now(),
+    capabilityMode: body.capabilityMode === 'execute' ? 'execute' : 'chat',
+    projectId: project.id,
+  };
+  let rawReply;
+  try {
+    const imageData = Array.isArray(body.recentMessages)
+      ? body.recentMessages.map(message => message?.imageData).filter(Boolean)
+      : [];
+    rawReply = await runCli(agentInfo.command, prompt, project, imageData, agentInfo.agent);
+  } finally {
+    activeMessageRun = null;
+  }
+  const { reply, artifacts } = await collectArtifacts(rawReply, project);
+  return {
+    reply,
+    artifacts,
+    agent: agentInfo.agent,
+    displayName: agentInfo.displayName,
+    project,
+  };
+};
+
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
@@ -866,47 +913,59 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/jobs') {
+      const body = await readBody(req);
+      const clientTaskId = typeof body?.clientTaskId === 'string' ? body.clientTaskId.trim() : '';
+      const existingJobId = clientTaskId ? messageJobsByClientTaskId.get(clientTaskId) : '';
+      const existingJob = existingJobId ? messageJobs.get(existingJobId) : null;
+      if (existingJob) {
+        json(res, 202, { jobId: existingJob.id, status: existingJob.status, resumed: true });
+        return;
+      }
+      const jobId = `wbjob_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const job = { id: jobId, clientTaskId, status: 'running', createdAt: Date.now() };
+      messageJobs.set(jobId, job);
+      if (clientTaskId) messageJobsByClientTaskId.set(clientTaskId, jobId);
+      void executeMessage(body).then(result => {
+        Object.assign(job, { status: 'done', finishedAt: Date.now(), result });
+      }).catch(error => {
+        Object.assign(job, {
+          status: 'error',
+          finishedAt: Date.now(),
+          error: error.message || 'Code 执行失败',
+          statusCode: error.statusCode || 500,
+          details: error.details,
+        });
+      }).finally(() => {
+        setTimeout(() => {
+          messageJobs.delete(jobId);
+          if (clientTaskId && messageJobsByClientTaskId.get(clientTaskId) === jobId) {
+            messageJobsByClientTaskId.delete(clientTaskId);
+          }
+        }, 30 * 60_000);
+      });
+      json(res, 202, { jobId, status: 'running' });
+      return;
+    }
+
+    const jobMatch = req.method === 'GET' ? url.pathname.match(/^\/jobs\/([^/]+)$/) : null;
+    if (jobMatch) {
+      const job = messageJobs.get(decodeURIComponent(jobMatch[1]));
+      if (!job) {
+        json(res, 404, { error: 'Code 后台任务不存在或已过期' });
+        return;
+      }
+      json(res, 200, job);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/message') {
       const body = await readBody(req);
-      const project = resolveProject(body);
-      if (activeMessageRun) {
-        json(res, 409, {
-          error: 'Code 正在处理上一条请求，请等它完成后再发送。',
-          busy: true,
-          activeSince: activeMessageRun.startedAt,
-          capabilityMode: activeMessageRun.capabilityMode,
-          projectId: activeMessageRun.projectId,
-        });
-        return;
-      }
-      if (project.permission === 'read' && body.capabilityMode === 'execute') {
-        json(res, 403, { error: '当前项目是只读权限。请先在 Code 设置里切换到可修改项目，或把该项目权限改为可修改。', project });
-        return;
-      }
-      const agentInfo = commandFor(body);
-      const prompt = buildPrompt(body);
-      activeMessageRun = {
-        startedAt: Date.now(),
-        capabilityMode: body.capabilityMode === 'execute' ? 'execute' : 'chat',
-        projectId: project.id,
-      };
-      let rawReply;
       try {
-        const imageData = Array.isArray(body.recentMessages)
-          ? body.recentMessages.map(message => message?.imageData).filter(Boolean)
-          : [];
-        rawReply = await runCli(agentInfo.command, prompt, project, imageData, agentInfo.agent);
-      } finally {
-        activeMessageRun = null;
+        json(res, 200, await executeMessage(body));
+      } catch (error) {
+        json(res, error.statusCode || 500, { error: error.message, ...(error.details || {}) });
       }
-      const { reply, artifacts } = await collectArtifacts(rawReply, project);
-      json(res, 200, {
-        reply,
-        artifacts,
-        agent: agentInfo.agent,
-        displayName: agentInfo.displayName,
-        project,
-      });
       return;
     }
 

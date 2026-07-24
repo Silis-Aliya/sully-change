@@ -245,11 +245,13 @@ const AppGridPage = React.memo(({
     openApp,
     acnh = false,
     editing = false,
+    workbenchUnread = 0,
 }: {
     apps: typeof INSTALLED_APPS,
     openApp: (id: AppID) => void,
     acnh?: boolean,
     editing?: boolean,
+    workbenchUnread?: number,
 }) => {
     return (
         <div className={`grid place-items-center animate-fade-in relative ${acnh ? 'grid-cols-4 gap-y-6 gap-x-2' : 'grid-cols-4 gap-y-6 gap-x-2'}`}>
@@ -265,6 +267,11 @@ const AppGridPage = React.memo(({
                         onClick={() => { if (!editing) openApp(app.id); }}
                         size="md"
                      />
+                     {app.id === AppID.Workbench && workbenchUnread > 0 && (
+                         <div className="absolute -top-1 -right-1 h-5 min-w-5 rounded-full border-2 border-white/60 bg-red-500 px-1 text-[9px] font-bold text-white shadow-sm flex items-center justify-center pointer-events-none">
+                             {workbenchUnread > 9 ? '9+' : workbenchUnread}
+                         </div>
+                     )}
                  </div>
              ))}
         </div>
@@ -272,12 +279,17 @@ const AppGridPage = React.memo(({
 });
 
 // 3b. Small 2x2 app grid for pinwheel cells
-const AppQuadGrid = React.memo(({ apps, openApp, editing = false }: { apps: typeof INSTALLED_APPS, openApp: (id: AppID) => void, editing?: boolean }) => {
+const AppQuadGrid = React.memo(({ apps, openApp, editing = false, workbenchUnread = 0 }: { apps: typeof INSTALLED_APPS, openApp: (id: AppID) => void, editing?: boolean, workbenchUnread?: number }) => {
     return (
         <div className="w-full h-full grid grid-cols-2 grid-rows-2 place-items-center gap-x-2 gap-y-3">
             {apps.map(app => (
                 <div key={app.id} data-launcher-item={app.id} data-launcher-kind="app" className={`relative transition-transform duration-200 active:scale-95 ${editing ? 'launcher-edit-item' : ''}`}>
                     <AppIcon app={app} onClick={() => { if (!editing) openApp(app.id); }} />
+                    {app.id === AppID.Workbench && workbenchUnread > 0 && (
+                        <div className="absolute -top-1 -right-1 h-5 min-w-5 rounded-full border-2 border-white/60 bg-red-500 px-1 text-[9px] font-bold text-white shadow-sm flex items-center justify-center pointer-events-none">
+                            {workbenchUnread > 9 ? '9+' : workbenchUnread}
+                        </div>
+                    )}
                 </div>
             ))}
         </div>
@@ -468,7 +480,7 @@ let _lastPageIndex = 0;
 // --- Main Launcher ---
 
 const Launcher: React.FC = () => {
-  const { openApp, characters, activeCharacterId, theme, updateTheme, lastMsgTimestamp, isDataLoaded, unreadMessages } = useOS();
+  const { openApp, characters, activeCharacterId, theme, updateTheme, lastMsgTimestamp, isDataLoaded, unreadMessages, workbenchUnread } = useOS();
   const localDateKey = useLocalDateKey();
 
   // Local state for widget data to prevent context trashing
@@ -1024,7 +1036,7 @@ const Launcher: React.FC = () => {
                             paper={paper}
                         />
                         <div className="flex-1">
-                            <AppGridPage apps={pageApps} openApp={openApp} acnh={acnh} editing={layoutEditing} />
+                            <AppGridPage apps={pageApps} openApp={openApp} acnh={acnh} editing={layoutEditing} workbenchUnread={workbenchUnread} />
                         </div>
                       </>
                   ) : idx === 1 ? (
@@ -1051,9 +1063,9 @@ const Launcher: React.FC = () => {
                                       {cell === 'music' ? (
                                           <NowPlayingSquareWidget contentColor={contentColor} />
                                       ) : cell === 'appsA' ? (
-                                          <AppQuadGrid apps={page2QuadA} openApp={openApp} editing={layoutEditing} />
+                                          <AppQuadGrid apps={page2QuadA} openApp={openApp} editing={layoutEditing} workbenchUnread={workbenchUnread} />
                                       ) : cell === 'appsB' ? (
-                                          <AppQuadGrid apps={page2QuadB} openApp={openApp} editing={layoutEditing} />
+                                          <AppQuadGrid apps={page2QuadB} openApp={openApp} editing={layoutEditing} workbenchUnread={workbenchUnread} />
                                       ) : (
                                           <DesktopSquareImage
                                               image={theme.launcherWidgets?.['dsq']}
@@ -1125,6 +1137,7 @@ const Launcher: React.FC = () => {
                                 openApp={openApp}
                                 acnh={acnh}
                                 editing={layoutEditing}
+                                workbenchUnread={workbenchUnread}
                           />
                           <div className="flex-1"></div>
                       </div>

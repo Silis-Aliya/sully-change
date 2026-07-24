@@ -43,6 +43,12 @@ import {
     stripWorkbenchAssistantMention,
 } from '../utils/workbenchText';
 import type { XhsNote } from '../utils/realtimeContext';
+import {
+    getRunningWorkbenchTask,
+    runWorkbenchBackgroundTask,
+    setActiveWorkbenchSessionSnapshot,
+    subscribeWorkbenchBackgroundTasks,
+} from '../utils/workbenchBackgroundTasks';
 
 type WorkbenchSpace = 'work' | 'inspiration';
 type WorkbenchConversationItem = WorkbenchSession & { messageCount: number };
@@ -68,6 +74,7 @@ const WORKBENCH_SPACES: Record<WorkbenchSpace, {
 };
 
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const WORKBENCH_XHS_URL_RE = /(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn)\S*/i;
 
 const getSessionSpace = (session: WorkbenchSession): WorkbenchSpace => {
     if (session.space === 'inspiration' || session.id === 'inspiration' || session.id.startsWith('inspiration_')) return 'inspiration';
@@ -114,6 +121,19 @@ const resolveWorkbenchXhsNote = async (
     if (resolved.detailLoaded) addToast('Code 已读取小红书正文与评论', 'success');
     else if (resolved.error) addToast(`小红书详情读取失败，仅保留链接基础信息。（${resolved.error}）`, 'error');
     return resolved.note;
+};
+
+const extractWorkbenchXhsShareComment = (text: string, note?: Record<string, any>) => {
+    const title = String(note?.title || '').trim();
+    const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return text
+        .replace(/https?:\/\/(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn)\/\S+/gi, '')
+        .replace(/复制后打开【?小红书】?查看笔记[！!。]?/gi, '')
+        .replace(/打开小红书查看完整笔记[！!。]?/gi, '')
+        .replace(escapedTitle ? new RegExp(`【${escapedTitle}】`, 'g') : /$^/, '')
+        .replace(/[📕📖🔗]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 };
 
 const parseProgressCard = (content: string) => {
@@ -515,6 +535,8 @@ const WorkbenchMessageRow: React.FC<{
     const movedRef = useRef(false);
     const isUser = message.role === 'user';
     const isEmojiOnly = message.type === 'emoji';
+    const isXhsCard = message.type === 'xhs_card' || !!message.metadata?.xhsNote;
+    const isBareContent = isEmojiOnly || isXhsCard;
 
     const clearLongPress = () => {
         if (timerRef.current !== null) {
@@ -569,7 +591,7 @@ const WorkbenchMessageRow: React.FC<{
                 </div>
                 <button
                     type="button"
-                    style={isEmojiOnly ? {
+                    style={isBareContent ? {
                         appearance: 'none',
                         WebkitAppearance: 'none',
                         background: 'transparent',
@@ -589,7 +611,7 @@ const WorkbenchMessageRow: React.FC<{
                         onLongPress(message);
                     }}
                     className={`sully-workbench-bubble text-left text-[15px] leading-relaxed whitespace-pre-wrap break-words transition-transform active:scale-[0.98] ${
-                        isEmojiOnly
+                        isBareContent
                             ? '!bg-transparent !p-0 !shadow-none !border-0 !rounded-none'
                             : isUser
                                 ? 'rounded-2xl rounded-br-sm bg-[#EEEAF8] text-slate-900 shadow-sm px-5 py-3'
@@ -598,7 +620,7 @@ const WorkbenchMessageRow: React.FC<{
                                     : 'rounded-2xl rounded-bl-sm bg-white text-slate-700 border border-black/5 shadow-sm px-5 py-3'
                     } ${selected ? 'ring-2 ring-emerald-400 ring-offset-2' : ''}`}
                 >
-                    {message.replyTo && !isEmojiOnly && (
+                    {message.replyTo && !isBareContent && (
                         <span className={`mb-2 block rounded-lg border px-2.5 py-1.5 text-[11px] leading-snug ${
                             isUser ? 'border-black/10 bg-white/65 text-slate-600' : 'border-slate-200 bg-slate-50 text-slate-500'
                         }`}>
@@ -728,6 +750,7 @@ const WorkbenchApp: React.FC = () => {
     const {
         closeApp,
         addToast,
+        clearWorkbenchUnread,
         apiConfig,
         characters,
         activeCharacterId,
@@ -794,6 +817,16 @@ const WorkbenchApp: React.FC = () => {
     const bridgeReady = !!config.bridgeUrl.trim();
     const fallbackReady = !!config.fallbackApiBaseUrl?.trim() && !!config.fallbackApiModel?.trim();
     const usageStats = useMemo(() => buildUsageStats(messages), [messages]);
+    const visibleMessages = useMemo(() => messages.filter((message, index, all) => {
+        if (message.type !== 'text' || !WORKBENCH_XHS_URL_RE.test(message.content || '')) return true;
+        const next = all[index + 1];
+        return !(
+            next
+            && next.role === message.role
+            && (next.type === 'xhs_card' || !!next.metadata?.xhsNote)
+            && Math.abs(next.createdAt - message.createdAt) <= 5_000
+        );
+    }), [messages]);
     const usageLimit = Number(config.monthlyUsageLimit || 0);
     const usagePct = usageLimit > 0 ? Math.min(100, Math.round((usageStats.month / usageLimit) * 100)) : 0;
     const usageText = usageLimit > 0
@@ -895,6 +928,21 @@ const WorkbenchApp: React.FC = () => {
             });
         return () => { cancelled = true; };
     }, []);
+
+    useEffect(() => {
+        if (!emojiPanelOpen) return;
+        let cancelled = false;
+        Promise.all([
+            DB.getEmojis(),
+            DB.getEmojiCategories().catch(() => [] as EmojiCategory[]),
+        ]).then(([items, categories]) => {
+            if (cancelled) return;
+            setEmojiList(items);
+            setEmojiCategories(categories);
+            setEmojiMap(new Map(items.map(item => [item.name, item])));
+        }).catch(() => undefined);
+        return () => { cancelled = true; };
+    }, [emojiPanelOpen]);
 
     const loadConversations = async (): Promise<WorkbenchConversationItem[]> => {
         const sessions = await DB.getWorkbenchSessions();
@@ -1021,6 +1069,29 @@ const WorkbenchApp: React.FC = () => {
     }, []);
 
     useEffect(() => {
+        setActiveWorkbenchSessionSnapshot(session?.id || null);
+        if (session?.id) clearWorkbenchUnread(session.id);
+        return () => setActiveWorkbenchSessionSnapshot(null);
+    }, [clearWorkbenchUnread, session?.id]);
+
+    useEffect(() => subscribeWorkbenchBackgroundTasks(task => {
+        if (task.sessionId !== session?.id) return;
+        const running = task.status === 'running';
+        setBusy(running);
+        setThinkingSpeaker(running ? task.speaker : null);
+        if (!running) {
+            void refresh();
+            if (task.status === 'done') addToast('Code 后台回复已完成', 'success');
+        }
+    }), [session?.id]);
+
+    useEffect(() => {
+        const task = getRunningWorkbenchTask(session?.id);
+        setBusy(!!task);
+        setThinkingSpeaker(task?.speaker || null);
+    }, [session?.id]);
+
+    useEffect(() => {
         if (settingsOpen) void loadCodeMemories();
     }, [settingsOpen]);
 
@@ -1088,6 +1159,8 @@ const WorkbenchApp: React.FC = () => {
     };
 
     const appendMessage = async (message: WorkbenchMessage) => {
+        const targetSession = (await DB.getWorkbenchSessions()).find(item => item.id === message.sessionId && !item.deletedAt);
+        if (!targetSession) throw new Error('这条 Code 对话已删除，后台结果未写入');
         await DB.saveWorkbenchMessage(message);
         setMessages(prev => [...prev, message]);
     };
@@ -1199,10 +1272,7 @@ const WorkbenchApp: React.FC = () => {
         const xhsShareSegments = parseWorkbenchXhsShareSegments(rawReply);
         if (xhsShareSegments.some(segment => segment.type === 'xhs_card')) {
             for (const segment of xhsShareSegments) {
-                if (segment.type === 'text') {
-                    saved.push(...await appendAssistantReply(base, segment.content, split, quoteContext));
-                    continue;
-                }
+                if (segment.type === 'text') continue;
                 const card: WorkbenchMessage = {
                     ...base,
                     id: makeId('wbm'),
@@ -1886,7 +1956,6 @@ const WorkbenchApp: React.FC = () => {
             status: 'sent',
             metadata: messageMetadata,
         };
-        await appendMessage(userMessage);
         const xhsCardMessage: WorkbenchMessage | null = xhsNote
             ? {
                 id: makeId('wbm'),
@@ -1898,13 +1967,20 @@ const WorkbenchApp: React.FC = () => {
                 content: xhsNote.title || '小红书笔记',
                 createdAt: now + 1,
                 status: 'sent',
-                metadata: { xhsNote },
+                metadata: {
+                    xhsNote,
+                    originalText: text,
+                    shareComment: extractWorkbenchXhsShareComment(text, xhsNote),
+                    sharedBy: 'user',
+                },
             }
             : null;
         if (xhsCardMessage) {
             await appendMessage(xhsCardMessage);
+        } else {
+            await appendMessage(userMessage);
         }
-        const savedTurnMessages = xhsCardMessage ? [userMessage, xhsCardMessage] : [userMessage];
+        const savedTurnMessages = xhsCardMessage ? [xhsCardMessage] : [userMessage];
         try {
             if (userMessage.type !== 'emoji' && hasAssistantMention(text)) {
                 if (!assistantAvailable) {
@@ -1915,11 +1991,11 @@ const WorkbenchApp: React.FC = () => {
                         ...messages.filter(message => message.sessionId === s.id),
                         ...savedTurnMessages,
                     ].slice(-10);
-                    await runAssistantReply(
+                    await runWorkbenchBackgroundTask(s.id, 'codex', () => runAssistantReply(
                         s,
                         recent,
                         `用户在 Code 对话里 @ 了 AI 助理，请直接回应这条消息：${stripAssistantMention(text) || text}`,
-                    );
+                    ));
                 }
             }
             setConversations(await loadConversations());
@@ -1950,7 +2026,7 @@ const WorkbenchApp: React.FC = () => {
                 addToast('先在 Code 里写一点内容，再请 AI 助理回应', 'info');
                 return;
             }
-            await runAssistantReply(s, recent);
+            await runWorkbenchBackgroundTask(s.id, 'codex', () => runAssistantReply(s, recent));
         } catch (e: any) {
             addToast(e?.message || 'AI 助理回应失败', 'error');
         } finally {
@@ -1978,6 +2054,7 @@ const WorkbenchApp: React.FC = () => {
                 addToast('先在 Code 里写一点内容，再催动角色回应', 'info');
                 return;
             }
+            await runWorkbenchBackgroundTask(s.id, 'character', async () => {
             const taskIndex = await buildWorkbenchTaskIndex(s.id);
             const capability = {
                 space: activeSpace,
@@ -2066,6 +2143,7 @@ const WorkbenchApp: React.FC = () => {
                 }
             }
             setConversations(await loadConversations());
+            });
         } catch (e: any) {
             addToast(e?.message || '角色回应失败', 'error');
         } finally {
@@ -2207,9 +2285,11 @@ const WorkbenchApp: React.FC = () => {
                                     </div>
                                 </div>
                             )}
-                            {messages.map(m => {
+                            {visibleMessages.map(m => {
                                 const avatar = m.role === 'user' ? '' : getMessageAvatar(m);
                                 const isEmojiOnly = m.type === 'emoji';
+                                const isXhsCard = m.type === 'xhs_card' || !!m.metadata?.xhsNote;
+                                const isBareContent = isEmojiOnly || isXhsCard;
                                 const isProgressCard = m.role === 'system' && !!m.metadata?.progressCard;
                                 if (isProgressCard) {
                                     return (
@@ -2255,7 +2335,7 @@ const WorkbenchApp: React.FC = () => {
                                         </div>
                                         <button
                                             type="button"
-                                            style={isEmojiOnly ? {
+                                            style={isBareContent ? {
                                                 appearance: 'none',
                                                 WebkitAppearance: 'none',
                                                 background: 'transparent',
@@ -2272,7 +2352,7 @@ const WorkbenchApp: React.FC = () => {
                                             onPointerLeave={clearMessagePressTimer}
                                             onContextMenu={e => { e.preventDefault(); setActionTarget(m); }}
                                             className={`sully-workbench-bubble text-left text-[15px] leading-relaxed whitespace-pre-wrap break-words transition-transform active:scale-[0.98] ${
-                                            isEmojiOnly
+                                            isBareContent
                                                 ? '!bg-transparent !p-0 !shadow-none !border-0 !rounded-none'
                                                 : m.role === 'user'
                                                 ? 'rounded-2xl rounded-br-sm bg-[#EEEAF8] text-slate-900 shadow-sm px-5 py-3'
@@ -2280,7 +2360,7 @@ const WorkbenchApp: React.FC = () => {
                                                     ? 'rounded-2xl rounded-bl-sm bg-rose-50 text-rose-700 border border-rose-100 shadow-sm px-5 py-3'
                                                     : 'rounded-2xl rounded-bl-sm bg-white text-slate-700 border border-black/5 shadow-sm px-5 py-3'
                                         } ${selectedMessageIds.has(m.id) ? 'ring-2 ring-emerald-400 ring-offset-2' : ''}`}>
-                                            {m.replyTo && !isEmojiOnly && (
+                                            {m.replyTo && !isBareContent && (
                                                 <span className={`mb-2 block rounded-lg border px-2.5 py-1.5 text-[11px] leading-snug ${
                                                     m.role === 'user' ? 'border-black/10 bg-white/65 text-slate-600' : 'border-slate-200 bg-slate-50 text-slate-500'
                                                 }`}>
@@ -2375,7 +2455,7 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="max-h-44 overflow-y-auto px-3 pb-3 workbench-index-scroll">
                                     {visibleEmojis.length > 0 ? (
-                                        <div className="grid grid-cols-5 sm:grid-cols-7 gap-2">
+                                        <div className="grid grid-cols-5 gap-2">
                                             {visibleEmojis.map(emoji => (
                                                 <button
                                                     key={`${emoji.name}-${emoji.url}`}
@@ -2383,16 +2463,18 @@ const WorkbenchApp: React.FC = () => {
                                                     onClick={() => sendEmoji(emoji)}
                                                     disabled={busy}
                                                     title={emoji.name}
-                                                    className="h-14 rounded-xl border border-slate-200 bg-white flex flex-col items-center justify-center gap-0.5 active:scale-95 disabled:opacity-40"
+                                                    className="aspect-square rounded-2xl bg-white p-2 shadow-sm relative flex flex-col items-center active:scale-95 disabled:opacity-40"
                                                 >
-                                                    <img
-                                                        src={emoji.url}
-                                                        alt={emoji.name}
-                                                        loading="lazy"
-                                                        decoding="async"
-                                                        className="h-8 w-8 object-contain"
-                                                    />
-                                                    <span className="w-full px-1 text-[9px] text-slate-400 truncate">{emoji.name}</span>
+                                                    <span className="aspect-square w-full min-h-0">
+                                                        <img
+                                                            src={emoji.url}
+                                                            alt={emoji.name}
+                                                            loading="lazy"
+                                                            decoding="async"
+                                                            className="h-full w-full object-contain"
+                                                        />
+                                                    </span>
+                                                    <span className="mt-0.5 w-full truncate text-center text-[9px] leading-tight text-slate-400">{emoji.name}</span>
                                                 </button>
                                             ))}
                                         </div>

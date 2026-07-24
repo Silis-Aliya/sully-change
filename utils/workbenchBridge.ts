@@ -421,6 +421,7 @@ export const sendWorkbenchBridgeMessage = async (
         sessionId: string;
         mode: WorkbenchMode;
         capabilityMode?: 'chat' | 'execute';
+        clientTaskId?: string;
         content: string;
         recentMessages: WorkbenchMessage[];
         taskIndex?: string;
@@ -430,32 +431,83 @@ export const sendWorkbenchBridgeMessage = async (
         return { reply: '电脑桥接还没有配置。请点 Code 右上角设置，选择远程或 CLI，并填写地址。' };
     }
     const base = config.bridgeUrl.trim().replace(/\/+$/, '');
+    const requestBody = {
+        clientTaskId: args.clientTaskId || `wbclient_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        sessionId: args.sessionId,
+        mode: args.mode,
+        capabilityMode: args.capabilityMode || 'chat',
+        clientDevice: detectWorkbenchClientDevice(),
+        runtimeMode: config.runtimeMode || 'computer',
+        agent: config.defaultAgent,
+        customAgentCommand: config.customAgentCommand || undefined,
+        selectedModel: config.selectedModel || undefined,
+        modelProfile: config.modelProfile || 'balanced',
+        customInstructions: config.customInstructions || undefined,
+        monthlyUsageLimit: config.monthlyUsageLimit || undefined,
+        projectId: config.activeWorkbenchProjectId || undefined,
+        content: args.content,
+        recentMessages: args.recentMessages.map(serializeWorkbenchMessage),
+        taskIndex: args.taskIndex || undefined,
+    };
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), WORKBENCH_BRIDGE_MESSAGE_TIMEOUT_MS);
     let res: Response;
     try {
-        res = await fetch(`${base}/message`, {
+        const submitJob = () => fetch(`${base}/jobs`, {
             method: 'POST',
             headers: bridgeHeaders(config),
             signal: controller.signal,
-            body: JSON.stringify({
-                sessionId: args.sessionId,
-                mode: args.mode,
-                capabilityMode: args.capabilityMode || 'chat',
-                clientDevice: detectWorkbenchClientDevice(),
-                runtimeMode: config.runtimeMode || 'computer',
-                agent: config.defaultAgent,
-                customAgentCommand: config.customAgentCommand || undefined,
-                selectedModel: config.selectedModel || undefined,
-                modelProfile: config.modelProfile || 'balanced',
-                customInstructions: config.customInstructions || undefined,
-                monthlyUsageLimit: config.monthlyUsageLimit || undefined,
-                projectId: config.activeWorkbenchProjectId || undefined,
-                content: args.content,
-                recentMessages: args.recentMessages.map(serializeWorkbenchMessage),
-                taskIndex: args.taskIndex || undefined,
-            }),
+            body: JSON.stringify(requestBody),
         });
+        try {
+            res = await submitJob();
+        } catch (error: any) {
+            if (error?.name === 'AbortError') throw error;
+            await new Promise(resolve => window.setTimeout(resolve, 800));
+            res = await submitJob();
+        }
+        if (res.status === 404 || res.status === 405) {
+            res = await fetch(`${base}/message`, {
+                method: 'POST',
+                headers: bridgeHeaders(config),
+                signal: controller.signal,
+                body: JSON.stringify(requestBody),
+            });
+        } else if (res.ok) {
+            const accepted = await res.json().catch(() => null) as Record<string, any> | null;
+            const jobId = accepted?.jobId;
+            if (jobId) {
+                window.clearTimeout(timeout);
+                const deadline = Date.now() + 60 * 60_000;
+                while (Date.now() < deadline) {
+                    await new Promise(resolve => window.setTimeout(resolve, 1_500));
+                    let poll: Response;
+                    try {
+                        poll = await fetch(`${base}/jobs/${encodeURIComponent(jobId)}`, {
+                            headers: bridgeHeaders(config),
+                        });
+                    } catch {
+                        continue;
+                    }
+                    if (!poll.ok) {
+                        if (poll.status === 404) throw new Error('电脑端 Code 后台任务已过期');
+                        continue;
+                    }
+                    const job = await poll.json().catch(() => null) as Record<string, any> | null;
+                    if (job?.status === 'error') throw new Error(String(job.error || '电脑端 Code 后台任务失败'));
+                    if (job?.status === 'done') {
+                        const result = job.result && typeof job.result === 'object' ? job.result : {};
+                        return {
+                            reply: String(result.reply || result.content || result.message || ''),
+                            agent: typeof result.agent === 'string' ? result.agent : undefined,
+                            displayName: typeof result.displayName === 'string' ? result.displayName : undefined,
+                            artifacts: Array.isArray(result.artifacts) ? result.artifacts : [],
+                        };
+                    }
+                }
+                throw new Error('电脑端 Code 后台任务等待超过 60 分钟');
+            }
+        }
     } catch (error: any) {
         if (error?.name === 'AbortError') {
             throw new Error('电脑端 Code 响应超时，手机已停止等待。电脑端会自动结束这次卡住的 Codex，请稍后重试或缩短这次请求。');
@@ -941,15 +993,25 @@ const formatWorkbenchXhsNoteForContext = (note: any): string => {
 
 const workbenchContentForContext = (m: WorkbenchMessage): string => {
     if (m.type === 'xhs_card') {
-        return normalizeMessageContent({
-            id: m.id,
-            charId: m.sessionId,
-            role: m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant',
-            type: 'xhs_card' as any,
-            content: m.content,
-            timestamp: m.createdAt,
-            metadata: m.metadata,
-        } as Message, '角色', '用户');
+        const note = m.metadata?.xhsNote || {};
+        const sender = m.metadata?.sharedBy === 'user'
+            ? '用户'
+            : m.metadata?.speakerName || (m.role === 'user' ? '用户' : '角色');
+        const comment = String(m.metadata?.shareComment || '').trim();
+        const lines = [
+            `[小红书分享]`,
+            `分享者：${sender}`,
+            comment ? `分享者附言：${comment}` : '',
+            `链接：${note.sourceUrl || note.url || '未获取'}`,
+            `标题：${note.title || m.content || '无标题'}`,
+            `作者：${note.author || '未知'}`,
+            `笔记摘要：${note.desc || '未获取正文摘要'}`,
+        ];
+        const comments = Array.isArray(note.comments) ? note.comments : [];
+        if (comments.length) {
+            lines.push(`评论摘录：${comments.slice(0, 8).map((item: any) => `${item.author || '匿名'}：${item.content || ''}`).join(' | ')}`);
+        }
+        return lines.filter(Boolean).join('\n');
     }
     const content = m.type === 'emoji'
         ? `[表情: ${m.metadata?.emojiName || '表情包'}]`

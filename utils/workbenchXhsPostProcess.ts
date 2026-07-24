@@ -80,8 +80,12 @@ const messageBase = (
     },
 });
 
-const noteMessage = (args: WorkbenchXhsPostProcessArgs, note: XhsNote): WorkbenchMessage =>
-    messageBase(args, 'xhs_card', note.title || '小红书笔记', { xhsNote: note });
+const noteMessage = (args: WorkbenchXhsPostProcessArgs, note: XhsNote, shareComment = ''): WorkbenchMessage =>
+    messageBase(args, 'xhs_card', note.title || '小红书笔记', {
+        xhsNote: note,
+        sharedBy: 'character',
+        shareComment,
+    });
 
 const textMessage = (args: WorkbenchXhsPostProcessArgs, content: string): WorkbenchMessage =>
     messageBase(args, 'text', content);
@@ -221,16 +225,18 @@ export const processWorkbenchXhsDirectives = async (
     }
 
     const shareMatches = Array.from(raw.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g));
+    const shareComment = stripXhsDirectives(raw);
     for (const match of shareMatches) {
         const idx = Number(match[1]) - 1;
         const note = args.lastXhsNotesRef.current[idx];
         if (note) {
-            extraMessages.push(noteMessage(args, note));
+            extraMessages.push(noteMessage(args, note, shareComment));
         }
     }
 
+    const sharedCard = extraMessages.some(message => message.type === 'xhs_card');
     return {
-        visibleReply: stripXhsDirectives(raw),
+        visibleReply: sharedCard ? '' : stripXhsDirectives(raw),
         extraMessages,
     };
 };

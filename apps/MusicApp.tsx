@@ -166,7 +166,19 @@ const MusicApp: React.FC = () => {
   const lyricBoxRef = useRef<HTMLDivElement | null>(null);
   const floatingReturnAppRef = useRef<AppID | null>(null);
   const floatingPlayerEntryRef = useRef(false);
+  const playerReturnViewRef = useRef<Exclude<View, 'player'>>('profile');
   const userExitTogetherIdsRef = useRef<Set<string>>(new Set());
+
+  const openInternalPlayer = useCallback((returnView: Exclude<View, 'player'>) => {
+    playerReturnViewRef.current = returnView;
+    floatingReturnAppRef.current = null;
+    floatingPlayerEntryRef.current = false;
+    try {
+      sessionStorage.removeItem(OPEN_PLAYER_REQUEST_KEY);
+      sessionStorage.removeItem(OPEN_PLAYER_RETURN_APP_KEY);
+    } catch {}
+    setView('player');
+  }, []);
 
   useEffect(() => {
     if (!listeningTogetherStartedAt) return;
@@ -388,7 +400,7 @@ const MusicApp: React.FC = () => {
       closeApp();
       return;
     }
-    setView('search');
+    setView(playerReturnViewRef.current);
   }, [closeApp, openApp]);
 
   // 歌词自动滚动：把 current line 对齐到滚动容器视觉中心
@@ -523,7 +535,7 @@ const MusicApp: React.FC = () => {
           artists={current.artists}
           albumPic={current.albumPic}
           playing={playing}
-          onTap={() => setView('player')}
+          onTap={() => openInternalPlayer('search')}
           onPrev={prevSong}
           onToggle={togglePlay}
           onNext={nextSong}
@@ -1095,14 +1107,16 @@ const MusicApp: React.FC = () => {
       {view === 'search' && renderSearch()}
       {view === 'player' && renderPlayer()}
       {view === 'settings' && renderSettings()}
-      {view === 'profile' && (
-        <NeteaseProfilePage
-          onBack={closeApp}
-          onOpenPlayer={() => setView('player')}
-          onOpenSearch={() => setView('search')}
-          onOpenSettings={() => setView('settings')}
-          onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
-        />
+      {(view === 'profile' || (view === 'player' && playerReturnViewRef.current === 'profile')) && (
+        <div className={view === 'profile' ? 'contents' : 'hidden'}>
+          <NeteaseProfilePage
+            onBack={closeApp}
+            onOpenPlayer={() => openInternalPlayer('profile')}
+            onOpenSearch={() => setView('search')}
+            onOpenSettings={() => setView('settings')}
+            onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
+          />
+        </div>
       )}
       {/* 手动对轴 modal — 全屏覆盖，不开新 view */}
       {showLyricSync && current && current.local && (() => {
@@ -1269,12 +1283,14 @@ const MusicApp: React.FC = () => {
         );
       })()}
 
-      {view === 'visit_char' && visitCharId && (
-        <CharVisitPage
-          charId={visitCharId}
-          onBack={() => { setView('profile'); setVisitCharId(null); }}
-          onOpenPlayer={() => setView('player')}
-        />
+      {visitCharId && (view === 'visit_char' || (view === 'player' && playerReturnViewRef.current === 'visit_char')) && (
+        <div className={view === 'visit_char' ? 'contents' : 'hidden'}>
+          <CharVisitPage
+            charId={visitCharId}
+            onBack={() => { setView('profile'); setVisitCharId(null); }}
+            onOpenPlayer={() => openInternalPlayer('visit_char')}
+          />
+        </div>
       )}
     </div>
   );

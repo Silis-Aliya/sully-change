@@ -9,6 +9,10 @@ import { isPaperWallpaper, useOS } from '../../context/OSContext';
 import { useMusic } from '../../context/MusicContext';
 import { AppID } from '../../types';
 
+const OPEN_PLAYER_REQUEST_KEY = 'sully.music.openPlayer.request';
+const OPEN_PLAYER_RETURN_APP_KEY = 'sully.music.openPlayer.returnApp';
+const OPEN_PLAYER_EVENT = 'sully-music-open-player';
+
 const formatTime = (sec: number) => {
   if (!isFinite(sec) || sec < 0) sec = 0;
   const m = Math.floor(sec / 60);
@@ -35,12 +39,24 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
   const handlePlay = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) togglePlay(); else openApp(AppID.Music); };
   const handleNext = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) nextSong(); };
   const handlePrev = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) prevSong(); };
+  const openNowPlaying = () => {
+    if (!hasSong) {
+      openApp(AppID.Music);
+      return;
+    }
+    try {
+      sessionStorage.setItem(OPEN_PLAYER_REQUEST_KEY, '1');
+      sessionStorage.setItem(OPEN_PLAYER_RETURN_APP_KEY, AppID.Launcher);
+    } catch {}
+    window.dispatchEvent(new Event(OPEN_PLAYER_EVENT));
+    openApp(AppID.Music);
+  };
 
   // 动森彩蛋：黑胶唱机布局（全新设计，非原版均衡器条）
   if (acnh) {
     return (
       <div
-        onClick={() => openApp(AppID.Music)}
+        onClick={openNowPlaying}
         className="relative w-full h-full rounded-[1.75rem] overflow-hidden cursor-pointer animate-fade-in transition-transform active:scale-[0.98] flex flex-col items-center justify-between p-3"
         style={{ background: 'rgb(247,243,223)', border: '2px solid #e8e2d6', boxShadow: '0 6px 18px rgba(61,52,40,0.12)', color: '#725d42' }}
       >
@@ -145,7 +161,7 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
 
   return (
     <div
-      onClick={() => openApp(AppID.Music)}
+      onClick={openNowPlaying}
       className="relative w-full h-full rounded-[1.75rem] overflow-hidden cursor-pointer animate-fade-in group transition-transform active:scale-[0.98] flex flex-col justify-between"
       style={{
         background: palette.cardBg,

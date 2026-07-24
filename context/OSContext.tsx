@@ -44,6 +44,7 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
 import { formatBytes } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
+import { getActiveWorkbenchSessionSnapshot, subscribeWorkbenchBackgroundTasks } from '../utils/workbenchBackgroundTasks';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { initLocalStorageMirror } from '../utils/lsMirror';
 import { exportLocalStorageSettings, importLocalStorageSettings } from '../utils/localSettingsBackup';
@@ -420,6 +421,8 @@ interface OSContextType {
   lastMsgTimestamp: number; // New: Signal for Chat to refresh
   unreadMessages: Record<string, number>; // New: Track unread counts per character
   clearUnread: (charId: string) => void; // New: Method to clear unread
+  workbenchUnread: number;
+  clearWorkbenchUnread: (sessionId: string) => void;
 
   // Set of charIds whose proactive AI generation is currently in flight.
   // Chat UI subscribes to this to render a soft "正在送达消息…" indicator
@@ -917,6 +920,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   
   const [lastMsgTimestamp, setLastMsgTimestamp] = useState<number>(0);
   const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
+  const [workbenchUnreadBySession, setWorkbenchUnreadBySession] = useState<Record<string, number>>({});
+  const workbenchUnread = Object.values(workbenchUnreadBySession).reduce((total, count) => total + count, 0);
+  const clearWorkbenchUnread = useCallback((sessionId: string) => {
+      setWorkbenchUnreadBySession(prev => {
+          if (!prev[sessionId]) return prev;
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+      });
+  }, []);
   const [proactiveComposingChars, setProactiveComposingChars] = useState<Record<string, true>>({});
   
   // LOGS
@@ -1588,6 +1601,20 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   useEffect(() => {
       setChatViewSnapshot(activeApp === AppID.Chat, activeCharacterId ?? null);
   }, [activeApp, activeCharacterId]);
+
+  useEffect(() => subscribeWorkbenchBackgroundTasks(task => {
+      if (task.status === 'running') return;
+      const isViewingTask = activeAppRef.current === AppID.Workbench
+          && getActiveWorkbenchSessionSnapshot() === task.sessionId;
+      if (!isViewingTask) {
+          setWorkbenchUnreadBySession(prev => ({
+              ...prev,
+              [task.sessionId]: (prev[task.sessionId] || 0) + 1,
+          }));
+      }
+      if (task.status === 'done') addToast('Code 后台任务已完成', 'success');
+      else addToast(`Code 后台任务失败：${task.error || '未知错误'}`, 'error');
+  }), []);
   // 通话状态（含挂起到后台的通话）——主动消息流程读它来判断"是否正在通话"
   const suspendedCallRef = useRef(suspendedCall);
   suspendedCallRef.current = suspendedCall;
@@ -4570,6 +4597,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     lastMsgTimestamp,
     unreadMessages,
     clearUnread,
+    workbenchUnread,
+    clearWorkbenchUnread,
     proactiveComposingChars,
     cloudBackupConfig,
     updateCloudBackupConfig,
