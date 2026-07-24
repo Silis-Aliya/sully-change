@@ -16,7 +16,7 @@ import TheaterPlayer from '../components/schedule/TheaterPlayer';
 import { formatMessageWithTime, normalizeMessageContent } from '../utils/messageFormat';
 import { getRoomLabel } from '../utils/memoryPalace/types';
 import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
-import { extractWebpageContent, detectFirstUrl, detectXhsShortUrl, isXhsUrl, extractXhsNoteId, expandShortUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
+import { extractWebpageContent, detectFirstUrl, detectXhsShortUrl, extractXhsShareTitle, isXhsUrl, extractXhsNoteId, expandShortUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
 import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
@@ -1040,9 +1040,9 @@ const Chat: React.FC = () => {
                         shortLinkError = e instanceof Error ? e.message : '短链展开失败';
                     }
                 }
-                // 文案标题形如「【标题 | 小红书 …】」，剥掉 "| 小红书…" 后缀（短链文案常无此块）。
-                const titleFromText = (text.match(/【(.+?)】/)?.[1] || '')
-                    .replace(/\s*[|｜]\s*小红书.*$/, '').trim();
+                // 兼容旧版「【标题 | 小红书】」和新版「标题 ... 短链 打开【小红书】」。
+                // 不能直接取第一个【】块：新版唯一的括号内容是应用名，会把卡片标题错误写成“小红书”。
+                const titleFromText = extractXhsShareTitle(text);
 
                 // 拿不到 noteId（短链展开失败/被挡）就不建空卡，保留原文给用户，并明确
                 // 告诉用户如何排查。此前这里完全静默，表现就是“角色能分享、用户分享不了”。
