@@ -1191,7 +1191,17 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                     const commentsLine = noteComments.length
                         ? `\n热评: ${noteComments.slice(0, 15).map((c: any) => `${c.author || '匿名'}: ${c.content}`).join(' | ')}`
                         : '';
-                    content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}\n简介: ${note.desc || '无'}${commentsLine}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
+                    const locatorLine = [
+                        note.noteId ? `noteId: ${note.noteId}` : '',
+                        note.sourceUrl || note.url ? `链接: ${note.sourceUrl || note.url}` : '',
+                    ].filter(Boolean).join('\n');
+                    const detailHint = note.noteId
+                        ? `如果需要读完整内容，使用 [[XHS_DETAIL: ${note.noteId}]]，不要假装读过正文`
+                        : '没有可用 noteId 时，先承认只看到标题/链接，不要假装读过正文';
+                    const bodyLine = note.desc
+                        ? `正文: ${note.desc}`
+                        : `正文: 未获取（${detailHint}）`;
+                    content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}${locatorLine ? `\n${locatorLine}` : ''}\n${bodyLine}${commentsLine}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法；正文为空时先承认只看到标题/链接，必要时再读取详情)' : ''}`;
                 }
                 else if ((m.type as string) === 'music_card') {
                     content = `${timeStr} ${normalizeMessageContent(

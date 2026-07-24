@@ -6,8 +6,8 @@
  * coding CLI, such as Codex CLI or Claude Code, without opening a desktop app.
  *
  * Usage:
- *   node scripts/workbench-cli-bridge.mjs
- *   node scripts/workbench-cli-bridge.mjs --host 0.0.0.0 --port 3001
+ *   node scripts/workbench-cli-bridge.mjs --host 127.0.0.1
+ *   node scripts/workbench-cli-bridge.mjs --host 0.0.0.0 --port 3001 --token your-local-key
  *   node scripts/workbench-cli-bridge.mjs --agent claude
  *   node scripts/workbench-cli-bridge.mjs --token your-local-key
  *   node scripts/workbench-cli-bridge.mjs --custom "my-cli --flag"
@@ -29,7 +29,7 @@ import { createInterface } from 'readline';
 import { homedir, tmpdir } from 'os';
 import { basename, extname, join, relative, resolve, sep } from 'path';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 const args = process.argv.slice(2);
 
@@ -40,10 +40,24 @@ const getArg = (name, fallback = '') => {
 
 const hasArg = name => args.includes(name);
 
+const readTokenFile = () => {
+  for (const path of [join(homedir(), '.sullyos-workbench-bridge-token'), resolve('.workbench-bridge-token')]) {
+    try {
+      if (!existsSync(path)) continue;
+      const token = readFileSync(path, 'utf8').trim();
+      if (token) return token;
+    } catch {
+      // Ignore unreadable local token files and let startup validation report
+      // a missing token if no other source is available.
+    }
+  }
+  return '';
+};
+
 const HOST = getArg('--host', process.env.WORKBENCH_BRIDGE_HOST || '0.0.0.0');
 const PORT = Number(getArg('--port', process.env.WORKBENCH_BRIDGE_PORT || '3001'));
 const DEFAULT_AGENT = getArg('--agent', process.env.WORKBENCH_AGENT || 'codex').toLowerCase();
-const TOKEN = getArg('--token', process.env.WORKBENCH_BRIDGE_TOKEN || '');
+const TOKEN = getArg('--token', process.env.WORKBENCH_BRIDGE_TOKEN || readTokenFile());
 const WORKDIR = resolve(getArg('--cwd', process.env.WORKBENCH_CWD || process.cwd()));
 const PROJECTS_FILE = resolve(getArg('--projects-file', process.env.WORKBENCH_PROJECTS_FILE || join(homedir(), '.sullyos-workbench-projects.json')));
 const TIMEOUT_MS = Number(getArg('--timeout-ms', process.env.WORKBENCH_TIMEOUT_MS || '120000'));
@@ -75,6 +89,9 @@ const WINDOWS_NPM_CODEX_BIN = process.env.APPDATA
 const CODEX_BIN = process.env.WORKBENCH_CODEX_BIN
   || (WINDOWS_NPM_CODEX_BIN && existsSync(WINDOWS_NPM_CODEX_BIN) ? WINDOWS_NPM_CODEX_BIN : 'codex');
 const DEFAULT_PROJECT_ID = createHash('sha1').update(WORKDIR).digest('hex').slice(0, 12);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const isLoopbackHost = host => LOOPBACK_HOSTS.has(String(host || '').trim().toLowerCase());
+const requiresBearerToken = !isLoopbackHost(HOST);
 const quoteCommandPart = value => {
   const normalized = process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
   return /\s/.test(normalized) ? `"${normalized.replaceAll('"', '\\"')}"` : normalized;
@@ -134,9 +151,17 @@ const readBody = req => new Promise((resolveBody, rejectBody) => {
 });
 
 const checkAuth = req => {
-  if (!TOKEN) return true;
+  if (!TOKEN) return isLoopbackHost(HOST);
   const header = String(req.headers.authorization || '');
   return header === `Bearer ${TOKEN}`;
+};
+
+const assertSafeAuthConfig = () => {
+  if (!requiresBearerToken || TOKEN) return;
+  console.error('[workbench-bridge] Refusing to start without a Bearer token.');
+  console.error(`[workbench-bridge] Host "${HOST}" is reachable beyond localhost. Start with --token YOUR_KEY or set WORKBENCH_BRIDGE_TOKEN.`);
+  console.error('[workbench-bridge] For local-only unauthenticated debugging, use --host 127.0.0.1.');
+  process.exit(1);
 };
 
 const normalizeProject = project => {
@@ -976,6 +1001,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
+assertSafeAuthConfig();
 await loadProjectRegistry();
 
 server.listen(PORT, HOST, () => {
@@ -985,7 +1011,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  Agent: ${agentInfo.displayName}`);
   console.log(`  CWD:   ${WORKDIR}`);
   console.log(`  Projects: ${PROJECTS_FILE}`);
-  console.log(TOKEN ? '  Auth:  Bearer token enabled' : '  Auth:  disabled');
+  console.log(TOKEN ? '  Auth:  Bearer token enabled' : '  Auth:  disabled (loopback only)');
   console.log('');
   console.log('Put this in SullyOS Code settings:');
   console.log(`  http://<this-computer-ip>:${PORT}`);

@@ -74,7 +74,7 @@ export function buildMusicWakePickableSongs(input: MusicWakePickableInput): Musi
 export function formatMusicWakePickableSongs(songs: MusicWakePickableSong[]): string {
     if (!songs.length) return '';
     return songs
-        .map((song, index) => `${index}. [${song.sourceLabel}]《${song.name}》 ${song.artists}`)
+        .map((song, index) => `${index + 1}. [${song.sourceLabel}]《${song.name}》 ${song.artists}`)
         .join('\n');
 }
 

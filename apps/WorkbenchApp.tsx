@@ -75,6 +75,21 @@ const WORKBENCH_SPACES: Record<WorkbenchSpace, {
 
 const makeId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const WORKBENCH_XHS_URL_RE = /(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn)\S*/i;
+const SILENT_BRIDGE_OFFLINE = 'silent_workbench_bridge_offline';
+
+const isWorkbenchBridgeConnectionError = (error: unknown): boolean => {
+    const message = String((error as any)?.message || error || '');
+    return /Failed to fetch|NetworkError|Load failed|ECONNREFUSED|ERR_CONNECTION|电脑桥接(?:连接|请求)失败|电脑桥接未连接|请先填写电脑桥接地址|连接已断开|连接失败/i.test(message);
+};
+
+const makeSilentBridgeOfflineError = () => Object.assign(
+    new Error('电脑未连接'),
+    { code: SILENT_BRIDGE_OFFLINE },
+);
+
+const isSilentBridgeOfflineError = (error: unknown): boolean => (
+    (error as any)?.code === SILENT_BRIDGE_OFFLINE
+);
 
 const getSessionSpace = (session: WorkbenchSession): WorkbenchSpace => {
     if (session.space === 'inspiration' || session.id === 'inspiration' || session.id.startsWith('inspiration_')) return 'inspiration';
@@ -818,6 +833,7 @@ const WorkbenchApp: React.FC = () => {
     const fallbackReady = !!config.fallbackApiBaseUrl?.trim() && !!config.fallbackApiModel?.trim();
     const usageStats = useMemo(() => buildUsageStats(messages), [messages]);
     const visibleMessages = useMemo(() => messages.filter((message, index, all) => {
+        if (message.metadata?.hidden) return false;
         if (message.type !== 'text' || !WORKBENCH_XHS_URL_RE.test(message.content || '')) return true;
         const next = all[index + 1];
         return !(
@@ -1145,7 +1161,7 @@ const WorkbenchApp: React.FC = () => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }, [messages.length, busy]);
 
-    const capabilityLabel = workExecutable ? '电脑已连接' : '仅聊天';
+    const capabilityLabel = workExecutable ? '电脑已连接' : '电脑未连接';
     const modeCopy = participantEnabled
         ? '一起工作 · ' + (selectedParticipant?.name || '未选择角色') + ' · ' + capabilityLabel
         : capabilityLabel;
@@ -1272,7 +1288,13 @@ const WorkbenchApp: React.FC = () => {
         const xhsShareSegments = parseWorkbenchXhsShareSegments(rawReply);
         if (xhsShareSegments.some(segment => segment.type === 'xhs_card')) {
             for (const segment of xhsShareSegments) {
-                if (segment.type === 'text') continue;
+                if (segment.type === 'text') {
+                    const text = segment.content.trim();
+                    if (!text) continue;
+                    const textMessages = await appendAssistantReply(base, text, split, quoteContext);
+                    saved.push(...textMessages);
+                    continue;
+                }
                 const card: WorkbenchMessage = {
                     ...base,
                     id: makeId('wbm'),
@@ -1851,20 +1873,38 @@ const WorkbenchApp: React.FC = () => {
             await buildWorkbenchCurrentProgressContext(s.id),
             taskIndex,
         ].filter(Boolean).join('\n\n');
-        const bridgeReply = workExecutable
-            ? await sendWorkbenchBridgeMessage(config, {
-                sessionId: s.id,
-                mode: 'codex',
-                capabilityMode: 'execute',
-                content: requestContent,
-                recentMessages: recent,
-                taskIndex: contextIndex,
-            })
-            : await sendWorkbenchFallbackMessage(config, {
+        let bridgeReply;
+        let replySource: 'bridge' | 'fallback-api' = workExecutable ? 'bridge' : 'fallback-api';
+        if (workExecutable) {
+            try {
+                bridgeReply = await sendWorkbenchBridgeMessage(config, {
+                    sessionId: s.id,
+                    mode: 'codex',
+                    capabilityMode: 'execute',
+                    content: requestContent,
+                    recentMessages: recent,
+                    taskIndex: contextIndex,
+                });
+            } catch (error) {
+                if (!isWorkbenchBridgeConnectionError(error)) throw error;
+                setBridgeStatus('offline');
+                setTestResult('电脑未连接');
+                setActiveSpace('inspiration');
+                if (!fallbackReady) throw makeSilentBridgeOfflineError();
+                bridgeReply = await sendWorkbenchFallbackMessage(config, {
+                    content: requestContent,
+                    recentMessages: recent,
+                    taskIndex: contextIndex,
+                });
+                replySource = 'fallback-api';
+            }
+        } else {
+            bridgeReply = await sendWorkbenchFallbackMessage(config, {
                 content: requestContent,
                 recentMessages: recent,
                 taskIndex: contextIndex,
             });
+        }
             const assistantBase: Omit<WorkbenchMessage, 'id' | 'content' | 'createdAt' | 'type'> = {
                 sessionId: s.id,
                 role: 'codex',
@@ -1872,14 +1912,14 @@ const WorkbenchApp: React.FC = () => {
                 mode: 'codex',
                 status: 'sent',
                 metadata: {
-                    source: workExecutable ? 'bridge' : 'fallback-api',
+                    source: replySource,
                     agent: bridgeReply.agent || config.defaultAgent,
                     speakerName: agentDisplayName(config, bridgeReply.agent, bridgeReply.displayName),
                     speakerAvatar: config.codexAvatar || '',
                 },
             };
             await appendAssistantReply(assistantBase, bridgeReply.reply, false, recent);
-            for (const incoming of workExecutable ? bridgeReply.artifacts || [] : []) {
+            for (const incoming of replySource === 'bridge' ? bridgeReply.artifacts || [] : []) {
                 const now = Date.now();
                 const artifact: WorkbenchArtifact = {
                     ...incoming,
@@ -1984,7 +2024,7 @@ const WorkbenchApp: React.FC = () => {
         try {
             if (userMessage.type !== 'emoji' && hasAssistantMention(text)) {
                 if (!assistantAvailable) {
-                    addToast('已 @AI 助理，但 CLI 未连接，备用聊天 API 也未配置', 'info');
+                    addToast('电脑未连接，备用聊天 API 也未配置', 'info');
                 } else {
                     setThinkingSpeaker('codex');
                     const recent = [
@@ -2000,6 +2040,7 @@ const WorkbenchApp: React.FC = () => {
             }
             setConversations(await loadConversations());
         } catch (e: any) {
+            if (isSilentBridgeOfflineError(e)) return;
             addToast(e?.message || '消息保存失败', 'error');
         } finally {
             setBusy(false);
@@ -2010,7 +2051,7 @@ const WorkbenchApp: React.FC = () => {
     const nudgeAssistant = async () => {
         if (busy) return;
         if (!assistantAvailable) {
-            addToast('CLI 未连接，备用聊天 API 也未配置', 'info');
+            addToast('电脑未连接，备用聊天 API 也未配置', 'info');
             return;
         }
         const s = session || await createWorkbenchSession(activeSpace);
@@ -2028,6 +2069,7 @@ const WorkbenchApp: React.FC = () => {
             }
             await runWorkbenchBackgroundTask(s.id, 'codex', () => runAssistantReply(s, recent));
         } catch (e: any) {
+            if (isSilentBridgeOfflineError(e)) return;
             addToast(e?.message || 'AI 助理回应失败', 'error');
         } finally {
             setBusy(false);
@@ -2132,7 +2174,7 @@ const WorkbenchApp: React.FC = () => {
             ));
             if (mentionedAssistant) {
                 if (!assistantAvailable) {
-                    addToast('角色已 @AI 助理，但 CLI 未连接，备用聊天 API 也未配置', 'info');
+                    addToast('角色已 @AI 助理，但电脑未连接，备用聊天 API 也未配置', 'info');
                 } else {
                     setThinkingSpeaker('codex');
                     await runAssistantReply(
@@ -2145,6 +2187,7 @@ const WorkbenchApp: React.FC = () => {
             setConversations(await loadConversations());
             });
         } catch (e: any) {
+            if (isSilentBridgeOfflineError(e)) return;
             addToast(e?.message || '角色回应失败', 'error');
         } finally {
             setBusy(false);
@@ -2896,7 +2939,7 @@ const WorkbenchApp: React.FC = () => {
                                 </div>
                                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                                     <div className="rounded-lg border border-white bg-white/75 px-3 py-3">
-                                        <div className="text-xs font-semibold text-slate-800">仅聊天</div>
+                                        <div className="text-xs font-semibold text-slate-800">电脑未连接</div>
                                         <p className="mt-1 text-[11px] leading-relaxed text-slate-500">电脑桥接未连接。配置备用聊天 API 后，星光可催动 AI 助理讨论；闪电催动角色。两者都不能操作电脑或读取文件。</p>
                                     </div>
                                     <div className="rounded-lg border border-emerald-100 bg-emerald-50/65 px-3 py-3">

@@ -8,6 +8,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+if (-not $Token -and $env:WORKBENCH_BRIDGE_TOKEN) {
+    $Token = $env:WORKBENCH_BRIDGE_TOKEN
+}
+if (-not $Token) {
+    $userTokenFile = Join-Path $env:USERPROFILE ".sullyos-workbench-bridge-token"
+    if (Test-Path -LiteralPath $userTokenFile) {
+        $Token = (Get-Content -LiteralPath $userTokenFile -Raw).Trim()
+    }
+}
+if (-not $Token) {
+    $repoTokenFile = Join-Path $repoRoot ".workbench-bridge-token"
+    if (Test-Path -LiteralPath $repoTokenFile) {
+        $Token = (Get-Content -LiteralPath $repoTokenFile -Raw).Trim()
+    }
+}
+
+if (-not $Token -and $HostName -notin @("localhost", "127.0.0.1", "::1")) {
+    throw "Refusing to install a non-local Workbench bridge without -Token. Use -Token YOUR_KEY, or set -HostName 127.0.0.1 for local-only debugging."
+}
+
 $pnpm = (Get-Command pnpm -ErrorAction Stop).Source
 $bridgeCommand = "Set-Location -LiteralPath '$repoRoot'; & '$pnpm' workbench:bridge -- --host $HostName --port $Port"
 if ($Token) {

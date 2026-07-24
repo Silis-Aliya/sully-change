@@ -22,6 +22,12 @@ const hooks = (isListeningTogether: boolean): MusicActionHooks => ({
     addSongToCharPlaylist: vi.fn(async () => null),
 });
 
+const collectCreated = async (charId: string) => {
+    const messages = await DB.getRecentMessagesByCharId(charId, 50, true);
+    createdIds.push(...messages.map(message => message.id).filter((id): id is number => typeof id === 'number'));
+    return messages;
+};
+
 describe('MUSIC_TOGETHER_REQUEST deduplication', () => {
     it('does not create another invite while already listening together', async () => {
         const charId = `music-together-active-${Date.now()}`;
@@ -65,4 +71,30 @@ describe('MUSIC_TOGETHER_REQUEST deduplication', () => {
         const messages = await DB.getRecentMessagesByCharId(charId, 20, true);
         expect(messages.filter(message => message.metadata?.togetherRequestFromCharacter)).toHaveLength(1);
     });
+});
+
+describe('MUSIC_ACTION receipts', () => {
+    it('records next_song as a lightweight together action', async () => {
+        const charId = `music-action-next-${Date.now()}`;
+        const musicHooks = {
+            ...hooks(true),
+            nextSong: vi.fn(() => ({ songName: 'Next Song', artists: 'Next Artist' })),
+        };
+
+        const content = await ChatParser.parseAndExecuteActions(
+            '[[MUSIC_ACTION:next_song]]',
+            charId,
+            'Silis',
+            vi.fn(),
+            musicHooks,
+        );
+
+        const messages = await collectCreated(charId);
+        const receipt = messages.find(message => message.metadata?.musicTogetherAction === 'next_song');
+        expect(content).toBe('');
+        expect(receipt?.role).toBe('system');
+        expect(receipt?.content).toBe('Silis 切到了下一首：《Next Song》— Next Artist');
+        expect(receipt?.metadata?.hiddenSystemStyle).toBe(true);
+    });
+
 });

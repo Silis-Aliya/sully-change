@@ -42,10 +42,10 @@ const htmlCard = (): Message => ({
     metadata: { htmlSource: '<div>hello</div>' },
 });
 
-const musicCard = (): Message => ({
+const musicCard = (role: 'user' | 'assistant' = 'assistant'): Message => ({
     id: 2,
     charId: 'char-1',
-    role: 'assistant',
+    role,
     type: 'music_card',
     content: '[音乐卡片]',
     timestamp: 2,
@@ -70,13 +70,21 @@ describe('MessageItem module layout', () => {
         expect(markup).toContain(align === 'center' ? 'mx-auto sully-html-wrap' : 'ml-12 sully-html-wrap');
     });
 
-    it.each(moduleModes)('一起听卡片在 %s / %s 模式跟随模块位置且没有消息外侧头像', (align, avatarMode) => {
-        const markup = renderMessage(musicCard(), align, avatarMode);
-        expect(markup).not.toContain('alt="avatar"');
-        expect(markup).toContain(align === 'center' ? 'mx-auto sully-html-wrap' : 'ml-12 sully-html-wrap');
-        // 卡片内部的“一起听”双头像仍保留；只移除消息外壳头像。
+    it.each(moduleModes)('角色发起的一起听卡片在 %s / %s 模式始终位于角色侧并保留外侧头像', (align, avatarMode) => {
+        const markup = renderMessage(musicCard('assistant'), align, avatarMode);
+        expect(markup).toContain('justify-start');
+        expect(markup).toContain('alt="avatar"');
+        expect(markup).toContain('ml-12');
+        expect(markup).not.toContain('mx-auto');
         expect(markup).toContain('https://example.com/user.png');
         expect(markup).toContain('https://example.com/char.png');
+    });
+
+    it.each(moduleModes)('用户发起的一起听卡片在 %s / %s 模式始终位于用户侧', (align, avatarMode) => {
+        const markup = renderMessage(musicCard('user'), align, avatarMode);
+        expect(markup).toContain('justify-end');
+        expect(markup).toContain('mr-12');
+        expect(markup).not.toContain('mx-auto');
     });
 
     it('普通角色消息继续显示外侧头像', () => {

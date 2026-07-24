@@ -2202,45 +2202,60 @@ const MessageItem = React.memo(({
         if (intent === 'share') {
             return commonLayout(
                 <div
-                    className="relative w-[min(340px,72vw)] h-[104px] overflow-hidden rounded-[22px] shadow-sm border border-white/45 active:scale-[0.99] transition-transform"
-                    style={{ background: 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)' }}
+                    className="relative flex w-[min(276px,72vw)] items-center gap-3 overflow-hidden rounded-[18px] border px-3 py-2.5 shadow-sm active:scale-[0.99] transition-transform"
+                    style={{
+                        background: 'rgba(255,255,255,0.94)',
+                        borderColor: 'rgba(231,223,242,0.95)',
+                        boxShadow: '0 10px 24px rgba(63,48,92,0.08)',
+                    }}
                 >
-                    {song.albumPic ? (
-                        <img src={song.albumPic} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover" loading="lazy" referrerPolicy="no-referrer" />
-                    ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-3xl text-white/70">♪</div>
-                    )}
                     <div
-                        aria-hidden
-                        className="absolute inset-0"
-                        style={{
-                            background: `linear-gradient(90deg, rgba(24,18,31,0.72) 0%, rgba(64,45,66,0.34) 48%, rgba(18,14,24,0.76) 100%),
-                                         radial-gradient(circle at 84% 20%, rgba(255,192,215,0.24), transparent 35%)`,
-                        }}
-                    />
-                    <div className="absolute right-3 top-2.5 rounded-full border border-white/25 bg-white/20 px-2.5 py-1 text-[10px] font-semibold text-white/90 backdrop-blur-md">
+                        className="absolute right-2.5 top-2 rounded-full px-2 py-0.5 text-[9px] font-semibold"
+                        style={{ color: '#cf7f9c', background: '#ffeaf1' }}
+                    >
                         音乐分享
                     </div>
-                    <div className="relative z-10 flex h-full items-center gap-3.5 px-4">
+                    <div
+                        className="relative h-[56px] w-[56px] shrink-0 overflow-hidden rounded-[14px]"
+                        style={{ boxShadow: '0 7px 16px rgba(49,38,70,0.12)' }}
+                    >
+                        {song.albumPic ? (
+                            <img src={song.albumPic} alt="" className="h-full w-full object-cover" loading="lazy" referrerPolicy="no-referrer" />
+                        ) : (
+                            <div
+                                className="grid h-full w-full place-items-center text-xl text-white"
+                                style={{ background: 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)' }}
+                            >
+                                ♪
+                            </div>
+                        )}
                         <button
                             type="button"
                             onClick={playSharedSong}
-                            className="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-full border border-white/40 bg-white/25 text-white shadow-[0_8px_18px_rgba(0,0,0,0.18)] backdrop-blur-md active:scale-95"
+                            className="absolute inset-0 m-auto grid h-8 w-8 place-items-center rounded-full border border-white/45 bg-white/35 text-white shadow-sm backdrop-blur-md active:scale-95"
                             title="播放这首歌"
                         >
-                            <svg viewBox="0 0 24 24" className="ml-0.5 h-6 w-6 fill-current">
+                            <svg viewBox="0 0 24 24" className="ml-0.5 h-4 w-4 fill-current">
                                 <path d="M8 5v14l11-7z" />
                             </svg>
                         </button>
-                        <div className="min-w-0 flex-1 pt-0.5">
-                            <div className="truncate text-[18px] font-extrabold leading-tight text-white drop-shadow">
-                                {song.name || '未命名'}
-                            </div>
-                            <div className="mt-1 truncate text-[12px] text-white/80">
-                                {[song.artists, song.album].filter(Boolean).join(' · ') || '未知歌手'}
-                            </div>
+                    </div>
+                    <div className="min-w-0 flex-1 pr-12">
+                        <div className="truncate text-[15px] font-bold leading-tight" style={{ color: '#231d34' }}>
+                            {song.name || '未命名'}
                         </div>
-                        <div className="self-end pb-5 text-[13px] font-black tracking-[3px] text-white/55">••••</div>
+                        <div className="mt-1 truncate text-[11px]" style={{ color: '#91899d' }}>
+                            {[song.artists, song.album].filter(Boolean).join(' · ') || '未知歌手'}
+                        </div>
+                        <div className="mt-2 flex h-2.5 items-end gap-[3px]" style={{ color: '#e8b2c5' }}>
+                            {[4, 7, 5, 8].map((height, index) => (
+                                <span
+                                    key={index}
+                                    className="w-[3px] rounded-full bg-current opacity-75"
+                                    style={{ height }}
+                                />
+                            ))}
+                        </div>
                     </div>
                 </div>
             );

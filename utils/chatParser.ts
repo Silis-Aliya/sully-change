@@ -44,7 +44,7 @@ export interface MusicActionHooks {
     isListeningTogether?: (charId: string) => boolean;
     joinListeningTogether: (charId: string, inviter?: 'user' | 'character') => void;
     leaveListeningTogether?: (charId: string) => void;
-    nextSong?: () => void;
+    nextSong?: () => { songName: string; artists: string } | null | void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
     pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
     playSharedSong?: (song: MusicActionSnapshot) => Promise<void>;
@@ -115,7 +115,7 @@ const getCurrentTurnSharedMusicSnapshot = async (
     return null;
 };
 
-const getShareableMusicSnapshot = async (charId: string, index: number): Promise<MusicActionSnapshot | null> => {
+const getShareableMusicSnapshot = async (charId: string, displayIndex: number): Promise<MusicActionSnapshot | null> => {
     let candidates = getRememberedMusicWakePickableSongs(charId);
     if (!candidates.length) {
         const chars = await DB.getAllCharacters().catch(() => []);
@@ -127,8 +127,37 @@ const getShareableMusicSnapshot = async (charId: string, index: number): Promise
             max: 10,
         });
     }
-    const picked = candidates[index] || (index > 0 ? candidates[index - 1] : undefined);
+    const picked = displayIndex > 0 ? candidates[displayIndex - 1] : undefined;
     return picked ? musicSnapshotFromPickableSong(picked) : null;
+};
+
+const describeMusicActionSong = (song?: { songName?: string; name?: string; artists?: string } | null): string => {
+    const name = song?.songName || song?.name || '';
+    if (!name) return '';
+    return song?.artists ? `《${name}》— ${song.artists}` : `《${name}》`;
+};
+
+const saveMusicActionReceipt = async (
+    charId: string,
+    charName: string,
+    action: 'next_song' | 'pick_song' | 'set_mode',
+    content: string,
+    outcome: 'success' | 'failed' = 'success',
+) => {
+    if (!content.trim()) return;
+    await DB.saveMessage({
+        charId,
+        role: 'system',
+        type: 'text',
+        content,
+        metadata: {
+            musicTogetherStatus: 'action',
+            musicTogetherAction: action,
+            musicTogetherActionOutcome: outcome,
+            hiddenSystemStyle: true,
+            charName,
+        },
+    } as any);
 };
 
 export const ChatParser = {
@@ -278,22 +307,78 @@ export const ChatParser = {
             if (modeMatch && targetMatch?.[1] !== 'pick_song') {
                 const mode = (modeMatch[2] || '').trim() as 'loop' | 'shuffle' | 'single';
                 if (mode === 'loop' || mode === 'shuffle' || mode === 'single') {
-                    musicHooks.setPlayMode?.(mode);
                     const label = mode === 'shuffle' ? '随机播放' : mode === 'single' ? '单曲循环' : '列表循环';
-                    addToast(`${charName} 切换到${label}`, 'info');
+                    if (musicHooks.setPlayMode) {
+                        musicHooks.setPlayMode(mode);
+                        await saveMusicActionReceipt(charId, charName, 'set_mode', `${charName} 把一起听播放模式切换为${label}`);
+                        addToast(`${charName} 切换到${label}`, 'info');
+                    } else {
+                        await saveMusicActionReceipt(
+                            charId,
+                            charName,
+                            'set_mode',
+                            `${charName} 尝试把一起听播放模式切换为${label}，但播放器暂时无法执行`,
+                            'failed',
+                        );
+                        addToast('播放器暂时无法切换播放模式', 'error');
+                    }
                 }
             }
 
             if (targetMatch?.[1] === 'pick_song') {
                 const rawIdx = Number.parseInt((targetMatch[2] || '').trim(), 10);
                 if (Number.isInteger(rawIdx)) {
-                    musicHooks.setPlayMode?.('loop');
-                    const picked = await musicHooks.pickSong?.(rawIdx, charId);
-                    if (picked) addToast(`${charName} 点了《${picked.songName}》`, 'info');
+                    const songIndex = rawIdx - 1;
+                    const picked = musicHooks.pickSong
+                        ? await musicHooks.pickSong(songIndex, charId)
+                        : null;
+                    if (picked) {
+                        musicHooks.setPlayMode?.('loop');
+                        await saveMusicActionReceipt(charId, charName, 'pick_song', `${charName} 点了这首歌：${describeMusicActionSong(picked)}`);
+                        addToast(`${charName} 点了《${picked.songName}》`, 'info');
+                    } else {
+                        await saveMusicActionReceipt(
+                            charId,
+                            charName,
+                            'pick_song',
+                            `${charName} 尝试点播编号 ${rawIdx} 的歌曲，但这首歌当前不可用`,
+                            'failed',
+                        );
+                        addToast('没有找到可播放的歌曲', 'error');
+                    }
                 }
             } else if (targetMatch?.[1] === 'next_song') {
-                musicHooks.nextSong?.();
-                addToast(`${charName} 切到下一首`, 'info');
+                const before = musicHooks.getListeningSnapshot();
+                const next = musicHooks.nextSong?.() || null;
+                if (!next) {
+                    await saveMusicActionReceipt(
+                        charId,
+                        charName,
+                        'next_song',
+                        `${charName} 尝试切换到下一首，但当前没有可播放的歌曲`,
+                        'failed',
+                    );
+                    addToast('当前没有可切换的歌曲', 'error');
+                } else {
+                    const songDesc = describeMusicActionSong(next);
+                    const replayedCurrent = !!before
+                        && before.name === next.songName
+                        && before.artists === next.artists;
+                    await saveMusicActionReceipt(
+                        charId,
+                        charName,
+                        'next_song',
+                        replayedCurrent
+                            ? `${charName} 重新播放了${songDesc}`
+                            : `${charName} 切到了下一首：${songDesc}`,
+                    );
+                    addToast(
+                        replayedCurrent
+                            ? `${charName} 重新播放了《${next.songName}》`
+                            : `${charName} 切到了《${next.songName}》`,
+                        'info',
+                    );
+                }
             }
 
             const cardMatch = musicMatches.find(m =>
@@ -459,6 +544,12 @@ export const ChatParser = {
             const dueTime = new Date(timeStr).getTime();
             if (!isNaN(dueTime) && dueTime > Date.now()) {
                 await DB.saveScheduledMessage({ id: `sched-${Date.now()}-${Math.random()}`, charId, content: msgContent, dueAt: dueTime, createdAt: Date.now() });
+                await DB.saveMessage({
+                    charId,
+                    role: 'system',
+                    type: 'text',
+                    content: `${charName} 安排了定时消息 "${msgContent}" (${timeStr})`,
+                });
                 try {
                     const hasPerm = await LocalNotifications.checkPermissions();
                     if (hasPerm.display === 'granted') {

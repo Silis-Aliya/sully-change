@@ -247,7 +247,7 @@ export interface PostProcessMusicHooks {
     isListeningTogether?: (charId: string) => boolean;
     joinListeningTogether: (charId: string, inviter?: 'user' | 'character') => void;
     leaveListeningTogether?: (charId: string) => void;
-    nextSong?: () => void;
+    nextSong?: () => { songName: string; artists: string } | null | void;
     setPlayMode?: (mode: 'loop' | 'shuffle' | 'single') => void;
     pickSong?: (index: number, charId: string) => Promise<{ songName: string; artists: string } | null>;
     playSharedSong?: (song: any) => Promise<void>;
@@ -327,6 +327,29 @@ export interface PostProcessCtx {
      */
     reasoningContent?: string;
 }
+
+const formatXhsReceiptText = (text: string, max = 120): string => {
+    const cleaned = text.replace(/\s+/g, ' ').trim();
+    if (cleaned.length <= max) return cleaned;
+    return `${cleaned.slice(0, max)}...`;
+};
+
+const findXhsNoteTitle = (noteId: string, notes: XhsNote[]): string => {
+    const hit = notes.find((note: any) => note.noteId === noteId || note.id === noteId || note.note_id === noteId);
+    return (hit?.title || '').trim();
+};
+
+const saveXhsActionReceipt = async (
+    charId: string,
+    content: string,
+) => {
+    await DB.saveMessage({
+        charId,
+        role: 'system',
+        type: 'text',
+        content,
+    });
+};
 
 // ─── 主入口 ─────────────────────────────────────────────────────────────────
 
@@ -1716,6 +1739,11 @@ export async function applyAssistantPostProcessing(
                         }
                     }
                     if (result.success) {
+                        const target = commentAuthorName ? `@${commentAuthorName} 的` : '';
+                        await saveXhsActionReceipt(
+                            char.id,
+                            `📕 ${char.name}回复了${target}小红书评论: "${formatXhsReceiptText(replyContent)}"`,
+                        );
                         addToast(`📕 ${char.name}回复了一条评论`, 'success');
                     } else {
                         console.warn(`📕 [XHS] 回复失败，降级为 @提及 评论:`, result.message);
@@ -1729,6 +1757,10 @@ export async function applyAssistantPostProcessing(
                             fallback = await xhsComment(xhsConf, noteId, fallbackContent, xsecToken);
                         }
                         if (fallback.success) {
+                            await saveXhsActionReceipt(
+                                char.id,
+                                `📕 ${char.name}在小红书评论了: "${formatXhsReceiptText(fallbackContent)}"`,
+                            );
                             addToast(`📕 ${char.name}评论了一条笔记（@提及回复）`, 'success');
                         } else {
                             addToast(`回复失败: ${result.message}`, 'error');
@@ -1756,6 +1788,11 @@ export async function applyAssistantPostProcessing(
             try {
                 const result = await xhsLike(xhsConf, noteId, xsecToken || '');
                 if (result.success) {
+                    const title = findXhsNoteTitle(noteId, lastXhsNotesRef.current);
+                    await saveXhsActionReceipt(
+                        char.id,
+                        title ? `📕 ${char.name}点赞了小红书笔记「${formatXhsReceiptText(title, 80)}」` : `📕 ${char.name}点赞了一条小红书笔记`,
+                    );
                     addToast(`📕 ${char.name}点赞了一条笔记`, 'success');
                 } else {
                     console.warn('📕 [XHS] 点赞失败:', result.message);
@@ -1775,6 +1812,11 @@ export async function applyAssistantPostProcessing(
             try {
                 const result = await xhsFavorite(xhsConf, noteId, xsecToken || '');
                 if (result.success) {
+                    const title = findXhsNoteTitle(noteId, lastXhsNotesRef.current);
+                    await saveXhsActionReceipt(
+                        char.id,
+                        title ? `📕 ${char.name}收藏了小红书笔记「${formatXhsReceiptText(title, 80)}」` : `📕 ${char.name}收藏了一条小红书笔记`,
+                    );
                     addToast(`📕 ${char.name}收藏了一条笔记`, 'success');
                 } else {
                     console.warn('📕 [XHS] 收藏失败:', result.message);
@@ -1958,6 +2000,11 @@ export async function applyAssistantPostProcessing(
                         }
                     }
                     if (result.success) {
+                        const target = commentAuthorName ? `@${commentAuthorName} 的` : '';
+                        await saveXhsActionReceipt(
+                            char.id,
+                            `📕 ${char.name}回复了${target}小红书评论: "${formatXhsReceiptText(replyContent)}"`,
+                        );
                         addToast(`📕 ${char.name}回复了一条评论`, 'success');
                     } else {
                         console.warn(`📕 [XHS] 回复失败(detail后)，降级为 @提及 评论:`, result.message);
@@ -1971,6 +2018,10 @@ export async function applyAssistantPostProcessing(
                             fallback = await xhsComment(xhsConf, noteId, fallbackContent, xsecToken);
                         }
                         if (fallback.success) {
+                            await saveXhsActionReceipt(
+                                char.id,
+                                `📕 ${char.name}在小红书评论了: "${formatXhsReceiptText(fallbackContent)}"`,
+                            );
                             addToast(`📕 ${char.name}评论了一条笔记（@提及回复）`, 'success');
                         } else {
                             addToast(`回复失败: ${result.message}`, 'error');
@@ -1995,6 +2046,11 @@ export async function applyAssistantPostProcessing(
             try {
                 const result = await xhsLike(xhsConf, noteId, xsecToken || '');
                 if (result.success) {
+                    const title = findXhsNoteTitle(noteId, lastXhsNotesRef.current);
+                    await saveXhsActionReceipt(
+                        char.id,
+                        title ? `📕 ${char.name}点赞了小红书笔记「${formatXhsReceiptText(title, 80)}」` : `📕 ${char.name}点赞了一条小红书笔记`,
+                    );
                     addToast(`📕 ${char.name}点赞了一条笔记`, 'success');
                 } else {
                     console.warn('📕 [XHS] 点赞失败(detail后):', result.message);
@@ -2014,6 +2070,11 @@ export async function applyAssistantPostProcessing(
             try {
                 const result = await xhsFavorite(xhsConf, noteId, xsecToken || '');
                 if (result.success) {
+                    const title = findXhsNoteTitle(noteId, lastXhsNotesRef.current);
+                    await saveXhsActionReceipt(
+                        char.id,
+                        title ? `📕 ${char.name}收藏了小红书笔记「${formatXhsReceiptText(title, 80)}」` : `📕 ${char.name}收藏了一条小红书笔记`,
+                    );
                     addToast(`📕 ${char.name}收藏了一条笔记`, 'success');
                 } else {
                     console.warn('📕 [XHS] 收藏失败(detail后):', result.message);

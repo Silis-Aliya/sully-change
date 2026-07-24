@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
     collectBlobRefIds,
+    collectDeletedBlobIds,
     QUICK_SYNC_STORES,
     recordKeyForQuickSync,
     restoreQuickSyncDeleteKey,
     shouldIncludeQuickSyncRow,
 } from './quickSync';
+import { shouldBackupLocalStorageKey } from './localSettingsBackup';
 
 describe('quickSync settings coverage', () => {
     it('includes theme and settings asset stores', () => {
@@ -45,6 +47,17 @@ describe('quickSync settings coverage', () => {
         expect(QUICK_SYNC_STORES).toContain('vr_music');
     });
 
+    it('includes persistent full-backup options in incremental settings', () => {
+        expect(shouldBackupLocalStorageKey('vr_po_base')).toBe(true);
+        expect(shouldBackupLocalStorageKey('vr_po_device')).toBe(true);
+        expect(shouldBackupLocalStorageKey('signal_my_authorship')).toBe(true);
+        expect(shouldBackupLocalStorageKey('signal_my_lines')).toBe(true);
+        expect(shouldBackupLocalStorageKey('signal_notice_ack')).toBe(true);
+        expect(shouldBackupLocalStorageKey('mg_style_v1')).toBe(true);
+        expect(shouldBackupLocalStorageKey('vr_po_admin_token')).toBe(false);
+        expect(shouldBackupLocalStorageKey('signal_whisper')).toBe(false);
+    });
+
     it('syncs customization assets but skips runtime cache assets', () => {
         expect(shouldIncludeQuickSyncRow('assets', { id: 'appearance_preset_abc', data: '{}' })).toBe(true);
         expect(shouldIncludeQuickSyncRow('assets', { id: 'icon_chat', data: 'data:image/png;base64,abc' })).toBe(true);
@@ -69,6 +82,13 @@ describe('quickSync settings coverage', () => {
                 { content: 'plain text' },
             ],
         }).sort()).toEqual(['img_avatar_2', 'img_card_3', 'img_code_avatar_4', 'img_wallpaper_1']);
+    });
+
+    it('emits incremental deletions for image blobs that are no longer referenced', () => {
+        expect(collectDeletedBlobIds(
+            { keep: 'hash-a', removed_avatar: 'hash-b', removed_card: 'hash-c' },
+            { keep: 'hash-a', added: 'hash-d' },
+        ).sort()).toEqual(['removed_avatar', 'removed_card']);
     });
 
     it('uses memoryId as the incremental key for vector rows', () => {

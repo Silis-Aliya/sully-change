@@ -9,7 +9,6 @@ import {
 } from './agenticTools';
 import {
     runXhsPhoneBrowse,
-    runXhsPhoneLikeCurrent,
     runXhsPhoneMyProfile,
     runXhsPhoneOpenDetail,
     runXhsPhoneSearch,
@@ -53,6 +52,11 @@ const stripXhsDirectives = (content: string) => content
     .replace(/\[\[XHS_MY_PROFILE\]\]/g, '')
     .replace(/\[\[XHS_DETAIL:\s*.*?\]\]/gs, '')
     .replace(/\[\[XHS_SHARE:\s*\d+\]\]/g, '')
+    .replace(/\[\[XHS_LIKE:\s*.*?\]\]/gs, '')
+    .replace(/\[\[XHS_FAV:\s*.*?\]\]/gs, '')
+    .replace(/\[\[XHS_COMMENT:\s*.*?\]\]/gs, '')
+    .replace(/\[\[XHS_REPLY:\s*.*?\]\]/gs, '')
+    .replace(/\[\[XHS_POST:\s*.*?\]\]/gs, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
@@ -80,11 +84,10 @@ const messageBase = (
     },
 });
 
-const noteMessage = (args: WorkbenchXhsPostProcessArgs, note: XhsNote, shareComment = ''): WorkbenchMessage =>
+const noteMessage = (args: WorkbenchXhsPostProcessArgs, note: XhsNote): WorkbenchMessage =>
     messageBase(args, 'xhs_card', note.title || '小红书笔记', {
         xhsNote: note,
         sharedBy: 'character',
-        shareComment,
     });
 
 const textMessage = (args: WorkbenchXhsPostProcessArgs, content: string): WorkbenchMessage =>
@@ -165,7 +168,6 @@ export const processWorkbenchXhsDirectives = async (
 
     await runPhoneCurrent('[[XHS_PHONE_BROWSE]]', '浏览小红书', () => runXhsPhoneBrowse(args.realtimeConfig?.xhsPhoneConfig), true);
     await runPhoneCurrent('[[XHS_PHONE_OPEN_DETAIL]]', '打开当前小红书笔记', () => runXhsPhoneOpenDetail(args.realtimeConfig?.xhsPhoneConfig), true);
-    await runPhoneCurrent('[[XHS_PHONE_LIKE_CURRENT]]', '点赞当前小红书笔记', () => runXhsPhoneLikeCurrent(args.realtimeConfig?.xhsPhoneConfig));
     await runPhoneCurrent('[[XHS_PHONE_SHARE_CURRENT]]', '分享当前小红书笔记', () => runXhsPhoneShareCurrent(args.realtimeConfig?.xhsPhoneConfig), true);
     await runPhoneCurrent('[[XHS_PHONE_MY_PROFILE]]', '查看小红书主页', () => runXhsPhoneMyProfile(args.realtimeConfig?.xhsPhoneConfig), true);
 
@@ -225,18 +227,16 @@ export const processWorkbenchXhsDirectives = async (
     }
 
     const shareMatches = Array.from(raw.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g));
-    const shareComment = stripXhsDirectives(raw);
     for (const match of shareMatches) {
         const idx = Number(match[1]) - 1;
         const note = args.lastXhsNotesRef.current[idx];
         if (note) {
-            extraMessages.push(noteMessage(args, note, shareComment));
+            extraMessages.push(noteMessage(args, note));
         }
     }
 
-    const sharedCard = extraMessages.some(message => message.type === 'xhs_card');
     return {
-        visibleReply: sharedCard ? '' : stripXhsDirectives(raw),
+        visibleReply: stripXhsDirectives(raw),
         extraMessages,
     };
 };

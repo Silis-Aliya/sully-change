@@ -1034,22 +1034,22 @@ const serializeWorkbenchMessage = (m: WorkbenchMessage) => ({
     createdAt: m.createdAt,
 });
 
-const messageContentForCodeContext = (m: Message): string => {
+const messageContentForCodeContext = (m: Message, charName: string, userName: string): string => {
     if (m.type === 'emoji') return '[表情]';
     if (m.type === 'image') return '[图片]';
-    if (m.type !== 'text') return `[${m.type}] ${m.content || ''}`.trim();
+    if (m.type !== 'text') return normalizeMessageContent(m, charName, userName);
     return m.content;
 };
 
-const formatMainChatForCodeContext = (messages: Message[]) => messages
+const formatMainChatForCodeContext = (messages: Message[], charName: string, userName: string) => messages
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .map(m => ({
         role: m.role,
-        content: messageContentForCodeContext(m),
+        content: messageContentForCodeContext(m, charName, userName),
     }))
     .filter(m => m.content.trim());
 
-const workbenchToChatMessages = (
+export const workbenchToChatMessages = (
     messages: WorkbenchMessage[],
     char: CharacterProfile,
     content: string,
@@ -1080,12 +1080,15 @@ const workbenchToChatMessages = (
             (m.role === 'character' || m.role === 'sully')
             && (m.metadata?.characterId === char.id || m.metadata?.speakerName === char.name);
         const isCliAgent = m.role === 'codex';
-        if (m.role !== 'user' && !isCurrentCharacter && !isCliAgent) return null;
+        const isHiddenContextReceipt = m.role === 'system' && m.metadata?.hidden === true;
+        if (m.role !== 'user' && !isCurrentCharacter && !isCliAgent && !isHiddenContextReceipt) return null;
         // Keep all three speakers structurally distinct. CLI/Codex is external
         // system context, never user text or the character's assistant history.
+        // Hidden Code receipts are also system context: invisible in the UI, but
+        // readable by both the CLI agent and the character on later turns.
         const role: Message['role'] = isCurrentCharacter
             ? 'assistant'
-            : isCliAgent
+            : isCliAgent || isHiddenContextReceipt
                 ? 'system'
                 : 'user';
         const sourceContent = workbenchContentForContext(m);

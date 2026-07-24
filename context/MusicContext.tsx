@@ -808,8 +808,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // 下一首 / 上一首
   const nextSong = useCallback(() => {
-    const q = queueRef.current; if (!q.length) return;
-    const cur = idxRef.current; if (cur < 0) return;
+    const q = queueRef.current; if (!q.length) return undefined;
+    const cur = idxRef.current; if (cur < 0) return undefined;
     let n: number;
     if (modeRef.current === 'shuffle' && q.length > 1) {
       do { n = Math.floor(Math.random() * q.length); } while (n === cur);
@@ -819,6 +819,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       n = (cur + 1) % q.length;
     }
     setIdx(n); playSong(q[n], { alsoSetQueue: false });
+    return q[n];
   }, [playSong]);
 
   const prevSong = useCallback(() => {
@@ -942,12 +943,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addListeningPartner(cid, inviter);
       },
       leaveListeningTogether: (cid: string) => {
-        removeListeningPartner(cid);
+      removeListeningPartner(cid);
       },
       nextSong: () => {
-        nextSong();
+        const target = nextSong();
+        return target ? { songName: target.name, artists: target.artists } : null;
       },
       setPlayMode: (mode) => {
+        modeRef.current = mode;
         setPlayMode(mode);
       },
       pickSong: async (index, cid) => {

@@ -1116,7 +1116,9 @@ const Chat: React.FC = () => {
             if (isTyping) return;
             // 标记"准备中"三个点：拼接+发送期间显示，SSE POST 入队 (onInstantPosted) 后清除。
             setInstantSendingActive(true);
-            triggerAI(messages, undefined, () => setInstantSendingActive(false));
+            const latestMessages = await DB.getRecentMessagesByCharId(char.id, char.contextLimit || 500, true)
+                .catch(() => messages);
+            triggerAI(latestMessages, undefined, () => setInstantSendingActive(false));
         }
     };
 

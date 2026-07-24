@@ -755,7 +755,7 @@ export const useChatAI = ({
             const mcdInheritMeta = mcdMiniOpen ? { fromMcdMiniApp: true } : undefined;
             const luckinMiniSnap = luckinMiniAppRef?.current;
             const luckinMiniOpen = !!luckinMiniSnap?.open;
-            const isMusicTogetherForChar = !!(music.current && music.playing && music.listeningTogetherWith.includes(char.id));
+            const isMusicTogetherForChar = music.listeningTogetherWith.includes(char.id);
 
             const payload = await stageT('payload', buildChatRequestPayload({
                 char: charForGen, userProfile, groups, emojis, categories,
@@ -766,7 +766,7 @@ export const useChatAI = ({
                 innerState: skipEmotionInjection ? undefined : (evolvedNarrative || undefined),
                 userListeningContext: (() => {
                     if (!isMusicTogetherForChar) return null;
-                    if (music.current && music.playing && music.lyric.length > 0) {
+                    if (music.current && music.lyric.length > 0) {
                         const idx = music.activeLyricIdx;
                         if (idx >= 0) {
                             const from = Math.max(0, idx - 2);
@@ -780,7 +780,7 @@ export const useChatAI = ({
                             };
                         }
                     }
-                    if (music.current && music.playing) {
+                    if (music.current) {
                         return {
                             songName: music.current.name,
                             artists: music.current.artists,

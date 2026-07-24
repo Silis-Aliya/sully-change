@@ -117,7 +117,7 @@ export interface BuildChatPayloadResult {
 /**
  * 用 MusicPlaybackSnapshot 算 user 共听上下文 —— 与 useChatAI.ts:636–666 行为一致。
  */
-function deriveListeningFromSnapshot(
+export function deriveListeningFromSnapshot(
     snap: MusicPlaybackSnapshot | null | undefined,
     charId: string,
 ): { userListeningContext: UserListeningContext | null; isListeningTogether: boolean; musicCfg?: MusicCfg } {
@@ -128,7 +128,7 @@ function deriveListeningFromSnapshot(
         return { userListeningContext: null, isListeningTogether: false, musicCfg: cfg };
     }
     let userListeningContext: UserListeningContext | null = null;
-    if (current && playing && lyric.length > 0) {
+    if (current && lyric.length > 0) {
         const idx = activeLyricIdx;
         if (idx >= 0) {
             const from = Math.max(0, idx - 2);
@@ -145,7 +145,7 @@ function deriveListeningFromSnapshot(
                     : undefined,
             };
         }
-    } else if (current && playing) {
+    } else if (current) {
         userListeningContext = {
             songName: current.name,
             artists: current.artists,
@@ -156,7 +156,7 @@ function deriveListeningFromSnapshot(
                 : undefined,
         };
     }
-    return { userListeningContext, isListeningTogether: !!userListeningContext, musicCfg: cfg };
+    return { userListeningContext, isListeningTogether, musicCfg: cfg };
 }
 
 /** 换歌记录多久内算"刚刚"——超过就不再向 char 提起（一首歌的量级） */

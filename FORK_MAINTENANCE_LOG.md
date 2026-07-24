@@ -26,6 +26,37 @@ Current known baseline:
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
 
+## Merge Attention: Fork Decisions and Card Placement
+
+- Confirmed fork decisions override conflicting upstream behavior. Do not restore an upstream rule merely because an old upstream test, comment, or implementation still expects it.
+- Current protected chat rule: music shares and together-listening invitations are chat-owned messages, not centered modules. They stay on the actual sender/inviter side; character-side cards keep the outer character avatar; together-listening cards also keep their internal participant avatars.
+- Code/Workbench has its own layout and may use centered tool/progress cards. Do not generalize Code card layout back into normal chat.
+- For any new feature or new card type, or any change that would affect card alignment, sender ownership, outer avatars, internal avatars, or message/card ordering, stop before implementation and explicitly alert the user that the change may revisit the earlier card-layout plan.
+- Present concrete choices instead of choosing silently:
+  - **A. Chat-owned message:** follows the real sender left/right and uses that sender's normal outer avatar.
+  - **B. Centered module:** centered independently and has no normal message-side ownership/avatar.
+  - **C. Card-specific rule:** describe the exact sender, alignment, avatar, and ordering behavior for this card.
+- State the current fork behavior and the upstream behavior beside those options, recommend one, and wait for the user's choice before changing runtime layout.
+- If an upstream merge touches `components/chat/MessageItem.tsx`, `utils/messageItemModuleLayout.test.ts`, chat card metadata, or module-alignment settings, re-audit this decision explicitly and report any conflict before resolving it.
+
+## Optional Future Idea: XHS Image Understanding
+
+- This is a non-binding design note, not a current defect, required task, merge requirement, or standing recommendation.
+- Current XHS behavior may remain text-first: characters and Code assistants read the title, body, author, comments, link, and available card metadata. The card cover is visual UI media and is not currently sent to models as multimodal input.
+- A possible future implementation, only if the user explicitly asks to let models inspect XHS post images, is: use the authenticated Lite service to fetch a limited number of images, compress/cache or expose them through short-lived signed URLs, and attach them as `image_url` parts for vision-capable models while retaining a text-only fallback.
+- Such an implementation would need an explicit product decision about first image vs. up to three images vs. user-triggered viewing, plus review of account-risk, request volume, privacy, payload size, model compatibility, and cost.
+- Do not implement this idea merely because it appears in this log. Do not repeatedly ask whether the user wants it during ordinary audits, upstream merges, or unrelated XHS work. Revisit it only when the user explicitly requests XHS image understanding or asks to review this future idea.
+
+## 2026-07-24 Workbench Bridge Token Hardening
+
+- The Workbench CLI bridge now refuses to start on non-loopback hosts such as `0.0.0.0` unless `--token` or `WORKBENCH_BRIDGE_TOKEN` is set.
+- The bridge also reads `%USERPROFILE%\.sullyos-workbench-bridge-token` and repo-local `.workbench-bridge-token`, so existing autostart tasks can recover after the token file is placed.
+- Local unauthenticated debugging remains possible only with loopback hosts (`localhost`, `127.0.0.1`, or `::1`).
+- `scripts/start-workbench-bridge.bat` now loads the token from `WORKBENCH_BRIDGE_TOKEN`, `%USERPROFILE%\.sullyos-workbench-bridge-token`, or `.workbench-bridge-token` before prompting interactively.
+- `scripts/autostart-workbench-bridge.cmd` now loads the same token sources and fails fast instead of waiting for manual input at login.
+- `scripts/install-workbench-bridge-startup.ps1` now rejects non-local scheduled-task installs without `-Token`.
+- Cloudflare named tunnel remains the intended remote path; random temporary public tunnel access should not be used for Code bridge exposure.
+
 ## 2026-07-24 Music Sharing, Together Listening, Code/XHS, and Backup Audit
 
 ### Upstream and Deployment
@@ -118,7 +149,7 @@ Current known baseline:
 - `apps/Chat.tsx`: adopted upstream full-message history for AI raw-range management so UI display filters do not shift prompt boundaries.
 - `hooks/useChatAI.ts`: kept local filtering that prevents `[Code 进度]` system cards from entering emotion evaluation, while adopting upstream `evalChar` freshness fix.
 - `types.ts`: kept local `music_invite_result` / `code_card` message types and added upstream `voice`.
-- `components/chat/MessageItem.tsx`: restored local rule that `music_card` behaves as a module card and does not render the outer message avatar; card-internal listening avatars remain.
+- `components/chat/MessageItem.tsx`: music cards remain ordinary chat-owned messages rather than centered modules: they stay on the actual sender/inviter side and character-side cards keep the outer message avatar; together-listening cards also retain their internal participant avatars.
 - `utils/chatPrompts.ts`: auto-merged a context-breakpoint code-path update only; no prompt prose was changed by conflict resolution.
 
 ### Verification
@@ -705,9 +736,11 @@ Last recorded stable deployment was `ecc01ab` on remote `master` from 2026-07-21
 ### Backup And QuickSync Coverage
 
 - Full/text backup and restore include `workbench_sessions`, `workbench_messages`, `workbench_summaries`, `workbench_memories`, and `workbench_artifacts`.
+- User/character records, character groups, persisted options, action receipts, chat cards, and Code messages inherit full-backup and QuickSync coverage from their owning IndexedDB row or portable local-storage setting. Additions, edits, and deletions are all part of the contract.
 - QuickSync includes all five Code stores and `workbench_bridge_config_v1` / `workbench_mode_v1`. Bridge URL, Key, CLI route, selected model, profile, Codex-only custom instructions, Code avatar, usage limit, and selected participant travel across devices.
 - Clearing an included setting creates a local-storage delta deletion. A removed value must be removed on the receiving device rather than revived from stale local data.
-- Wallpaper, lock wallpaper, user/character avatars, custom app icons, widgets, room images, and other referenced images sync through asset rows plus `blob_assets`. Code avatar is resized before local-storage persistence to remain inside the portable-settings size limit.
+- Persistent Post Office identity/base URL, Signal authorship/reuse records, and desktop/mobile-game skin choices are included in QuickSync as well as full backup. The Post Office admin token and one-turn Signal whisper remain intentionally device-local.
+- Wallpaper, lock wallpaper, user/character avatars, custom app icons, widgets, room images, card images, and other referenced images sync through asset rows plus `blob_assets`. QuickSync carries blob additions, replacements, and deletions; removing the last synced reference must remove the receiving device's orphaned blob. Code avatar is resized before local-storage persistence to remain inside the portable-settings size limit.
 - Audio/music and runtime caches remain intentionally excluded. Project file bodies also remain excluded.
 - Memory Palace vector rows use IndexedDB keyPath `memoryId`. QuickSync now uses `memoryId` for manifest hashes, upserts, and deletes. The previous generic `id/key/name` lookup silently omitted every vector row.
 - Pixel Home layouts use compound keyPath `[charId, roomId]`. QuickSync now serializes compound keys for manifest comparison and restores the array key before IndexedDB deletion. This covers incremental room/layout changes and removals.

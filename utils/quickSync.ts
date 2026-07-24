@@ -154,6 +154,14 @@ export const collectBlobRefIds = (value: any): string[] => {
     return Array.from(ids);
 };
 
+export const collectDeletedBlobIds = (
+    previous: Record<string, string> | null | undefined,
+    current: Record<string, string> | null | undefined,
+): string[] => {
+    const next = current || {};
+    return Object.keys(previous || {}).filter(id => !(id in next));
+};
+
 const getDeviceId = (): string => {
     try {
         const existing = localStorage.getItem(QUICK_SYNC_DEVICE_KEY);
@@ -358,6 +366,7 @@ export const buildQuickSyncDelta = async (
     }
     manifest.stores.blob_assets = blobHashes;
     const prevBlobHashes = previous?.stores?.blob_assets || {};
+    const blobDeletes = collectDeletedBlobIds(prevBlobHashes, blobHashes);
     const blobManifest: Record<string, { type: string; size: number }> = {};
     let blobUpserts = 0;
     for (const [id, hash] of Object.entries(blobHashes)) {
@@ -369,15 +378,17 @@ export const buildQuickSyncDelta = async (
         blobUpserts += 1;
         changed += 1;
     }
-    if (blobUpserts) {
-        meta.stores.blob_assets = { upserts: blobUpserts, deletes: 0 };
+    if (blobUpserts || blobDeletes.length) {
+        meta.stores.blob_assets = { upserts: blobUpserts, deletes: blobDeletes.length };
+        changed += blobDeletes.length;
     }
     if (blobUpserts) {
         zip.file('blob-assets-manifest.json', JSON.stringify(blobManifest));
     }
+    if (blobDeletes.length) {
+        zip.file('blob-assets-deletes.json', JSON.stringify(blobDeletes));
+    }
 
-    zip.file('quick-sync-meta.json', JSON.stringify(meta));
-    zip.file('quick-sync-manifest.json', JSON.stringify(manifest));
     const localSettingsUpsertCount = Object.keys(localSettingsUpserts).length;
     if (localSettingsUpsertCount || localSettingsDeletes.length) {
         zip.file('local-storage-settings.json', JSON.stringify({
@@ -390,6 +401,8 @@ export const buildQuickSyncDelta = async (
         };
         changed += localSettingsUpsertCount + localSettingsDeletes.length;
     }
+    zip.file('quick-sync-meta.json', JSON.stringify(meta));
+    zip.file('quick-sync-manifest.json', JSON.stringify(manifest));
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
     return { blob, manifest, meta, changed };
 };
@@ -418,6 +431,21 @@ export const applyQuickSyncDelta = async (
             const bytes = await file.async('uint8array');
             await DB.putBlobAsset(id, new Blob([bytes], { type: info?.type || 'application/octet-stream' }));
             changed += 1;
+            done += 1;
+            onProgress?.(done, total || done);
+        }
+    }
+    const blobDeletesFile = zip.file('blob-assets-deletes.json');
+    if (blobDeletesFile) {
+        const blobDeletes = JSON.parse(await blobDeletesFile.async('string')) as unknown;
+        if (Array.isArray(blobDeletes)) {
+            for (const id of blobDeletes) {
+                if (typeof id !== 'string' || !id) continue;
+                await DB.deleteBlobAsset(id);
+                changed += 1;
+                done += 1;
+                onProgress?.(done, total || done);
+            }
         }
     }
 
