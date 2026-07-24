@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+    XhsMcpClient,
     normalizeNote,
     normalizeXhsLiteDetail,
     parseXhsCount,
@@ -61,5 +62,22 @@ describe('normalizeXhsLiteDetail', () => {
                 { author: '乙', content: '回复内容', likes: 2 },
             ],
         });
+    });
+});
+
+describe('XHS Lite bridge errors', () => {
+    it('does not turn an upstream search failure into a successful empty result', async () => {
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+            JSON.stringify({ success: false, msg: '搜索请求被上游拒绝' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ));
+
+        const result = await XhsMcpClient.search('https://example.com/api', '小猫');
+
+        expect(result).toEqual(expect.objectContaining({
+            success: false,
+            error: '搜索请求被上游拒绝',
+        }));
+        fetchMock.mockRestore();
     });
 });

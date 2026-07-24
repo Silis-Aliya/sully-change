@@ -279,6 +279,9 @@ async function xhsSearchImpl(conf: { mcpUrl: string }, keyword: string): Promise
     const r = await XhsMcpClient.search(conf.mcpUrl, keyword);
     if (!r.success) return { success: false, notes: [], message: r.error };
     const raw = extractNotesFromMcpData(r.data);
+    if (raw.length === 0) {
+        return { success: false, notes: [], message: '小红书搜索接口返回了 0 条笔记' };
+    }
     return { success: true, notes: raw.map(n => ({ ...normalizeNote(n), xsecSource: 'pc_search' }) as XhsNote) };
 }
 
