@@ -574,7 +574,7 @@ export const ContextBuilder = {
         const lines: string[] = [];
 
         // —— 块 1: user 正在听什么 ——
-        const canRead = char.musicProfile?.canReadUserMusic ?? true;
+        const canRead = isListeningTogether || (char.musicProfile?.canReadUserMusic ?? true);
         if (canRead && userListening && userListening.songName) {
             lines.push(`### 【此刻的对话氛围】`);
             if (isListeningTogether) {
