@@ -861,7 +861,7 @@ const XHSLite = (() => {
     s0: 5, s1: '', x0: '1', x1: '4.3.5', x2: 'Windows', x3: 'xhs-pc-web', x4: '4.86.0',
     x5: '', x6: '', x7: '', x8: '', x9: -596800761, x10: 0, x11: 'normal',
   };
-  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0';
+  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0';
   const IMG_FORMATS = ['jpg', 'webp', 'avif'];
   const EDITH = 'https://edith.xiaohongshu.com', CREATOR = 'https://creator.xiaohongshu.com', WWW = 'https://www.xiaohongshu.com';
 
@@ -1387,7 +1387,6 @@ const XHSLite = (() => {
       'x-t': String(Math.floor(timestampSec * 1000)),
       'x-b3-traceid': b3TraceId(),
       'x-xray-traceid': xrayTraceId(Math.floor(timestampSec * 1000)),
-      'xy-direction': String(RNG.randint(10, 100)),
     };
   }
 
@@ -1486,7 +1485,7 @@ const XHSLite = (() => {
   async function listFeeds(cookieStr, { category = 'homefeed_recommend', cursorScore = '', noteIndex = 0, refreshType = 1 } = {}) {
     const ck = parseCookies(cookieStr);
     const payload = { cursor_score: cursorScore, num: 20, refresh_type: refreshType, note_index: noteIndex, unread_begin_note_id: '', unread_end_note_id: '', unread_note_count: 0, category, search_key: '', need_num: 10, image_formats: IMG_FORMATS, need_filter_image: false };
-    const r = await signedPost(EDITH, '/api/sns/web/v1/homefeed', payload, cookieStr, ck, {}, true);
+    const r = await signedPost(EDITH, '/api/sns/web/v1/homefeed', payload, cookieStr, ck);
     return { feeds: (r?.data?.items || []).map(normItem), cursor_score: r?.data?.cursor_score, success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
   const SORT_MAP = { general: 'general', time: 'time_descending', hot: 'popularity_descending', comment: 'comment_descending', collect: 'collect_descending' };
@@ -1503,14 +1502,14 @@ const XHSLite = (() => {
     const payload = { keyword, page, page_size: 20, search_id: genSearchId(), sort: st, note_type: 0, ext_flags: [],
       filters: [{ tags: [st], type: 'sort_type' }, { tags: ['不限'], type: 'filter_note_type' }, { tags: ['不限'], type: 'filter_note_time' }, { tags: ['不限'], type: 'filter_note_range' }, { tags: ['不限'], type: 'filter_pos_distance' }],
       geo: '', image_formats: IMG_FORMATS };
-    const r = await signedPost(EDITH, '/api/sns/web/v1/search/notes', payload, cookieStr, ck, {}, true);
+    const r = await signedPost(EDITH, '/api/sns/web/v1/search/notes', payload, cookieStr, ck);
     const items = (r?.data?.items || []).filter((it) => it.id && (it.note_card || it.model_type === 'note'));
     return { feeds: items.map(normItem), success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
   async function getFeedDetail(cookieStr, feedId, xsecToken, { xsecSource = 'pc_feed', loadComments = true } = {}) {
     const ck = parseCookies(cookieStr);
     const payload = { source_note_id: feedId, image_formats: IMG_FORMATS, extra: { need_body_topic: '1' }, xsec_source: xsecSource || 'pc_feed', xsec_token: xsecToken || '' };
-    const r = await signedPost(EDITH, '/api/sns/web/v1/feed', payload, cookieStr, ck, { 'xy-direction': '13' }, true);
+    const r = await signedPost(EDITH, '/api/sns/web/v1/feed', payload, cookieStr, ck, { 'xy-direction': '13' });
     const nc = r?.data?.items?.[0]?.note_card || {};
     const note = { note_id: feedId, title: nc.title || '', content: nc.desc || '', desc: nc.desc || '', user: nc.user || {}, interact_info: nc.interact_info || {}, image_list: nc.image_list || [], xsec_token: xsecToken || '' };
     let comments = [];
@@ -1518,12 +1517,7 @@ const XHSLite = (() => {
     if (loadComments) {
       try {
         const commentParams = { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' };
-        let cr = await signedGet(EDITH, '/api/sns/web/v2/comment/page', commentParams, cookieStr, ck, {}, 'xyw');
-        // 部分账号仍接受旧 XYS；保留一次回退，避免上游灰度期间反向破坏可用账号。
-        if (!cr?.success) {
-          const legacy = await signedGet(EDITH, '/api/sns/web/v2/comment/page', commentParams, cookieStr, ck);
-          if (legacy?.success) cr = legacy;
-        }
+        const cr = await signedGet(EDITH, '/api/sns/web/v2/comment/page', commentParams, cookieStr, ck, {}, 'xyw');
         if (cr?.success) {
           comments = (cr?.data?.comments || []).map(normComment);
         } else {
@@ -1668,7 +1662,7 @@ const XHSLite = (() => {
     let desc = content;
     const hashTags = [];
     for (const t of tags) { const name = String(t).replace(/^#/, ''); desc += ` #${name}[话题]#`; hashTags.push({ id: '', link: '', name, type: 'topic' }); }
-    const r = await signedPost(EDITH, '/web_api/sns/v2/note', buildImageNoteData(title, desc, isPrivate ? 1 : 0, fileInfos, hashTags), cookieStr, ck, {}, true);
+    const r = await signedPost(EDITH, '/web_api/sns/v2/note', buildImageNoteData(title, desc, isPrivate ? 1 : 0, fileInfos, hashTags), cookieStr, ck);
     const noteId = r?.data?.id || r?.data?.note_id || r?.data?.note?.id || '';
     // 失败用 error 字段：bridgePost 会据此判定 success=false（无需改 useChatAI）
     if (!(r?.success && noteId)) {
