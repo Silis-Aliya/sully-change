@@ -7,7 +7,7 @@
  *   node verify.mjs
  */
 import { readFileSync } from 'fs';
-import worker, { __xhsLiteTest } from '../../index.js';
+import { __xhsLiteTest } from '../../index.js';
 
 const { RNG, signXs, signXyw, signXsCommon, generateB1, xRapParam, _internals } = __xhsLiteTest;
 
@@ -82,49 +82,12 @@ got.xrap_packet_shape = (
 );
 delete got.xrap_homefeed;
 
-const originalFetch = globalThis.fetch;
-let searchRequestCount = 0;
-globalThis.fetch = async (_url, init) => {
-  searchRequestCount++;
-  if (searchRequestCount === 1) {
-    return new Response(JSON.stringify({ success: false, msg: 'x-rap rejected' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  return new Response(JSON.stringify({
-    success: true,
-    data: {
-      items: [{
-        id: 'note-1',
-        model_type: 'note',
-        note_card: { display_title: '小猫', user: { nickname: '甲' }, interact_info: { liked_count: '12' } },
-      }],
-    },
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-};
-try {
-  const searchResponse = await worker.fetch(new Request('https://local.test/api/search', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Xhs-Cookie': `a1=${A1}; web_session=test-session`,
-    },
-    body: JSON.stringify({ keyword: '小猫' }),
-  }), {}, { waitUntil() {} });
-  const searchData = await searchResponse.json();
-  got.search_xrap_fallback = searchRequestCount === 2 && searchData.success === true && searchData.feeds?.length === 1;
-} finally {
-  globalThis.fetch = originalFetch;
-}
-
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url)));
 vectors.push({ name: 'xyw_get_comments', value: expectedXywComments });
 vectors.push({ name: 'xrap_block_pair', value: 'd827df1c42d55ec61c0aec7d534fd817' });
 vectors.push({ name: 'xxh32_empty', value: '02cc5d05' });
 vectors.push({ name: 'xxh32_hello', value: 'fb0077f9' });
 vectors.push({ name: 'xrap_packet_shape', value: true });
-vectors.push({ name: 'search_xrap_fallback', value: true });
 let pass = 0, fail = 0;
 for (const { name, value } of vectors) {
   const mine = got[name];

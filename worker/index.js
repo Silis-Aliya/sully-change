@@ -1284,14 +1284,12 @@ const XHSLite = (() => {
     if (typeof CompressionStream !== 'function') throw new Error('CompressionStream(gzip) is unavailable');
     const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'));
     const output = new Uint8Array(await new Response(stream).arrayBuffer());
-    if (output.length >= 10) {
-      // Python gzip.compress(..., mtime=None) writes the current Unix second.
-      // CompressionStream writes zero, which XHS search risk-control rejects.
-      const value = (mtime ?? Math.floor(Date.now() / 1000)) >>> 0;
+    if (mtime !== undefined && output.length >= 10) {
+      const value = mtime >>> 0;
       output[4] = value & 0xff; output[5] = (value >>> 8) & 0xff;
       output[6] = (value >>> 16) & 0xff; output[7] = (value >>> 24) & 0xff;
-      output[9] = 0x03;
     }
+    if (output.length >= 10) output[9] = 0x03;
     return output;
   }
   async function xRapParam(api, data, options = {}) {
@@ -1404,7 +1402,7 @@ const XHSLite = (() => {
     return {
       accept: 'application/json, text/plain, */*', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
       'content-type': 'application/json;charset=UTF-8', origin: WWW, referer: WWW + '/', 'user-agent': UA,
-      'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="142", "Microsoft Edge";v="142"', 'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Microsoft Edge";v="138"', 'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"', 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-site',
       'x-mns': 'unload', cookie: cookieStr,
     };
@@ -1505,14 +1503,7 @@ const XHSLite = (() => {
     const payload = { keyword, page, page_size: 20, search_id: genSearchId(), sort: st, note_type: 0, ext_flags: [],
       filters: [{ tags: [st], type: 'sort_type' }, { tags: ['不限'], type: 'filter_note_type' }, { tags: ['不限'], type: 'filter_note_time' }, { tags: ['不限'], type: 'filter_note_range' }, { tags: ['不限'], type: 'filter_pos_distance' }],
       geo: '', image_formats: IMG_FORMATS };
-    let r = await signedPost(EDITH, '/api/sns/web/v1/search/notes', payload, cookieStr, ck, {}, true);
-    // Enforcement is rolled out by account shard. Keep the current XYS request
-    // as a fallback for shards which still reject the x-rap envelope.
-    if (!r?.success) {
-      const xrapError = r;
-      const legacy = await signedPost(EDITH, '/api/sns/web/v1/search/notes', payload, cookieStr, ck);
-      r = legacy?.success ? legacy : { ...legacy, xrap_error: xrapError };
-    }
+    const r = await signedPost(EDITH, '/api/sns/web/v1/search/notes', payload, cookieStr, ck, {}, true);
     const items = (r?.data?.items || []).filter((it) => it.id && (it.note_card || it.model_type === 'note'));
     return { feeds: items.map(normItem), success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
