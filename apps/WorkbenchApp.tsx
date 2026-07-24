@@ -138,6 +138,16 @@ const resolveWorkbenchXhsNote = async (
     return resolved.note;
 };
 
+export const getWorkbenchXhsOpenUrl = (note?: Record<string, any> | null): string => {
+    if (!note) return '';
+    const sourceUrl = String(note.sourceUrl || note.url || '').trim();
+    if (/^https?:\/\//i.test(sourceUrl)) return sourceUrl;
+    const noteId = String(note.noteId || note.note_id || note.id || '').trim();
+    if (!noteId) return sourceUrl ? `https://${sourceUrl}` : '';
+    const token = String(note.xsecToken || note.xsec_token || '').trim();
+    return `https://www.xiaohongshu.com/explore/${noteId}${token ? `?xsec_token=${encodeURIComponent(token)}&xsec_source=pc_feed` : ''}`;
+};
+
 const extractWorkbenchXhsShareComment = (text: string, note?: Record<string, any>) => {
     const title = String(note?.title || '').trim();
     const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1148,8 +1158,32 @@ const WorkbenchApp: React.FC = () => {
     const appendMessage = async (message: WorkbenchMessage) => {
         const targetSession = (await DB.getWorkbenchSessions()).find(item => item.id === message.sessionId && !item.deletedAt);
         if (!targetSession) throw new Error('这条 Code 对话已删除，后台结果未写入');
-        await DB.saveWorkbenchMessage(message);
-        setMessages(prev => [...prev, message]);
+        let nextMessage = message;
+        const note = message.type === 'xhs_card' ? message.metadata?.xhsNote : null;
+        const hasReadableBody = !!String(note?.desc || '').trim();
+        if (note && !hasReadableBody) {
+            const openUrl = getWorkbenchXhsOpenUrl(note);
+            if (openUrl) {
+                const resolved = await resolveWorkbenchXhsNote(openUrl, realtimeConfig, addToast);
+                if (resolved) {
+                    nextMessage = {
+                        ...message,
+                        content: resolved.title || message.content,
+                        metadata: {
+                            ...(message.metadata || {}),
+                            xhsNote: {
+                                ...note,
+                                ...resolved,
+                                noteId: resolved.noteId || note.noteId,
+                                sourceUrl: resolved.sourceUrl || note.sourceUrl || openUrl,
+                            },
+                        },
+                    };
+                }
+            }
+        }
+        await DB.saveWorkbenchMessage(nextMessage);
+        setMessages(prev => [...prev, nextMessage]);
     };
 
     const appendXhsCardForText = async (
@@ -2373,7 +2407,16 @@ const WorkbenchApp: React.FC = () => {
                                                 boxShadow: 'none',
                                                 padding: 0,
                                             } : undefined}
-                                            onClick={() => { if (selectionMode) toggleSelectedMessage(m.id); }}
+                                            onClick={() => {
+                                                if (selectionMode) {
+                                                    toggleSelectedMessage(m.id);
+                                                    return;
+                                                }
+                                                if (isXhsCard) {
+                                                    const url = getWorkbenchXhsOpenUrl(m.metadata?.xhsNote);
+                                                    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                                                }
+                                            }}
                                             onPointerDown={() => startMessagePress(m)}
                                             onPointerMove={moveMessagePress}
                                             onPointerUp={clearMessagePressTimer}

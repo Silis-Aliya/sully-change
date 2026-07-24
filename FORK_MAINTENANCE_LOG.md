@@ -72,6 +72,15 @@ Current known baseline:
 - Hardened `safeResponseJson` for Response-compatible proxy/test objects that omit `headers`; normal browser responses remain unchanged.
 - Verification: 127 test files / 1212 tests passed; production build passed.
 
+## 2026-07-24 Code XHS Share Parity
+
+- Code XHS cards now use the same persisted-detail principle as normal chat for all three senders: user, selected character, and AI assistant.
+- Before saving a newly generated XHS card whose body is empty, Code uses the existing XHS Lite/MCP configuration to resolve its `sourceUrl` or generated `noteId + xsecToken` URL once. The enriched title, author, body, comments, interaction metadata, locator, and token are saved inside `workbench_messages.metadata.xhsNote`.
+- Later character and AI turns read the persisted card metadata through the existing Workbench context serializers. They do not refetch the post merely to remember a card already saved with details.
+- Tapping a Code XHS card now opens its persisted `sourceUrl`, or reconstructs the ordinary XHS explore URL from `noteId + xsecToken`. Multi-select mode still selects the message instead of navigating.
+- Existing historical cards that were already saved without a body are not bulk-refetched on Code startup. This avoids an unexpected burst of XHS Lite requests; resharing creates a fully enriched card.
+- Focused XHS/Workbench tests: 10 passed; production build passed.
+
 ## 2026-07-24 Music Sharing, Together Listening, Code/XHS, and Backup Audit
 
 ### Upstream and Deployment
