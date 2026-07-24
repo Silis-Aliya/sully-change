@@ -279,7 +279,7 @@ async function xhsSearchImpl(conf: { mcpUrl: string }, keyword: string): Promise
     const r = await XhsMcpClient.search(conf.mcpUrl, keyword);
     if (!r.success) return { success: false, notes: [], message: r.error };
     const raw = extractNotesFromMcpData(r.data);
-    return { success: true, notes: raw.map(n => normalizeNote(n) as XhsNote) };
+    return { success: true, notes: raw.map(n => ({ ...normalizeNote(n), xsecSource: 'pc_search' }) as XhsNote) };
 }
 
 async function xhsBrowseImpl(conf: { mcpUrl: string }): Promise<{ success: boolean; notes: XhsNote[]; message?: string }> {
@@ -291,9 +291,9 @@ async function xhsBrowseImpl(conf: { mcpUrl: string }): Promise<{ success: boole
     if (raw.length === 0 && unwrapped !== r.data) {
         console.log(`📕 [XHS] getRecommend unwrapped 提取为空，用原始数据重试`);
         const raw2 = extractNotesFromMcpData(r.data);
-        return { success: true, notes: raw2.map(n => normalizeNote(n) as XhsNote) };
+        return { success: true, notes: raw2.map(n => ({ ...normalizeNote(n), xsecSource: 'pc_feed' }) as XhsNote) };
     }
-    return { success: true, notes: raw.map(n => normalizeNote(n) as XhsNote) };
+    return { success: true, notes: raw.map(n => ({ ...normalizeNote(n), xsecSource: 'pc_feed' }) as XhsNote) };
 }
 
 /** 将笔记列表的 xsecToken 和 title 存入 xhsCaches */
