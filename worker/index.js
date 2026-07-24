@@ -852,13 +852,10 @@ const XHSLite = (() => {
   const ENV_TABLE = [115, 248, 83, 102, 103, 201, 181, 131, 99, 94, 4, 68, 250, 132, 21];
   const ENV_CHECKS_DEFAULT = [0, 1, 18, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0];
   const HASH_IV = [1831565813, 461845907, 2246822507, 3266489909];
-  const X3_PREFIX = 'mns0301_', XYS_PREFIX = 'XYS_', XYW_PREFIX = 'XYW_', B1_SECRET_KEY = 'xhswebmplfbt';
-  const XYW_AES_KEY = '7cc4adla5ay0701v';
-  const XYW_AES_IV = '4uzjr7mbsibcaldp';
-  const XYW_ENV_FLAGS = '0|0|0|1|0|0|1|0|0|0|1|0|0|0|0|1|0|0|1';
-  const SIGNATURE_DATA_TEMPLATE = { x0: '4.3.5', x1: 'xhs-pc-web', x2: 'Windows', x3: '', x4: 'object' };
+  const X3_PREFIX = 'mns0301_', XYS_PREFIX = 'XYS_', B1_SECRET_KEY = 'xhswebmplfbt';
+  const SIGNATURE_DATA_TEMPLATE = { x0: '4.2.6', x1: 'xhs-pc-web', x2: 'Windows', x3: '', x4: '' };
   const SIGNATURE_XSCOMMON_TEMPLATE = {
-    s0: 5, s1: '', x0: '1', x1: '4.3.5', x2: 'Windows', x3: 'xhs-pc-web', x4: '4.86.0',
+    s0: 5, s1: '', x0: '1', x1: '4.2.6', x2: 'Windows', x3: 'xhs-pc-web', x4: '4.86.0',
     x5: '', x6: '', x7: '', x8: '', x9: -596800761, x10: 0, x11: 'normal',
   };
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0';
@@ -1019,6 +1016,13 @@ const XHSLite = (() => {
     });
     return `${uri}?${parts.join('&')}`;
   }
+  function extractApiPath(s) {
+    const brace = s.indexOf('{'), q = s.indexOf('?');
+    if (brace !== -1 && q !== -1) return s.slice(0, Math.min(brace, q));
+    if (brace !== -1) return s.slice(0, brace);
+    if (q !== -1) return s.slice(0, q);
+    return s;
+  }
   function extractUri(uri) {
     uri = uri.trim();
     if (uri.startsWith('http')) return new URL(uri).pathname;
@@ -1026,7 +1030,7 @@ const XHSLite = (() => {
     return q === -1 ? uri : uri.slice(0, q);
   }
 
-  function buildPayloadArray(dValue, mValue, a1Value, appId, stringParam, timestampSec) {
+  function buildPayloadArray(dValue, a1Value, appId, stringParam, timestampSec) {
     const seed = RNG.randint(0, 0xffffffff), seedByte = seed & 0xff;
     const payload = [...VERSION_BYTES];
     payload.push(...intToLeBytes(seed, 4));
@@ -1048,7 +1052,7 @@ const XHSLite = (() => {
     const part11 = [1, seedByte ^ ENV_TABLE[0]];
     for (let i = 1; i < 15; i++) part11.push(ENV_TABLE[i] ^ ENV_CHECKS_DEFAULT[i]);
     payload.push(...part11);
-    const md5PathBytes = hexToBytes(mValue);
+    const md5PathBytes = hexToBytes(md5Hex(extractApiPath(stringParam)));
     const hashed = customHashV2([...tsBytes, ...md5PathBytes]);
     payload.push(...A3_PREFIX, ...hashed.map((b) => b ^ seedByte));
     return payload;
@@ -1065,249 +1069,9 @@ const XHSLite = (() => {
     if (timestampSec === null) timestampSec = Date.now() / 1000;
     const contentString = buildContentString(method, uri, payload);
     const dValue = md5Hex(contentString);
-    const mValue = method.toUpperCase() === 'GET' ? dValue : md5Hex(uri);
-    const xorResult = xorTransform(buildPayloadArray(dValue, mValue, a1Value, appId, contentString, timestampSec));
+    const xorResult = xorTransform(buildPayloadArray(dValue, a1Value, appId, contentString, timestampSec));
     const x3sig = encodeX3(xorResult.slice(0, PAYLOAD_LENGTH));
     return XYS_PREFIX + encodeCustomStr(jsonCompact({ ...SIGNATURE_DATA_TEMPLATE, x3: X3_PREFIX + x3sig }));
-  }
-
-  function bytesToBase64(bytes) {
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    }
-    return btoa(binary);
-  }
-
-  function bytesToHex(bytes) {
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function signXyw(method, uri, a1Value, { appId = 'xhs-pc-web', payload = null, timestampSec = null } = {}) {
-    uri = extractUri(uri);
-    if (timestampSec === null) timestampSec = Date.now() / 1000;
-    const contentString = buildContentString(method, uri, payload);
-    const timestampMs = String(Math.floor(timestampSec * 1000));
-    const x1 = md5Hex(`url=${contentString}`);
-    const message = utf8(`x1=${x1};x2=${XYW_ENV_FLAGS};x3=${a1Value};x4=${timestampMs};`);
-    const plaintext = utf8(bytesToBase64(message));
-    const key = await crypto.subtle.importKey('raw', utf8(XYW_AES_KEY), 'AES-CBC', false, ['encrypt']);
-    const encrypted = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-CBC', iv: utf8(XYW_AES_IV) },
-      key,
-      plaintext,
-    ));
-    const signData = {
-      signSvn: '56',
-      signType: 'x2',
-      appId,
-      signVersion: '1',
-      payload: bytesToHex(encrypted),
-    };
-    return XYW_PREFIX + bytesToBase64(utf8(jsonCompact(signData)));
-  }
-
-  // x-rap-param: ported from xhshow 4.3.5. Feed/search endpoints started
-  // requiring this browser-risk-control envelope in the 2026 server rollout.
-  const XRAP_ROUND_KEYS = [
-    [0x6B714931, 0x44546377, 0x4B583930, 0x5A744179],
-    [0x89314C98, 0xCD652FEF, 0x863D16DF, 0xDC4957A6],
-    [0xC205330C, 0x0F601CE3, 0x895D0A3C, 0x55145D9A],
-    [0xD205006E, 0xDD651C8D, 0x543816B1, 0x012C4B2B],
-    [0x770C2B6F, 0xAA6937E2, 0xFE512153, 0xFF7D6A78],
-    [0x7866FBF4, 0xD20FCC16, 0x2C5EED45, 0xD323873D],
-    [0x90E9C67E, 0x42E60A68, 0x6EB8E72D, 0xBD9B6010],
-    [0xE9C52BEE, 0xAB232186, 0xC59BC6AB, 0x7800A6BB],
-    [0x13BA9A3E, 0xB899BBB8, 0x7D027D13, 0x0502DBA8],
-    [0x50613270, 0xE8F889C8, 0x95FAF4DB, 0x90F82F73],
-  ];
-  const XRAP_LAST_KEY = [0xF396B44F, 0x1B6E3D87, 0x8E94C95C, 0x1E6CE62F];
-  const XRAP_SBOX = Uint8Array.from(hexToBytes(
-    '7a0158e0504e02791d4b53da6b48d452ed7712211415ec1018e5b9f10c08fc7d' +
-    'f9cdb5c8e637268756bab82badf068f78b8dd35e364d2e923182f229703d2dd7' +
-    'b640b243448078d20d494a09636c073a9ed506c6e162f4342459a9572a003e17' +
-    '2c0a1a42fa93bedcf5b36a13e803c797bb737686e3467247d0054c387c1f81ab' +
-    '7551ebf33274118f84899c71227e9dcf3f9169653c6d96a2989933399acac39f' +
-    'a0bce4a3a4547fa7a8046f5dacb727afb02841aeb46e0b1bdf8e30b1fe906160' +
-    'c0cb5c0eef1683ea20e9c955c44585cc1eaa678a7b35d619d8d9c2db94dd1cde' +
-    'a6fff8bf5b5a0fe7c1bdd166c525ee8ce25f88a13ba5f6ce952f6423fbfd4f9b'
-  ));
-  const XRAP_TRACE = Uint8Array.from(hexToBytes(
-    '0002000200004700000000000001ffd9ffa8005c23fff1ffff001501ff90fff9000022fff2ffff' +
-    '001501ffb800770061a5ffe3ffff002a01fffcffe70000f0ffe4ffff002a01ffd30000003e01' +
-    'ffd40000003e01ffc8ffff005301ffbdfffa006901ffbefffb006901ffb1fff4007d01ffa6ff' +
-    'ee009301ffa8ffef009301ff9effe900a801ff96ffe600be01ff97ffe600be01ff93ffe500d3' +
-    '01ff92ffe500ea01ff92ffe4010501ff92ffe3011b01ff92ffe402d101ff93ffe502f201ff94' +
-    'ffe6040501'
-  ));
-  const XRAP_ENV = Uint8Array.from(hexToBytes(
-    '000000010000000000000000fffeffff00000000000000390001ffff00bc00000000006e0002' +
-    '0001013400000000012f00000002011a00000000016100000000019f000000000247000000000279' +
-    '0000000002b1'
-  ));
-  const xrapConcat = (...parts) => {
-    const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-    let offset = 0;
-    for (const part of parts) { out.set(part, offset); offset += part.length; }
-    return out;
-  };
-  const xrapU16 = (value) => Uint8Array.of((value >>> 8) & 0xff, value & 0xff);
-  const xrapU32 = (value) => Uint8Array.of((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
-  const xrapU64 = (value) => {
-    let n = BigInt(value);
-    const out = new Uint8Array(8);
-    for (let i = 7; i >= 0; i--) { out[i] = Number(n & 0xffn); n >>= 8n; }
-    return out;
-  };
-  const xrapFieldByte = (tag, value = 0) => xrapConcat(xrapU16(tag), Uint8Array.of(value));
-  const xrapFieldU32 = (tag, value) => xrapConcat(xrapU16(tag), xrapU32(value));
-  const xrapFieldU64 = (tag, value) => xrapConcat(xrapU16(tag), xrapU64(value));
-  const xrapFieldBlob = (tag, value) => xrapConcat(xrapU16(tag), xrapU32(value.length), value);
-  function xrapXxh32(data, seed = 0) {
-    const p1 = 0x9E3779B1, p2 = 0x85EBCA77, p3 = 0xC2B2AE3D, p4 = 0x27D4EB2F, p5 = 0x165667B1;
-    const round = (acc, word) => Math.imul(rotl(u32(acc + Math.imul(word, p2)), 13), p1) >>> 0;
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    let pos = 0, digest;
-    if (data.length >= 16) {
-      let a1 = u32(seed + p1 + p2), a2 = u32(seed + p2), a3 = seed >>> 0, a4 = u32(seed - p1);
-      while (pos <= data.length - 16) {
-        a1 = round(a1, view.getUint32(pos, true)); pos += 4;
-        a2 = round(a2, view.getUint32(pos, true)); pos += 4;
-        a3 = round(a3, view.getUint32(pos, true)); pos += 4;
-        a4 = round(a4, view.getUint32(pos, true)); pos += 4;
-      }
-      digest = u32(rotl(a1, 1) + rotl(a2, 7) + rotl(a3, 12) + rotl(a4, 18));
-    } else {
-      digest = u32(seed + p5);
-    }
-    digest = u32(digest + data.length);
-    while (pos + 4 <= data.length) {
-      digest = Math.imul(rotl(u32(digest + Math.imul(view.getUint32(pos, true), p3)), 17), p4) >>> 0;
-      pos += 4;
-    }
-    while (pos < data.length) {
-      digest = Math.imul(rotl(u32(digest + Math.imul(data[pos], p5)), 11), p1) >>> 0;
-      pos++;
-    }
-    digest ^= digest >>> 15;
-    digest = Math.imul(digest, p2) >>> 0;
-    digest ^= digest >>> 13;
-    digest = Math.imul(digest, p3) >>> 0;
-    digest ^= digest >>> 16;
-    return digest >>> 0;
-  }
-  let xrapLuts;
-  function getXrapLuts() {
-    if (xrapLuts) return xrapLuts;
-    const tables = Array.from({ length: 4 }, () => new Uint32Array(256));
-    const gf2 = (value) => ((value << 1) ^ ((value & 0x80) ? 0x11b : 0)) & 0xff;
-    XRAP_SBOX.forEach((s, i) => {
-      const a = gf2(s), d = a ^ s;
-      tables[0][i] = u32((a << 24) | (s << 16) | (s << 8) | d);
-      tables[1][i] = u32((d << 24) | (a << 16) | (s << 8) | s);
-      tables[2][i] = u32((s << 24) | (d << 16) | (a << 8) | s);
-      tables[3][i] = u32((s << 24) | (s << 16) | (d << 8) | a);
-    });
-    xrapLuts = tables;
-    return tables;
-  }
-  function xrapEncryptBlock(block) {
-    const src = new Uint8Array(16);
-    src.set(block.slice(0, 16));
-    const view = new DataView(src.buffer);
-    let state = [0, 1, 2, 3].map((i) => u32(view.getUint32(i * 4) ^ XRAP_ROUND_KEYS[0][i]));
-    const lut = getXrapLuts();
-    for (let round = 1; round < 10; round++) {
-      const next = [];
-      for (let i = 0; i < 4; i++) {
-        next[i] = u32(
-          lut[0][state[i] >>> 24] ^
-          lut[1][(state[(i + 1) & 3] >>> 16) & 0xff] ^
-          lut[2][(state[(i + 2) & 3] >>> 8) & 0xff] ^
-          lut[3][state[(i + 3) & 3] & 0xff] ^
-          XRAP_ROUND_KEYS[round][i]
-        );
-      }
-      state = next;
-    }
-    const lastKey = xrapConcat(...XRAP_LAST_KEY.map(xrapU32));
-    const out = new Uint8Array(16);
-    for (let row = 0; row < 4; row++) {
-      for (let col = 0; col < 4; col++) {
-        const index = (state[(row + col) & 3] >>> (24 - 8 * col)) & 0xff;
-        out[row * 4 + col] = XRAP_SBOX[index] ^ lastKey[row * 4 + col];
-      }
-    }
-    return out;
-  }
-  function xrapEncryptBlocks(data) {
-    const blocks = [];
-    for (let offset = 0; offset < data.length; offset += 16) blocks.push(xrapEncryptBlock(data.slice(offset, offset + 16)));
-    return xrapConcat(...blocks);
-  }
-  const xrapRandomAscii = (length) => {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let value = '';
-    for (let i = 0; i < length; i++) value += chars[RNG.randint(0, chars.length - 1)];
-    return value;
-  };
-  function xrapBuildBody(api, data, options) {
-    const bodyString = typeof data === 'string' ? data : jsonCompact(data);
-    const timestamp = options.timestampMs ?? Date.now();
-    const innerKey = utf8(options.innerKey ?? xrapRandomAscii(16));
-    const mask = options.mask ?? RNG.randint(1, 255);
-    const nonce = options.bodyRand32 ?? RNG.randint(0, 0xffffffff);
-    const fields = [
-      xrapFieldU64(0x03e8, timestamp),
-      xrapFieldU32(0x03e9, nonce),
-      xrapFieldBlob(0x03ea, innerKey),
-      xrapFieldU32(0x03eb, xrapXxh32(utf8(api + bodyString))),
-    ];
-    for (const tag of [...Array.from({ length: 15 }, (_, i) => 1051 + i), 1070, ...Array.from({ length: 4 }, (_, i) => 1066 + i)]) {
-      fields.push(xrapFieldByte(tag));
-    }
-    fields.push(xrapFieldU32(1100, 0));
-    for (let tag = 1071; tag < 1074; tag++) fields.push(xrapFieldByte(tag));
-    fields.push(xrapFieldU32(1075, 0x564), xrapFieldU32(1076, 0x2c));
-    fields.push(xrapFieldU64(1077, Math.max(0, timestamp - 0x434)), xrapFieldBlob(1078, XRAP_TRACE));
-    fields.push(xrapFieldU32(1082, 0), xrapFieldU32(1084, 0), xrapFieldU32(1085, 0), xrapFieldU32(1086, 100));
-    fields.push(xrapFieldU64(1087, Math.max(0, timestamp - 0x2d7)), xrapFieldBlob(1088, XRAP_ENV));
-    fields.push(xrapFieldU32(1090, 0), xrapFieldU32(1097, 0), xrapFieldU32(1092, 0x566), xrapFieldU32(1094, 0x519));
-    fields.push(xrapFieldU64(1095, Math.max(0, timestamp - 0x218c)), xrapFieldU32(1093, 0), xrapFieldByte(1096));
-    fields.push(xrapFieldBlob(1091, Uint8Array.of(0, 0, 0xff, 0xff)));
-    for (let tag = 1151; tag < 1157; tag++) fields.push(xrapFieldByte(tag));
-    const raw = xrapConcat(...fields);
-    for (let i = 16; i < raw.length; i++) raw[i] ^= mask;
-    return raw;
-  }
-  async function xrapGzip(data, mtime) {
-    if (typeof CompressionStream !== 'function') throw new Error('CompressionStream(gzip) is unavailable');
-    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'));
-    const output = new Uint8Array(await new Response(stream).arrayBuffer());
-    if (mtime !== undefined && output.length >= 10) {
-      const value = mtime >>> 0;
-      output[4] = value & 0xff; output[5] = (value >>> 8) & 0xff;
-      output[6] = (value >>> 16) & 0xff; output[7] = (value >>> 24) & 0xff;
-    }
-    if (output.length >= 10) output[9] = 0x03;
-    return output;
-  }
-  async function xRapParam(api, data, options = {}) {
-    const raw = xrapBuildBody(api, data, options);
-    const compressed = await xrapGzip(raw, options.gzipMtime);
-    const key = utf8(options.aesKey ?? xrapRandomAscii(16));
-    const salt = utf8(options.randomString ?? xrapRandomAscii(RNG.randint(4, 6)));
-    const xored = Uint8Array.from(compressed, (byte, i) => byte ^ key[i % key.length]);
-    const cipherBody = xrapConcat(xrapEncryptBlocks(xored), xrapU32(compressed.length));
-    const content = xrapConcat(salt, xrapEncryptBlock(key), xrapU32(16), cipherBody);
-    const processingTime = options.bodyEncryptTime ?? RNG.randint(60, 240);
-    const header = xrapConcat(
-      Uint8Array.of(0x07, 0x24, 0x01, salt.length),
-      xrapU32(1), xrapU32(20), xrapU32(cipherBody.length),
-      xrapU32(xrapXxh32(content)), xrapU32(10300), xrapU32(processingTime),
-      new Uint8Array(8),
-    );
-    return bytesToBase64(xrapConcat(header, content));
   }
 
   function generateB1(fp) {
@@ -1369,20 +1133,12 @@ const XHSLite = (() => {
     let part2 = ''; for (let i = 0; i < 16; i++) part2 += HEX_CHARS[RNG.randint(0, 15)];
     return part1 + part2;
   }
-  async function signHeaders(method, uri, cookieDict, {
-    params = null,
-    payload = null,
-    timestampSec = null,
-    signFormat = 'xys',
-  } = {}) {
+  function signHeaders(method, uri, cookieDict, { params = null, payload = null, timestampSec = null } = {}) {
     if (timestampSec === null) timestampSec = Date.now() / 1000;
     const m = method.toUpperCase();
     const requestData = m === 'GET' ? params : payload;
-    const xSignature = signFormat === 'xyw'
-      ? await signXyw(m, uri, cookieDict.a1, { payload: requestData, timestampSec })
-      : signXs(m, uri, cookieDict.a1, { payload: requestData, timestampSec });
     return {
-      'x-s': xSignature,
+      'x-s': signXs(m, uri, cookieDict.a1, { payload: requestData, timestampSec }),
       'x-s-common': signXsCommon(cookieDict),
       'x-t': String(Math.floor(timestampSec * 1000)),
       'x-b3-traceid': b3TraceId(),
@@ -1416,31 +1172,16 @@ const XHSLite = (() => {
       return `${k}=${pyQuote(s, ',')}`;
     }).join('&');
   }
-  async function readJsonResponse(resp) {
-    let data;
-    try {
-      data = await resp.json();
-    } catch {
-      data = { success: false, msg: `HTTP ${resp.status} returned a non-JSON response` };
-    }
-    if (!resp.ok) {
-      return { ...data, success: false, http_status: resp.status };
-    }
-    return data;
-  }
-  async function signedGet(base, uri, params, cookieStr, ck, extraHeaders = {}, signFormat = 'xys') {
+  async function signedGet(base, uri, params, cookieStr, ck, extraHeaders = {}) {
     const query = buildSignedQuery(params);
-    const sig = await signHeaders('GET', uri, ck, { params: params || {}, signFormat });
+    const sig = signHeaders('GET', uri, ck, { params: params || {} });
     const resp = await fetch(base + uri + (query ? '?' + query : ''), { method: 'GET', headers: { ...baseHeaders(cookieStr), ...sig, ...extraHeaders } });
-    return readJsonResponse(resp);
+    return resp.json();
   }
-  async function signedPost(base, uri, payload, cookieStr, ck, extraHeaders = {}, useXrap = false) {
-    const sig = await signHeaders('POST', uri, ck, { payload });
-    const xrapHeader = useXrap
-      ? { 'x-rap-param': await xRapParam(`//${new URL(base).host}${uri}`, payload) }
-      : {};
-    const resp = await fetch(base + uri, { method: 'POST', headers: { ...baseHeaders(cookieStr), ...sig, ...xrapHeader, ...extraHeaders }, body: JSON.stringify(payload) });
-    return readJsonResponse(resp);
+  async function signedPost(base, uri, payload, cookieStr, ck, extraHeaders = {}) {
+    const sig = signHeaders('POST', uri, ck, { payload });
+    const resp = await fetch(base + uri, { method: 'POST', headers: { ...baseHeaders(cookieStr), ...sig, ...extraHeaders }, body: JSON.stringify(payload) });
+    return resp.json();
   }
 
   function pickCover(nc) {
@@ -1513,30 +1254,13 @@ const XHSLite = (() => {
     const nc = r?.data?.items?.[0]?.note_card || {};
     const note = { note_id: feedId, title: nc.title || '', content: nc.desc || '', desc: nc.desc || '', user: nc.user || {}, interact_info: nc.interact_info || {}, image_list: nc.image_list || [], xsec_token: xsecToken || '' };
     let comments = [];
-    let commentsError;
     if (loadComments) {
       try {
-        const commentParams = { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' };
-        const cr = await signedGet(EDITH, '/api/sns/web/v2/comment/page', commentParams, cookieStr, ck, {}, 'xyw');
-        if (cr?.success) {
-          comments = (cr?.data?.comments || []).map(normComment);
-        } else {
-          commentsError = {
-            status: cr?.http_status,
-            code: cr?.code,
-            message: cr?.msg || cr?.message || 'comment request failed',
-          };
-        }
-      } catch (e) {
-        commentsError = { message: e instanceof Error ? e.message : String(e) };
-      }
+        const cr = await signedGet(EDITH, '/api/sns/web/v2/comment/page', { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' }, cookieStr, ck);
+        comments = (cr?.data?.comments || []).map(normComment);
+      } catch (e) { /* best effort */ }
     }
-    return {
-      data: { note, comments: { list: comments }, comments_error: commentsError },
-      success: !!r?.success,
-      msg: r?.msg,
-      raw_error: r?.success ? undefined : r,
-    };
+    return { data: { note, comments: { list: comments } }, success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
   async function userProfile(cookieStr, userId, xsecToken) {
     const ck = parseCookies(cookieStr);
@@ -1692,18 +1416,7 @@ const XHSLite = (() => {
     }
   }
 
-  return {
-    handle,
-    __test: {
-      RNG,
-      signXs,
-      signXyw,
-      signXsCommon,
-      generateB1,
-      xRapParam,
-      _internals: { md5Hex, encodeCustomStr, crc32JsInt, xrapEncryptBlock, xrapXxh32 },
-    },
-  };
+  return { handle, __test: { RNG, signXs, signXsCommon, generateB1, _internals: { md5Hex, encodeCustomStr, crc32JsInt } } };
 })();
 
 // 供 Node 验证用（Worker 运行时忽略多余的具名导出）。见 worker/xhs-lite/test/verify.mjs
