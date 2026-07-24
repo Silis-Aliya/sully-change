@@ -14,14 +14,15 @@ Important rules:
 - When merging upstream, do not overwrite my OSContext / chat prompt / post-processing changes blindly.
 - If editing prompts, show me the full prompt first and wait for confirmation.
 - After changes, run pnpm build.
+- Deployment default: after fetching/checking upstream and confirming there are no new upstream commits to merge, a user request to `push`, deploy, or update Vercel means push the verified current release directly to `Silis-Aliya/sully-change` `master` so Vercel production deploys. Do not stop at a feature-branch push. If upstream has advanced, conflicts exist, or verification failed, stop and report before touching production `master`.
 - Keep this file updated with what changed, risk points, and follow-up checks.
 
 Current known baseline:
 - upstream/master merged through 3255ee7.
 - A later upstream check found no commits beyond 3255ee7; do not merge unless a new fetch shows a newer upstream tip.
-- Current fork release head is ef24df1 on `codex/merge-upstream-20260721`.
+- Current fork release head is d5bb100 on `codex/merge-upstream-20260721`.
 - Last verified production build passed after the music sharing, together-listening, Code/XHS, backup, and exit-ownership fixes.
-- The feature branch and Vercel production repository `Silis-Aliya/sully-change` `master` were pushed through ef24df1.
+- The feature branch and Vercel production repository `Silis-Aliya/sully-change` `master` were pushed through d5bb100.
 - Vercel should auto-deploy from `master` after the push; verify the deployment dashboard before treating production as updated.
 ```
 
