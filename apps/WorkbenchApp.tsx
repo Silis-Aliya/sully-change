@@ -4,8 +4,7 @@ import { DB } from '../utils/db';
 import { ChatParser } from '../utils/chatParser';
 import { processImage } from '../utils/file';
 import { migrateDataUrlToRef, useBlobRefUrl } from '../utils/blobRef';
-import { XhsMcpClient, normalizeNote } from '../utils/xhsMcpClient';
-import { detectXhsShortUrl, expandShortUrl, extractXhsNoteId } from '../utils/webpageExtractor';
+import { resolveXhsShareLink } from '../utils/xhsShareLink';
 import type { Emoji, EmojiCategory, Message, WorkbenchArtifact, WorkbenchBridgeConfig, WorkbenchMemory, WorkbenchMessage, WorkbenchMode, WorkbenchProject, WorkbenchSession, WorkbenchSummary } from '../types';
 import {
     DEFAULT_WORKBENCH_CONFIG,
@@ -106,91 +105,15 @@ const resolveWorkbenchXhsNote = async (
     realtimeConfig: any,
     addToast: (message: string, type?: 'success' | 'error' | 'info') => void,
 ): Promise<Record<string, any> | null> => {
-    const xhsFullNoteId = extractXhsNoteId(text);
-    const xhsShortUrl = detectXhsShortUrl(text);
-    if (!xhsFullNoteId && !xhsShortUrl) return null;
-
-    let noteId = xhsFullNoteId || '';
-    let xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
-    let shortLinkError = '';
-
-    if (!noteId && xhsShortUrl) {
-        try {
-            const finalUrl = await expandShortUrl(xhsShortUrl);
-            noteId = extractXhsNoteId(finalUrl) || '';
-            xsecToken = xsecToken || finalUrl.match(/xsec_token=([^&\s]+)/)?.[1];
-        } catch (e: any) {
-            shortLinkError = e?.message || '短链展开失败';
-        }
+    const resolved = await resolveXhsShareLink(text, realtimeConfig);
+    if (!resolved.detected) return null;
+    if (!resolved.note) {
+        addToast(`小红书链接读取失败，未生成卡片。${resolved.error ? `（${resolved.error}）` : ''}`, 'error');
+        return null;
     }
-
-    const titleFromText = (text.match(/【(.+?)】/)?.[1] || '')
-        .replace(/\s*[|｜]\s*小红书.*$/, '')
-        .trim();
-
-    if (!noteId) {
-        addToast(`小红书短链详情暂时无法读取，Code 已保留基础分享卡。${shortLinkError ? `（${shortLinkError}）` : ''}`, 'info');
-        return {
-            noteId: '',
-            title: titleFromText || '小红书笔记',
-            desc: '',
-            author: '',
-            authorId: '',
-            likes: 0,
-            xsecToken,
-            sourceUrl: xhsShortUrl || '',
-            unresolved: true,
-        };
-    }
-
-    let note: Record<string, any> = {
-        noteId,
-        title: titleFromText || '',
-        desc: '',
-        author: '',
-        authorId: '',
-        likes: 0,
-        xsecToken,
-        sourceUrl: `https://www.xiaohongshu.com/explore/${noteId}${xsecToken ? `?xsec_token=${xsecToken}&xsec_source=pc_share` : ''}`,
-    };
-
-    const mcpUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
-    if (mcpUrl && realtimeConfig?.xhsMcpConfig?.enabled) {
-        try {
-            addToast('Code 正在读取小红书链接…', 'info');
-            const result = await XhsMcpClient.getNoteDetail(mcpUrl, note.sourceUrl, xsecToken, { loadAllComments: true });
-            if (result.success && result.data) {
-                const dataRoot = (result.data as any)?.data || result.data;
-                const noteObj = dataRoot?.note || (result.data as any)?.note || result.data;
-                const fetched = normalizeNote(noteObj);
-                note = {
-                    ...note,
-                    ...fetched,
-                    noteId: fetched.noteId || note.noteId,
-                    title: titleFromText || fetched.title || note.title,
-                    xsecToken: fetched.xsecToken || xsecToken,
-                };
-                const rawComments = dataRoot?.comments?.list || dataRoot?.comments
-                    || (noteObj as any)?.comments?.list || (noteObj as any)?.comments || [];
-                const comments = (Array.isArray(rawComments) ? rawComments : [])
-                    .map((c: any) => ({
-                        author: c.userInfo?.nickname || c.nickname || c.userName || c.author || '匿名',
-                        content: c.content || '',
-                        likes: c.likeCount || c.like_count || c.likes || 0,
-                    }))
-                    .filter((c: any) => c.content)
-                    .slice(0, 15);
-                if (comments.length) note.comments = comments;
-            } else if (!result.success) {
-                addToast(`小红书正文读取失败，Code 已保留基础链接信息。${result.error ? `（${result.error}）` : ''}`, 'info');
-            }
-        } catch (e: any) {
-            console.warn('Workbench XHS link fetch failed:', e);
-            addToast('小红书正文读取失败，Code 已保留基础链接信息。', 'info');
-        }
-    }
-
-    return note;
+    if (resolved.detailLoaded) addToast('Code 已读取小红书正文与评论', 'success');
+    else if (resolved.error) addToast(`小红书详情读取失败，仅保留链接基础信息。（${resolved.error}）`, 'error');
+    return resolved.note;
 };
 
 const parseProgressCard = (content: string) => {

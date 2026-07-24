@@ -15,8 +15,8 @@ import { generateSlotTheater } from '../utils/theaterGenerator';
 import TheaterPlayer from '../components/schedule/TheaterPlayer';
 import { formatMessageWithTime, normalizeMessageContent } from '../utils/messageFormat';
 import { getRoomLabel } from '../utils/memoryPalace/types';
-import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
-import { extractWebpageContent, detectFirstUrl, detectXhsShortUrl, isXhsUrl, extractXhsNoteId, expandShortUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
+import { extractWebpageContent, detectFirstUrl, isXhsUrl, type ExtractedWebpage } from '../utils/webpageExtractor';
+import { resolveXhsShareLink } from '../utils/xhsShareLink';
 import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
@@ -1020,74 +1020,10 @@ const Chat: React.FC = () => {
         if (type === 'text') {
             let xhsCardCreated = false;
             let webpageCardCreated = false;
-            const xhsFullNoteId = extractXhsNoteId(text);
-            // 同时识别桌面/旧版 xhslink.com 与手机版新版 xhslink.cn。
-            const xhsShortUrl = detectXhsShortUrl(text);
-            if (xhsFullNoteId || xhsShortUrl) {
-                let noteId = xhsFullNoteId || '';
-                let xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
-                let shortLinkError = '';
-                // 短链（xhslink.com / xhslink.cn）不含 id/token —— 先经 sfworker 展开成真实链接再提取。
-                if (!noteId && xhsShortUrl) {
-                    try {
-                        const finalUrl = await expandShortUrl(xhsShortUrl);
-                        noteId = extractXhsNoteId(finalUrl) || '';
-                        xsecToken = xsecToken || finalUrl.match(/xsec_token=([^&\s]+)/)?.[1];
-                        if (isDevDebugAvailable()) console.log('[卡片调试] 小红书短链展开 →', finalUrl, '| noteId =', noteId);
-                    } catch (e) {
-                        console.warn('xhslink 短链展开失败:', e);
-                        shortLinkError = e instanceof Error ? e.message : '短链展开失败';
-                    }
-                }
-                // 文案标题形如「【标题 | 小红书 …】」，剥掉 "| 小红书…" 后缀（短链文案常无此块）。
-                const titleFromText = (text.match(/【(.+?)】/)?.[1] || '')
-                    .replace(/\s*[|｜]\s*小红书.*$/, '').trim();
-
-                // 拿不到 noteId（短链展开失败/被挡）就不建空卡，保留原文给用户，并明确
-                // 告诉用户如何排查。此前这里完全静默，表现就是“角色能分享、用户分享不了”。
-                if (noteId) {
-                    // 基础卡数据来自分享文案，零后端依赖。
-                    let note: any = {
-                        noteId, title: titleFromText || '', desc: '', author: '',
-                        authorId: '', likes: 0, xsecToken,
-                    };
-
-                    // 有小红书 MCP/Lite 才抓详情补全（正文/封面/作者/赞数）。
-                    const mcpUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
-                    if (mcpUrl && realtimeConfig?.xhsMcpConfig?.enabled) {
-                        try {
-                            const noteUrl = `https://www.xiaohongshu.com/explore/${noteId}${xsecToken ? `?xsec_token=${xsecToken}&xsec_source=pc_share` : ''}`;
-                            // loadAllComments：和角色自己浏览笔记 (XHS_DETAIL) 一致地把评论区也抓回来，
-                            // 否则 user 分享的笔记只有标题/正文，角色读不到评论（char 分享给 user 的却能看到）。
-                            const result = await XhsMcpClient.getNoteDetail(mcpUrl, noteUrl, xsecToken, { loadAllComments: true });
-                            if (isDevDebugAvailable()) console.log('[卡片调试] 小红书抓取 result =', result);
-                            if (result.success && result.data) {
-                                // bridge(Lite) 返回 { data: { note, comments } }；MCP 可能直接是 note —— 逐层解包。
-                                const dataRoot = (result.data as any)?.data || result.data;
-                                const noteObj = dataRoot?.note || (result.data as any)?.note || result.data;
-                                const fetched = normalizeNote(noteObj);
-                                // 抓到的字段补全基础卡；id/标题/token 保底，标题优先文案标题（更完整可读）。
-                                note = { ...note, ...fetched, noteId: fetched.noteId || note.noteId, title: titleFromText || fetched.title || note.title, xsecToken: fetched.xsecToken || xsecToken };
-                                // normalizeNote 只保留笔记基础字段会丢掉评论 —— 单独解包评论挂回卡片，
-                                // 让角色读 context 时也能看到评论区（与 char 浏览/分享笔记对齐）。
-                                const rawComments = dataRoot?.comments?.list || dataRoot?.comments
-                                    || (noteObj as any)?.comments?.list || (noteObj as any)?.comments || [];
-                                const comments = (Array.isArray(rawComments) ? rawComments : []).map((c: any) => ({
-                                    author: c.userInfo?.nickname || c.nickname || c.userName || c.author || '匿名',
-                                    content: c.content || '',
-                                    likes: c.likeCount || c.like_count || c.likes || 0,
-                                })).filter((c: any) => c.content).slice(0, 15);
-                                if (comments.length) note.comments = comments;
-                            } else if (!result.success) {
-                                // 基础卡仍然可以发送，只提示详情读取失败，避免误以为整次分享失败。
-                                addToast(`小红书正文读取失败，已发送基础卡片。请尝试开启/关闭科学上网、切换 Wi‑Fi/流量，或检查 Lite 配置。${result.error ? `（${result.error}）` : ''}`, 'info');
-                            }
-                        } catch (e) {
-                            console.warn('XHS link fetch via MCP failed (已用文案兜底):', e);
-                            addToast('小红书正文读取失败，已发送基础卡片。请尝试开启/关闭科学上网、切换 Wi‑Fi/流量，或检查 Lite 配置。', 'info');
-                        }
-                    }
-
+            const resolvedXhs = await resolveXhsShareLink(text, realtimeConfig);
+            if (resolvedXhs.detected) {
+                const note = resolvedXhs.note;
+                if (note) {
                     await DB.saveMessage({
                         charId: char.id,
                         role: 'user',
@@ -1104,8 +1040,13 @@ const Chat: React.FC = () => {
                         ));
                     }
                     xhsCardCreated = true;
+                    if (resolvedXhs.detailLoaded) {
+                        addToast('已读取小红书正文与评论', 'success');
+                    } else if (resolvedXhs.error) {
+                        addToast(`小红书详情读取失败，仅保留链接基础信息。（${resolvedXhs.error}）`, 'error');
+                    }
                 } else {
-                    addToast(`小红书链接解析失败，原消息已保留。通常是网络或代理导致短链无法展开：请尝试开启/关闭科学上网、切换 Wi‑Fi/流量，并检查网络代理与小红书 Lite 配置。${shortLinkError ? `（${shortLinkError}）` : ''}`, 'error');
+                    addToast(`小红书链接读取失败，未生成卡片。${resolvedXhs.error ? `（${resolvedXhs.error}）` : ''}`, 'error');
                 }
             }
 
@@ -1114,7 +1055,7 @@ const Chat: React.FC = () => {
             // 视频平台链接（抖音/B站/快手…）Jina 基本抓不到东西（SPA+登录墙），
             // 优先走 apizero 视频解析拿标题/作者/封面/热度；失败降级回通用网页抓取。
             const sharedUrl = detectFirstUrl(text);
-            if (sharedUrl && !isXhsUrl(sharedUrl) && !(xhsFullNoteId || xhsShortUrl)) {
+            if (sharedUrl && !isXhsUrl(sharedUrl) && !resolvedXhs.detected) {
                 let webpage: ExtractedWebpage | null = null;
                 if (isVideoShareUrl(sharedUrl)) {
                     try {
