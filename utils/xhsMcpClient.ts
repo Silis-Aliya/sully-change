@@ -488,18 +488,13 @@ export const XhsMcpClient = {
             : mcpCallTool(serverUrl, 'get_recommend');
     },
 
-    getNoteDetail: async (serverUrl: string, noteUrl: string, xsecToken?: string, options?: { loadAllComments?: boolean; xsecSource?: string }): Promise<McpToolResult> => {
+    getNoteDetail: async (serverUrl: string, noteUrl: string, xsecToken?: string, options?: { loadAllComments?: boolean }): Promise<McpToolResult> => {
         const feedId = extractNoteIdFromUrl(noteUrl);
         const token = xsecToken || extractXsecTokenFromUrl(noteUrl) || '';
-        let xsecSource = options?.xsecSource || 'pc_feed';
-        try {
-            xsecSource = new URL(noteUrl).searchParams.get('xsec_source') || xsecSource;
-        } catch { /* keep the share-link default */ }
 
         if (detectMode(serverUrl) === 'bridge') {
             return bridgePost(serverUrl, 'get-feed-detail', {
                 feed_id: feedId, xsec_token: token,
-                xsec_source: xsecSource,
                 load_all_comments: options?.loadAllComments || false,
                 click_more_replies: options?.loadAllComments || false,
             });
@@ -666,26 +661,6 @@ export const extractNotesFromMcpData = (data: any): any[] => {
     return [];
 };
 
-export const parseXhsCount = (value: unknown): number => {
-    if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-    if (typeof value !== 'string') return 0;
-
-    const normalized = value.trim().replace(/[,\s+]/g, '');
-    if (!normalized) return 0;
-    const match = normalized.match(/^(-?\d+(?:\.\d+)?)(万|億|亿|千|[kKmMwW])?/);
-    if (!match) return 0;
-
-    const base = Number(match[1]);
-    if (!Number.isFinite(base) || base < 0) return 0;
-    const unit = match[2]?.toLowerCase();
-    const multiplier = unit === '万' || unit === 'w' ? 10_000
-        : unit === '億' || unit === '亿' ? 100_000_000
-        : unit === '千' || unit === 'k' ? 1_000
-        : unit === 'm' ? 1_000_000
-        : 1;
-    return Math.round(base * multiplier);
-};
-
 export const normalizeNote = (n: any): { noteId: string; title: string; desc: string; author: string; authorId: string; likes: number; xsecToken?: string; coverUrl?: string; type?: string } => {
     const card = n.noteCard || n.notecard;
     // 封面：cover 对象 / 字符串，或笔记图片列表首图（feed detail 返回 image_list）。
@@ -695,45 +670,18 @@ export const normalizeNote = (n: any): { noteId: string; title: string; desc: st
         || coverObj?.info_list?.[0]?.url || undefined;
     const coverUrl = rawCoverUrl?.replace(/^http:\/\//, 'https://');
     // 点赞数：支持 interactInfo.likedCount (profile notes) 和 interact_info.liked_count (search results)
-    const likesRaw = n.likes ?? n.liked_count
-        ?? n.interact_info?.liked_count ?? n.interactInfo?.likedCount
-        ?? card?.interact_info?.liked_count ?? card?.interactInfo?.likedCount ?? 0;
+    const likesRaw = n.likes || n.liked_count
+        || n.interact_info?.liked_count || n.interactInfo?.likedCount
+        || card?.interact_info?.liked_count || card?.interactInfo?.likedCount || 0;
     return {
         noteId: n.noteId || n.note_id || n.id || card?.note_id || card?.noteId || card?.noteId || '',
         title: n.title || n.display_title || n.displayTitle || card?.display_title || card?.displayTitle || '',
         desc: (n.desc || n.description || n.content || card?.desc || card?.description || card?.title || '').slice(0, 500),
         author: n.author || n.nickname || n.user?.nickname || n.user?.name || card?.user?.nickname || card?.user?.name || '',
         authorId: n.authorId || n.author_id || n.user?.user_id || n.user?.userId || card?.user?.user_id || card?.user?.userId || '',
-        likes: parseXhsCount(likesRaw),
+        likes: typeof likesRaw === 'string' ? parseInt(likesRaw, 10) || 0 : (likesRaw || 0),
         xsecToken: n.xsecToken || n.xsec_token || card?.xsec_token || card?.xsecToken || undefined,
         coverUrl,
         type: n.type || card?.type || undefined,
     };
-};
-
-export const normalizeXhsLiteDetail = (payload: any, commentLimit = 15): ReturnType<typeof normalizeNote> & {
-    comments?: { author: string; content: string; likes: number }[];
-} => {
-    const root = payload?.data || payload || {};
-    const note = normalizeNote(root.note || {});
-    const rawComments = Array.isArray(root.comments?.list) ? root.comments.list : [];
-    const comments: { author: string; content: string; likes: number }[] = [];
-    const appendComment = (comment: any) => {
-        const normalized = {
-            author: comment.nickname || comment.user?.nickname || '匿名',
-            content: String(comment.content || '').trim(),
-            likes: parseXhsCount(comment.like_count ?? comment.likes ?? 0),
-        };
-        if (normalized.content && comments.length < commentLimit) comments.push(normalized);
-        const replies = Array.isArray(comment.sub_comments) ? comment.sub_comments : [];
-        for (const reply of replies) {
-            if (comments.length >= commentLimit) break;
-            appendComment(reply);
-        }
-    };
-    for (const comment of rawComments) {
-        if (comments.length >= commentLimit) break;
-        appendComment(comment);
-    }
-    return comments.length ? { ...note, comments } : note;
 };
