@@ -32,6 +32,15 @@ Current known baseline:
 
 This section supersedes the stale repository/baseline bullets inside the copied Next-Window Prompt above. Do not edit that prompt block without first showing the full revised prompt to the user for confirmation.
 
+## 2026-07-29 Public Fork / Vercel Repo Update
+
+- `Silis-Aliya/sully-change` / `vercel-target` has been deleted and is no longer a valid deployment or push target.
+- The only public GitHub repository path is now `public-fork` = `https://github.com/Silis-Aliya/SullyOS.git`.
+- Public fork HEAD before this note: `fed7355`.
+- Public code must keep `utils/proxyWorker.ts` defaulting to `https://sullymeow.ccwu.cc`.
+- Do not push private Plus history directly to the public fork: the private line contains private Worker-default commits in history. Public updates must start from `public-fork/master` and port only public-safe changes.
+- If Vercel is attached to the public repo, update Vercel by pushing the verified public-safe snapshot to `public-fork master`; then verify the Vercel dashboard separately.
+
 ### Maintenance Direction Update
 
 - `Sully-plus` is now the main active maintenance line.
@@ -53,11 +62,13 @@ This section supersedes the stale repository/baseline bullets inside the copied 
   - Contains the voice/Ears Lite work and the owner's private default Worker address unless intentionally changed.
   - Use this as the normal development target for private features and Vercel/private deployment work.
 - `public-fork` = `https://github.com/Silis-Aliya/SullyOS.git`
-  - Public fork. GitHub currently reports this repository moved to `https://github.com/Silis-Aliya/sully-change.git`; pushes to `public-fork` are accepted but may redirect.
+  - Public fork and the only public GitHub repository path after the old `sully-change` repository was deleted.
   - Public code must not expose the owner's private Worker URL.
   - Public default proxy worker must remain `https://sullymeow.ccwu.cc` or another explicit public/placeholder address.
 - `vercel-target` = `https://github.com/Silis-Aliya/sully-change.git`
-  - Vercel production target. Treat as production, not a scratch remote.
+  - Deleted/deprecated historical deployment repo. Do not push here and do not depend on it.
+  - If Vercel is connected to public code, use `public-fork` with a public-safe snapshot.
+  - If Vercel is connected to private Plus, use private `origin/master` only after explicit production approval.
 
 ### Baseline Heads Before This Maintenance Note
 
@@ -82,14 +93,17 @@ This section supersedes the stale repository/baseline bullets inside the copied 
   - Implement, run focused tests plus `pnpm build`.
   - Push with `git push origin HEAD:master`.
 - Public fork update:
-  - Start from the desired private release commit.
+  - Start from `public-fork/master`; do not push private Plus history directly to public.
+  - Port only the desired public-safe changes.
   - Ensure `utils/proxyWorker.ts` uses the public default Worker.
   - Search for private Worker URL leaks.
   - Run `pnpm build`.
   - Push with `git push public-fork HEAD:master`.
 - Vercel production update:
-  - Only after the user explicitly wants production/Vercel updated.
-  - Use the verified target commit and push `git push vercel-target HEAD:master`.
+  - First identify whether Vercel is attached to private `Sully-plus` or public `SullyOS`.
+  - Public source: use the public fork update flow above.
+  - Private source: use `git push origin HEAD:master` only after explicit production approval.
+  - Do not push `vercel-target`/`sully-change`; that repo is deleted/deprecated.
   - Verify deployment separately before calling it live.
 
 ### Upstream Merge Check On 2026-07-27
